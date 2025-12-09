@@ -264,15 +264,8 @@ export class BillService {
     // Convert to hours with 2 decimal places
     const diffHours = diffMinutes / 60
 
-    console.log(`Time calculation in VN timezone:`)
-    console.log(`Start time: ${startDate.format('YYYY-MM-DD HH:mm')}`)
-    console.log(`End time: ${endDate.format('YYYY-MM-DD HH:mm')}`)
-    console.log(`Difference in minutes: ${diffMinutes} minutes`)
-    console.log(`Calculated hours: ${diffHours} hours`)
-
     // Round to 2 decimal places for consistency
     const result = Math.round(diffHours * 100) / 100
-    console.log(`Final result: ${result} hours`)
 
     return result
   }
@@ -286,45 +279,30 @@ export class BillService {
       })
     }
 
-    // Log thời gian server để debug
-    console.log('Server time:', new Date())
-    console.log('Input startTime:', startTime)
-
     // Sử dụng timezone Vietnam/Asia
     if (!dayjs.tz) {
-      console.log('Configuring dayjs timezone...')
       dayjs.extend(require('dayjs/plugin/utc'))
       dayjs.extend(require('dayjs/plugin/timezone'))
     }
 
     // Lấy thời gian bắt đầu dưới dạng HH:mm để so sánh với khung giờ, sử dụng múi giờ Việt Nam
     const time = dayjs(startTime).tz('Asia/Ho_Chi_Minh').format('HH:mm')
-    console.log('Thời gian bắt đầu (Asia/Ho_Chi_Minh):', time, 'Loại ngày:', dayType, 'Loại phòng:', roomType)
-
-    // Log tất cả các khung giờ để debug
-    console.log('Các khung giờ có sẵn:', JSON.stringify(priceDoc.time_slots))
 
     // Tìm khung giờ phù hợp với thời gian bắt đầu
     const timeSlot = priceDoc.time_slots.find((slot: any) => {
       const slotStart = slot.start
       const slotEnd = slot.end
-      console.log(`Đang kiểm tra khung giờ: ${slotStart} - ${slotEnd}`)
 
       // Xử lý trường hợp khung giờ bắt đầu > khung giờ kết thúc (qua ngày)
       if (slotStart > slotEnd) {
-        const isInRange = time >= slotStart || time <= slotEnd
-        console.log(`Khung giờ qua ngày, kết quả: ${isInRange}`)
-        return isInRange
+        return time >= slotStart || time <= slotEnd
       }
       // Trường hợp bình thường
-      const isInRange = time >= slotStart && time <= slotEnd
-      console.log(`Khung giờ thường, kết quả: ${isInRange}`)
-      return isInRange
+      return time >= slotStart && time <= slotEnd
     })
 
     if (!timeSlot) {
       // Nếu không tìm thấy khung giờ, lấy khung giờ mặc định hoặc khung giờ đầu tiên
-      console.log('Không tìm thấy khung giờ phù hợp, sử dụng khung giờ mặc định')
       const defaultTimeSlot = priceDoc.time_slots[0] // Lấy khung giờ đầu tiên làm mặc định
 
       if (!defaultTimeSlot) {
@@ -375,25 +353,11 @@ export class BillService {
     const schedule = await databaseService.roomSchedule.findOne({ _id: id })
 
     // Lấy FNB order từ collection hiện tại trước
-    console.log('=== LẤY FNB ORDER TỪ COLLECTION HIỆN TẠI ===')
-    console.log('ScheduleId:', scheduleId)
-
     let order = await fnbOrderService.getFnbOrdersByRoomSchedule(scheduleId)
-    console.log('Order hiện tại tìm thấy:', order ? 'YES' : 'NO')
 
-    if (order) {
-      console.log('=== ORDER HIỆN TẠI ĐƯỢC TÌM THẤY ===')
-      console.log('Order ID:', order._id)
-      console.log('RoomScheduleId:', order.roomScheduleId)
-      console.log('Order data:', JSON.stringify(order.order, null, 2))
-      console.log('Drinks:', order.order?.drinks)
-      console.log('Snacks:', order.order?.snacks)
-    } else {
-      console.log('=== KHÔNG TÌM THẤY ORDER HIỆN TẠI ===')
-
+    if (!order) {
       // Thử lấy từ history nếu không có order hiện tại
       const orderHistory = await fnbOrderService.getOrderHistoryByRoomSchedule(scheduleId)
-      console.log('Số lượng order history tìm thấy:', orderHistory.length)
 
       if (orderHistory.length > 0) {
         const historyOrder = orderHistory[orderHistory.length - 1]
@@ -422,15 +386,12 @@ export class BillService {
     // Xử lý actualStartTime nếu được cung cấp
     let validatedStartTime: Date
     if (actualStartTime) {
-      console.log('actualStartTime:', actualStartTime)
-
       if (/^\d{2}:\d{2}$/.test(actualStartTime)) {
         // Nếu là định dạng HH:mm
         const [hours, minutes] = actualStartTime.split(':')
         // Sử dụng schedule.startTime đã được xử lý múi giờ đúng
         const baseDate = dayjs.utc(schedule.startTime).tz('Asia/Ho_Chi_Minh')
         validatedStartTime = baseDate.hour(parseInt(hours)).minute(parseInt(minutes)).second(0).millisecond(0).toDate()
-        console.log('Validated start time:', dayjs(validatedStartTime).format('YYYY-MM-DD HH:mm:ss'))
       } else {
         // Nếu là định dạng datetime đầy đủ - reset giây và millisecond về 0
         validatedStartTime = dayjs(actualStartTime).tz('Asia/Ho_Chi_Minh').second(0).millisecond(0).toDate()
@@ -441,21 +402,15 @@ export class BillService {
             status: HTTP_STATUS_CODE.BAD_REQUEST
           })
         }
-        console.log('Validated start time (from datetime):', dayjs(validatedStartTime).format('YYYY-MM-DD HH:mm:ss'))
       }
     } else {
       // Nếu không có actualStartTime, sử dụng schedule.startTime và reset giây/millisecond
       // FIX: Luôn xử lý thời gian từ DB như UTC và chuyển về VN time
       const rawStartTime = schedule.startTime
-      console.log('Raw startTime from DB:', rawStartTime)
 
       // Luôn xử lý như UTC vì thời gian từ DB luôn là UTC
       // FIXED: Trước đây có thể xử lý sai múi giờ trong production
       const processedStartTime = dayjs.utc(rawStartTime).tz('Asia/Ho_Chi_Minh').toDate()
-      console.log(
-        'Processed startTime (UTC -> VN):',
-        dayjs(processedStartTime).tz('Asia/Ho_Chi_Minh').format('YYYY-MM-DD HH:mm:ss')
-      )
 
       validatedStartTime = dayjs(processedStartTime).second(0).millisecond(0).toDate()
     }
@@ -465,7 +420,6 @@ export class BillService {
 
     // Kiểm tra và xử lý actualEndTime
     let validatedEndTime: Date
-    console.log('actualEndTime:', actualEndTime)
 
     if (actualEndTime && /^\d{2}:\d{2}$/.test(actualEndTime)) {
       // Nếu là định dạng HH:mm
@@ -482,14 +436,9 @@ export class BillService {
         console.warn(
           `Warning: Actual end time (${actualEndTime}) is before start time (${dayjs(startTime).format('HH:mm')}) - comparing only hours and minutes`
         )
-        console.warn(`Start time: ${dayjs(startTime).format('YYYY-MM-DD HH:mm:ss')}`)
-        console.warn(`End time: ${dayjs(validatedEndTime).format('YYYY-MM-DD HH:mm:ss')}`)
         // Đặt giá trị mặc định là startTime + 1 giờ
         validatedEndTime = dayjs(startTime).add(1, 'hour').second(0).millisecond(0).toDate()
-        console.warn(`Adjusted end time: ${dayjs(validatedEndTime).format('YYYY-MM-DD HH:mm:ss')}`)
       }
-
-      console.log('Validated end time:', dayjs(validatedEndTime).format('YYYY-MM-DD HH:mm:ss'))
     } else if (actualEndTime) {
       // Nếu là định dạng datetime đầy đủ - reset giây và millisecond về 0
       validatedEndTime = dayjs(actualEndTime).tz('Asia/Ho_Chi_Minh').second(0).millisecond(0).toDate()
@@ -500,21 +449,15 @@ export class BillService {
           status: HTTP_STATUS_CODE.BAD_REQUEST
         })
       }
-      console.log('Validated end time (from datetime):', dayjs(validatedEndTime).format('YYYY-MM-DD HH:mm:ss'))
     } else {
       // Nếu không có actualEndTime, sử dụng schedule.endTime và reset giây/millisecond
       if (schedule.endTime) {
         // FIX: Luôn xử lý thời gian từ DB như UTC và chuyển về VN time
         const rawEndTime = schedule.endTime
-        console.log('Raw endTime from DB:', rawEndTime)
 
         // Luôn xử lý như UTC vì thời gian từ DB luôn là UTC
         // FIXED: Trước đây có thể xử lý sai múi giờ trong production
         const processedEndTime = dayjs.utc(rawEndTime).tz('Asia/Ho_Chi_Minh').toDate()
-        console.log(
-          'Processed endTime (UTC -> VN):',
-          dayjs(processedEndTime).tz('Asia/Ho_Chi_Minh').format('YYYY-MM-DD HH:mm:ss')
-        )
 
         validatedEndTime = dayjs(processedEndTime).second(0).millisecond(0).toDate()
       } else {
@@ -522,26 +465,6 @@ export class BillService {
         validatedEndTime = dayjs(startTime).add(1, 'hour').second(0).millisecond(0).toDate()
       }
     }
-
-    // Debug log cho endTime
-    console.log('Validated endTime (VN):', dayjs(validatedEndTime).tz('Asia/Ho_Chi_Minh').format('YYYY-MM-DD HH:mm:ss'))
-
-    // Debug log để kiểm tra thời gian
-    console.log('=== DEBUG THỜI GIAN ===')
-    console.log('Schedule startTime (raw):', schedule.startTime)
-    console.log('Schedule endTime (raw):', schedule.endTime)
-    console.log('Schedule startTime (as UTC):', dayjs.utc(schedule.startTime).format('YYYY-MM-DD HH:mm:ss'))
-    console.log(
-      'Schedule startTime (as VN):',
-      dayjs.utc(schedule.startTime).tz('Asia/Ho_Chi_Minh').format('YYYY-MM-DD HH:mm:ss')
-    )
-    console.log('Validated startTime (VN):', dayjs(startTime).tz('Asia/Ho_Chi_Minh').format('YYYY-MM-DD HH:mm:ss'))
-    console.log('Validated endTime (VN):', dayjs(validatedEndTime).tz('Asia/Ho_Chi_Minh').format('YYYY-MM-DD HH:mm:ss'))
-    console.log('Current server time (VN):', dayjs().tz('Asia/Ho_Chi_Minh').format('YYYY-MM-DD HH:mm:ss'))
-    console.log('Current server time (UTC):', dayjs().utc().format('YYYY-MM-DD HH:mm:ss'))
-    console.log('========================')
-
-    console.log('========================')
 
     // Lấy thông tin bảng giá cho loại ngày (weekday/weekend)
     const priceDoc = await databaseService.price.findOne({ day_type: dayType })
@@ -569,15 +492,6 @@ export class BillService {
       return a.start.localeCompare(b.start)
     })
 
-    console.log('=== TÍNH TOÁN KHUNG GIỜ LINH HOẠT ===')
-    console.log('Session start (VN):', dayjs(startTime).tz('Asia/Ho_Chi_Minh').format('YYYY-MM-DD HH:mm:ss'))
-    console.log('Session end (VN):', dayjs(validatedEndTime).tz('Asia/Ho_Chi_Minh').format('YYYY-MM-DD HH:mm:ss'))
-    console.log(
-      'Available time slots:',
-      sortedTimeSlots.map((slot) => `${slot.start}-${slot.end}`)
-    )
-    console.log('==========================')
-
     // Tạo ranh giới thời gian cho các khung giờ có thể trải qua nhiều ngày
     const timeSlotBoundaries = []
     const sessionStartDate = dayjs(startTime).tz('Asia/Ho_Chi_Minh').format('YYYY-MM-DD')
@@ -592,8 +506,6 @@ export class BillService {
       sessionDates.push(currentDate.format('YYYY-MM-DD'))
       currentDate = currentDate.add(1, 'day')
     }
-
-    console.log('Session đi qua các ngày:', sessionDates)
 
     // Tạo khung giờ cho từng ngày mà session đi qua
     for (const dateStr of sessionDates) {
@@ -658,18 +570,12 @@ export class BillService {
             slotEnd: slotBoundary.end,
             date: slotBoundary.date
           })
-
-          console.log(
-            `Khung giờ ${dayjs(slotBoundary.start).format('HH:mm')}-${dayjs(slotBoundary.end).format('HH:mm')} (${slotBoundary.date}): overlap từ ${dayjs(overlapStart).format('DD/MM HH:mm')} đến ${dayjs(overlapEnd).format('DD/MM HH:mm')} = ${overlapHours} giờ`
-          )
         }
       }
     }
 
     // Sắp xếp các khung giờ theo thời gian bắt đầu
     applicableTimeSlots.sort((a, b) => a.overlapStart.getTime() - b.overlapStart.getTime())
-
-    console.log(`Tìm thấy ${applicableTimeSlots.length} khung giờ áp dụng`)
 
     // Tính toán phí dịch vụ cho từng khung giờ riêng biệt
     for (const timeSlotInfo of applicableTimeSlots) {
@@ -697,167 +603,72 @@ export class BillService {
           price: priceEntry.price,
           totalPrice: slotServiceFee
         })
-
-        console.log(`Tính giờ cho khung ${startTimeStr}-${endTimeStr}:`)
-        console.log(`- Số giờ: ${overlapHours}`)
-        console.log(`- Đơn giá: ${priceEntry.price}`)
-        console.log(`- Thành tiền: ${slotServiceFee}`)
       }
     }
-
-    if (applicableTimeSlots.length === 0) {
-      console.log('Không tìm thấy khung giờ nào áp dụng cho session này')
-    }
-
-    // Xử lý các đơn hàng F&B từ menu động
-    console.log(`Tổng số items từ timeSlotItems: ${timeSlotItems.length}`)
-    timeSlotItems.forEach((item, index) => {
-      console.log(`Item ${index + 1}: ${item.description} - ${item.quantity} giờ - ${item.price} VND`)
-    })
-
-    // Debug log để kiểm tra FNB orders
-    console.log('=== DEBUG FNB ORDERS ===')
-    console.log('Order từ history:', order)
-    if (order) {
-      console.log('Order structure:', JSON.stringify(order, null, 2))
-      console.log('Order.order:', order.order)
-      if (order.order) {
-        console.log('Order.order.drinks:', order.order.drinks)
-        console.log('Order.order.snacks:', order.order.snacks)
-        console.log('Type of order.order.drinks:', typeof order.order.drinks)
-        console.log('Type of order.order.snacks:', typeof order.order.snacks)
-        console.log('Is drinks object?', order.order.drinks && typeof order.order.drinks === 'object')
-        console.log('Is snacks object?', order.order.snacks && typeof order.order.snacks === 'object')
-      }
-    }
-    console.log('Số lượng menu items:', menu.length)
-    console.log(
-      'Menu items:',
-      menu.map((m) => ({ id: m._id, name: m.name, price: m.price }))
-    )
-    console.log('========================')
 
     // Thêm các mục F&B từ order vào items nếu có
     if (order && order.order) {
-      console.log('=== XỬ LÝ FNB ITEMS ===')
-      console.log('Order found:', !!order)
-      console.log('Order.order exists:', !!order.order)
-      console.log('Menu items count:', menu.length)
-
       // Xử lý đồ uống
       if (order.order.drinks && typeof order.order.drinks === 'object' && Object.keys(order.order.drinks).length > 0) {
-        console.log('Xử lý đồ uống...')
-        console.log('Drinks object:', JSON.stringify(order.order.drinks, null, 2))
         for (const [menuId, quantity] of Object.entries(order.order.drinks)) {
-          console.log(`Tìm menu item với ID: ${menuId}, quantity: ${quantity}`)
-
           // Sử dụng hàm helper để tìm menu item
           const menuItem = await this.findMenuItemById(menuId, menu)
 
           if (menuItem) {
-            console.log(`Tìm thấy menu item: ${menuItem.name}, price: ${menuItem.price}`)
-
             // Đảm bảo price là number và được xử lý đúng định dạng
             const price = this.parsePrice(menuItem.price)
-            console.log(`Parsed price: ${price}`)
             if (price === 0) {
               console.error(`Invalid price for menu item ${menuItem.name}: ${menuItem.price}`)
               continue
             }
             const totalPrice = Math.floor((quantity * price) / 1000) * 1000
-            console.log(
-              `Thêm item: ${menuItem.name}, quantity: ${quantity}, price: ${price}, totalPrice: ${totalPrice}`
-            )
             timeSlotItems.push({
               description: menuItem.name,
               quantity: quantity,
               price: price,
               totalPrice: totalPrice
             })
-          } else {
-            console.log(`KHÔNG TÌM THẤY menu item với ID: ${menuId}`)
-            console.log(
-              'Available menu IDs:',
-              menu.map((m) => m._id.toString())
-            )
           }
         }
-      } else {
-        console.log('Không có đồ uống trong order hoặc cấu trúc không đúng')
-        console.log('Drinks object:', order.order.drinks)
       }
 
       // Xử lý đồ ăn
       if (order.order.snacks && typeof order.order.snacks === 'object' && Object.keys(order.order.snacks).length > 0) {
-        console.log('Xử lý đồ ăn...')
-        console.log('Snacks object:', JSON.stringify(order.order.snacks, null, 2))
         for (const [menuId, quantity] of Object.entries(order.order.snacks)) {
-          console.log(`Tìm menu item với ID: ${menuId}, quantity: ${quantity}`)
-
           // Sử dụng hàm helper để tìm menu item
           const menuItem = await this.findMenuItemById(menuId, menu)
 
           if (menuItem) {
-            console.log(`Tìm thấy menu item: ${menuItem.name}, price: ${menuItem.price}`)
-
             // Đảm bảo price là number và được xử lý đúng định dạng
             const price = this.parsePrice(menuItem.price)
-            console.log(`Parsed price: ${price}`)
             if (price === 0) {
               console.error(`Invalid price for menu item ${menuItem.name}: ${menuItem.price}`)
               continue
             }
             const totalPrice = Math.floor((quantity * price) / 1000) * 1000
-            console.log(
-              `Thêm item: ${menuItem.name}, quantity: ${quantity}, price: ${price}, totalPrice: ${totalPrice}`
-            )
             timeSlotItems.push({
               description: menuItem.name,
               quantity: quantity,
               price: price,
               totalPrice: totalPrice
             })
-          } else {
-            console.log(`KHÔNG TÌM THẤY menu item với ID: ${menuId}`)
-            console.log(
-              'Available menu IDs:',
-              menu.map((m) => m._id.toString())
-            )
           }
         }
-      } else {
-        console.log('Không có đồ ăn trong order hoặc cấu trúc không đúng')
-        console.log('Snacks object:', order.order.snacks)
       }
-      console.log('=== KẾT THÚC XỬ LÝ FNB ITEMS ===')
-      console.log('Tổng số items sau khi xử lý FNB:', timeSlotItems.length)
-    } else {
-      console.log('Không có order hoặc order.order không tồn tại')
-      console.log('Order object:', order)
     }
 
     // Lấy thông tin promotion nếu có promotionId
     let activePromotion = undefined
     if (promotionId) {
-      console.log('Tìm promotion với ID:', promotionId)
       const promotion = await databaseService.promotions.findOne({ _id: new ObjectId(promotionId) })
       if (promotion) {
         activePromotion = promotion
-        console.log('Tìm thấy promotion:', promotion.name, 'discount:', promotion.discountPercentage + '%')
-      } else {
-        console.log('Không tìm thấy promotion với ID:', promotionId)
       }
-    } else {
-      console.log('Không có promotionId được truyền')
     }
 
     // Áp dụng khuyến mãi nếu có
     let shouldApplyPromotion = false
     if (activePromotion) {
-      console.log('Áp dụng khuyến mãi:', activePromotion.name)
-      console.log('Promotion appliesTo:', activePromotion.appliesTo)
-      console.log('Room ID:', room?._id)
-
       // Kiểm tra xem promotion có áp dụng cho phòng này không
       const appliesTo = Array.isArray(activePromotion.appliesTo)
         ? activePromotion.appliesTo[0]?.toLowerCase()
@@ -865,7 +676,6 @@ export class BillService {
 
       // For all items
       if (appliesTo === 'all') {
-        console.log('Áp dụng promotion cho tất cả items')
         shouldApplyPromotion = true
       }
       // For specific room
@@ -876,7 +686,6 @@ export class BillService {
 
         const roomIdStr = room._id.toString()
         shouldApplyPromotion = appliesToRooms.some((room) => room === roomIdStr)
-        console.log('Áp dụng promotion cho phòng cụ thể:', shouldApplyPromotion)
       }
       // For specific room type
       else if (appliesTo === 'room_type' && room?.roomType) {
@@ -886,7 +695,6 @@ export class BillService {
 
         const roomTypeIdStr = room.roomType.toString()
         shouldApplyPromotion = appliesToRoomTypes.some((type) => type === roomTypeIdStr)
-        console.log('Áp dụng promotion cho loại phòng:', shouldApplyPromotion)
       }
 
       if (shouldApplyPromotion) {
@@ -895,16 +703,8 @@ export class BillService {
           timeSlotItems[i].discountPercentage = activePromotion.discountPercentage
           timeSlotItems[i].discountName = activePromotion.name
         }
-        console.log(`Đã áp dụng promotion ${activePromotion.discountPercentage}% cho tất cả items`)
-      } else {
-        console.log('Promotion không áp dụng cho phòng này')
       }
     }
-
-    console.log(`Tổng số items cuối cùng: ${timeSlotItems.length}`)
-    timeSlotItems.forEach((item, index) => {
-      console.log(`Final Item ${index + 1}: ${item.description} - ${item.quantity} - ${item.price} VND`)
-    })
 
     // Tính tổng tiền từ các mục đã được làm tròn
     // --- SỬA ĐOẠN NÀY: TÍNH SUBTOTAL, DISCOUNT, TOTALAMOUNT ---
@@ -915,12 +715,9 @@ export class BillService {
     let discountAmount = 0
     if (activePromotion && shouldApplyPromotion) {
       discountAmount = Math.floor((subtotal * activePromotion.discountPercentage) / 100)
-      console.log(`Subtotal: ${subtotal.toLocaleString('vi-VN')} VND`)
-      console.log(`Discount ${activePromotion.discountPercentage}%: ${discountAmount.toLocaleString('vi-VN')} VND`)
     }
 
     const totalAmount = Math.floor((subtotal - discountAmount) / 1000) * 1000
-    console.log(`Total after discount: ${totalAmount.toLocaleString('vi-VN')} VND`)
 
     const bill: IBill = {
       scheduleId: schedule._id,
@@ -968,16 +765,12 @@ export class BillService {
         )
 
         if (!orderExistsInHistory) {
-          console.log('Lưu order vào history...')
           await fnbOrderService.saveOrderHistory(
             scheduleId,
             order.order,
             'system',
             bill.invoiceCode // Sử dụng invoiceCode làm billId
           )
-          console.log('Order đã được lưu vào history')
-        } else {
-          console.log('Order đã tồn tại trong history, không lưu lại')
         }
       } catch (error) {
         console.error('Lỗi khi lưu order vào history:', error)
@@ -1009,19 +802,15 @@ export class BillService {
 
           if (timeSinceLastPrint < minCooldown) {
             const waitTime = minCooldown - timeSinceLastPrint
-            console.log(`Cho ${waitTime}ms de may in san sang...`)
             await new Promise((resolve) => setTimeout(resolve, waitTime))
           }
 
           this.isPrinting = true
-          console.log('Bat dau in... (Queue size:', this.printQueue.length, ')')
 
           const result = await printFunction()
 
           this.lastPrintTime = Date.now()
           this.isPrinting = false
-
-          console.log('Hoan thanh in thanh cong')
           resolve(result)
         } catch (error) {
           this.isPrinting = false
@@ -1080,17 +869,9 @@ export class BillService {
    */
   async printBill(billData: IBill): Promise<IBill> {
     try {
-      console.log('PrintBill - Đang in hóa đơn với dữ liệu đã tính sẵn')
-
       // Lưu lại thời gian bắt đầu và kết thúc chính xác khi in hóa đơn
       const exactStartTime = billData.actualStartTime || billData.startTime
       const exactEndTime = billData.endTime || new Date()
-      console.log(
-        `Thời gian bắt đầu chính xác khi in hóa đơn: ${dayjs(ensureVNTimezone(exactStartTime)).format('DD/MM/YYYY HH:mm:ss')}`
-      )
-      console.log(
-        `Thời gian kết thúc chính xác khi in hóa đơn: ${dayjs(ensureVNTimezone(exactEndTime)).format('DD/MM/YYYY HH:mm:ss')}`
-      )
 
       // Tạo mã hóa đơn theo định dạng #DDMMHHMM (ngày, tháng, giờ, phút)
       const now = dayjs().tz('Asia/Ho_Chi_Minh')
@@ -1110,9 +891,6 @@ export class BillService {
 
       // Kiểm tra status của schedule chỉ để ghi log
       const schedule = await databaseService.roomSchedule.findOne({ _id: new ObjectId(bill.scheduleId) })
-      console.log(
-        `In hóa đơn cho ScheduleId=${bill.scheduleId}, Status=${schedule?.status || 'unknown'}, CHỈ IN - KHÔNG LƯU VÀO DATABASE`
-      )
 
       // Gọi API in qua Socket.IO
       await this.printViaAPI(bill)
@@ -1149,25 +927,19 @@ export class BillService {
       const startDateObj = targetDate.startOf('day').toDate()
       const endDateObj = targetDate.endOf('day').toDate()
 
+      // FIX: Sử dụng startTime thay vì createdAt để tính doanh thu
+      // Bill được tính vào doanh thu của ngày mà session bắt đầu, không phải ngày tạo bill
+      // Ví dụ: Bill bắt đầu 23:30 ngày 01/01 và kết thúc 01:00 ngày 02/01
+      // thì bill đó vẫn tính vào doanh thu ngày 01/01
       const bills = await databaseService.bills
         .find({
-          createdAt: {
+          startTime: {
             $gte: startDateObj,
             $lte: endDateObj
           }
         })
-        .sort({ createdAt: -1 })
+        .sort({ startTime: -1 })
         .toArray()
-
-      console.log(`[DOANH THU] Tìm thấy ${bills.length} hóa đơn (bao gồm trùng lặp)`)
-
-      // Log thông tin từng hóa đơn để debug
-      bills.forEach((bill, index) => {
-        const billDate = dayjs(bill.createdAt).tz('Asia/Ho_Chi_Minh')
-        console.log(
-          `[DOANH THU] Bill ${index + 1}: ID=${bill._id}, ScheduleId=${bill.scheduleId}, CreatedAt=${billDate.format('DD/MM/YYYY HH:mm:ss')}, Amount=${bill.totalAmount}`
-        )
-      })
 
       // Remove duplicates by scheduleId - keep paid bills or latest bill
       const uniqueBills = new Map<string, IBill>()
@@ -1178,7 +950,6 @@ export class BillService {
         if (!uniqueBills.has(scheduleId)) {
           // First bill for this scheduleId
           uniqueBills.set(scheduleId, bill)
-          console.log(`[DOANH THU] First bill for schedule ${scheduleId}: ${bill._id} (${bill.totalAmount})`)
         } else {
           const existingBill = uniqueBills.get(scheduleId)!
           let shouldReplace = false
@@ -1186,9 +957,6 @@ export class BillService {
           // Priority 1: Bills with paymentMethod (paid) over bills without
           if (bill.paymentMethod && !existingBill.paymentMethod) {
             shouldReplace = true
-            console.log(
-              `[DOANH THU] Replacing unpaid bill ${existingBill._id} with paid bill ${bill._id} for schedule ${scheduleId}`
-            )
           }
           // Priority 2: If both have same payment status, use latest createdAt
           else if (
@@ -1198,41 +966,18 @@ export class BillService {
             new Date(bill.createdAt) > new Date(existingBill.createdAt)
           ) {
             shouldReplace = true
-            console.log(
-              `[DOANH THU] Replacing older bill ${existingBill._id} with newer bill ${bill._id} for schedule ${scheduleId}`
-            )
           }
 
           if (shouldReplace) {
             uniqueBills.set(scheduleId, bill)
-            console.log(
-              `[DOANH THU] Selected bill ${bill._id} (${bill.totalAmount}) over ${existingBill._id} (${existingBill.totalAmount})`
-            )
-          } else {
-            console.log(
-              `[DOANH THU] Keeping existing bill ${existingBill._id} (${existingBill.totalAmount}) over ${bill._id} (${bill.totalAmount})`
-            )
           }
         }
       }
 
       const finalBills = Array.from(uniqueBills.values())
 
-      console.log(`[DOANH THU] Sau khi loại bỏ trùng lặp: ${finalBills.length} hóa đơn`)
-
-      // Log final bills
-      finalBills.forEach((bill, index) => {
-        const billDate = dayjs(bill.createdAt).tz('Asia/Ho_Chi_Minh')
-        console.log(
-          `[DOANH THU] Final Bill ${index + 1}: ID=${bill._id}, ScheduleId=${bill.scheduleId}, CreatedAt=${billDate.format('DD/MM/YYYY HH:mm:ss')}, Amount=${bill.totalAmount}, PaymentMethod=${bill.paymentMethod || 'null'}`
-        )
-      })
-
       // Simple calculation - just sum all totalAmount
       const totalRevenue = finalBills.reduce((sum, bill) => sum + bill.totalAmount, 0)
-
-      console.log(`[DOANH THU] Tổng doanh thu: ${totalRevenue.toLocaleString('vi-VN')} VND`)
-      console.log(`[DOANH THU] Số lượng hóa đơn: ${finalBills.length}`)
 
       return {
         totalRevenue,
@@ -1260,24 +1005,19 @@ export class BillService {
       const startDate = startOfWeek.toDate()
       const endDate = endOfWeek.toDate()
 
-      console.log(`[DOANH THU] Bắt đầu tính doanh thu tuần ${targetDate.week()} năm ${targetDate.year()}`)
-      console.log(`[DOANH THU] Khoảng thời gian: ${startDate.toISOString()} - ${endDate.toISOString()}`)
-
-      // Tìm hóa đơn dựa trên createdAt (thời gian tạo hóa đơn) thay vì endTime của schedule
+      // FIX: Sử dụng startTime thay vì createdAt để tính doanh thu
+      // Bill được tính vào doanh thu của tuần mà session bắt đầu, không phải tuần tạo bill
       const bills = await databaseService.bills
         .find({
-          createdAt: {
+          startTime: {
             $gte: startDate,
             $lte: endDate
           }
         })
-        .sort({ createdAt: -1 })
+        .sort({ startTime: -1 })
         .toArray()
 
-      console.log(`[DOANH THU] Tìm thấy ${bills.length} hóa đơn được tạo trong tuần này`)
-
       if (bills.length === 0) {
-        console.log('[DOANH THU] Không có hóa đơn nào được tạo trong tuần này')
         return {
           totalRevenue: 0,
           bills: [],
@@ -1331,10 +1071,6 @@ export class BillService {
 
       // Tính tổng doanh thu
       const totalRevenue = finalBills.reduce((sum, bill) => sum + bill.totalAmount, 0)
-
-      console.log(`\n[DOANH THU] Tổng kết doanh thu tuần ${targetDate.week()} năm ${targetDate.year()}:`)
-      console.log(`- Số lượng hóa đơn (sau khi lọc trùng): ${finalBills.length}`)
-      console.log(`- Tổng doanh thu: ${totalRevenue.toLocaleString('vi-VN')} VND`)
 
       return {
         totalRevenue,
@@ -1364,24 +1100,19 @@ export class BillService {
       const startDate = startOfMonth.toDate()
       const endDate = endOfMonth.toDate()
 
-      console.log(`[DOANH THU] Bắt đầu tính doanh thu tháng ${targetDate.format('MM/YYYY')}`)
-      console.log(`[DOANH THU] Khoảng thời gian: ${startDate.toISOString()} - ${endDate.toISOString()}`)
-
-      // Tìm hóa đơn dựa trên createdAt (thời gian tạo hóa đơn) thay vì endTime của schedule
+      // FIX: Sử dụng startTime thay vì createdAt để tính doanh thu
+      // Bill được tính vào doanh thu của tháng mà session bắt đầu, không phải tháng tạo bill
       const bills = await databaseService.bills
         .find({
-          createdAt: {
+          startTime: {
             $gte: startDate,
             $lte: endDate
           }
         })
-        .sort({ createdAt: -1 })
+        .sort({ startTime: -1 })
         .toArray()
 
-      console.log(`[DOANH THU] Tìm thấy ${bills.length} hóa đơn được tạo trong tháng này`)
-
       if (bills.length === 0) {
-        console.log('[DOANH THU] Không có hóa đơn nào được tạo trong tháng này')
         return {
           totalRevenue: 0,
           bills: [],
@@ -1435,10 +1166,6 @@ export class BillService {
 
       // Tính tổng doanh thu
       const totalRevenue = finalBills.reduce((sum, bill) => sum + bill.totalAmount, 0)
-
-      console.log(`\n[DOANH THU] Tổng kết doanh thu tháng ${targetDate.format('MM/YYYY')}:`)
-      console.log(`- Số lượng hóa đơn (sau khi lọc trùng): ${finalBills.length}`)
-      console.log(`- Tổng doanh thu: ${totalRevenue.toLocaleString('vi-VN')} VND`)
 
       return {
         totalRevenue,
@@ -1469,9 +1196,6 @@ export class BillService {
       const startDateObj = start.toDate()
       const endDateObj = end.toDate()
 
-      console.log(`[DOANH THU] Bắt đầu tính doanh thu từ ${start.format('DD/MM/YYYY')} đến ${end.format('DD/MM/YYYY')}`)
-      console.log(`[DOANH THU] Khoảng thời gian: ${startDateObj.toISOString()} - ${endDateObj.toISOString()}`)
-
       if (start.isAfter(end)) {
         throw new ErrorWithStatus({
           message: 'Ngày bắt đầu phải trước ngày kết thúc',
@@ -1479,21 +1203,19 @@ export class BillService {
         })
       }
 
-      // Tìm hóa đơn dựa trên createdAt (thời gian tạo hóa đơn) thay vì endTime của schedule
+      // FIX: Sử dụng startTime thay vì createdAt để tính doanh thu
+      // Bill được tính vào doanh thu của khoảng thời gian mà session bắt đầu, không phải khoảng thời gian tạo bill
       const bills = await databaseService.bills
         .find({
-          createdAt: {
+          startTime: {
             $gte: startDateObj,
             $lte: endDateObj
           }
         })
-        .sort({ createdAt: -1 })
+        .sort({ startTime: -1 })
         .toArray()
 
-      console.log(`[DOANH THU] Tìm thấy ${bills.length} hóa đơn được tạo trong khoảng thời gian này`)
-
       if (bills.length === 0) {
-        console.log('[DOANH THU] Không có hóa đơn nào được tạo trong khoảng thời gian này')
         return {
           totalRevenue: 0,
           bills: [],
@@ -1547,10 +1269,6 @@ export class BillService {
 
       // Tính tổng doanh thu
       const totalRevenue = finalBills.reduce((sum, bill) => sum + bill.totalAmount, 0)
-
-      console.log(`\n[DOANH THU] Tổng kết doanh thu từ ${start.format('DD/MM/YYYY')} đến ${end.format('DD/MM/YYYY')}:`)
-      console.log(`- Số lượng hóa đơn (sau khi lọc trùng): ${finalBills.length}`)
-      console.log(`- Tổng doanh thu: ${totalRevenue.toLocaleString('vi-VN')} VND`)
 
       return {
         totalRevenue,
@@ -1622,7 +1340,6 @@ export class BillService {
         .toArray()
 
       const beforeCount = bills.length
-      console.log(`Tìm thấy ${beforeCount} hóa đơn trong khoảng thời gian từ ${startDate} đến ${endDate}`)
 
       if (bills.length === 0) {
         return { removedCount: 0, beforeCount: 0, afterCount: 0 }
@@ -1653,8 +1370,6 @@ export class BillService {
         }
       })
 
-      console.log(`Tìm thấy ${duplicateBillIds.length} hóa đơn trùng lặp cần xóa`)
-
       // Xóa các hóa đơn trùng lặp
       if (duplicateBillIds.length > 0) {
         const result = await databaseService.bills.deleteMany({
@@ -1662,7 +1377,6 @@ export class BillService {
         })
 
         const afterCount = beforeCount - result.deletedCount
-        console.log(`Đã xóa ${result.deletedCount} hóa đơn trùng lặp`)
 
         return {
           removedCount: result.deletedCount,
@@ -1695,7 +1409,6 @@ export class BillService {
       // Lấy tất cả hóa đơn
       const allBills = await databaseService.bills.find({}).toArray()
       const beforeCount = allBills.length
-      console.log(`Tổng số hóa đơn hiện tại: ${beforeCount}`)
 
       // Lấy tất cả lịch đặt phòng đã hoàn thành
       const finishedSchedules = await databaseService.roomSchedule
@@ -1706,11 +1419,9 @@ export class BillService {
 
       // Tạo map của các ID lịch đã hoàn thành để tra cứu nhanh
       const finishedScheduleIds = new Set(finishedSchedules.map((schedule) => schedule._id.toString()))
-      console.log(`Số lượng lịch đặt phòng đã hoàn thành: ${finishedScheduleIds.size}`)
 
       // Tìm các hóa đơn từ lịch chưa hoàn thành
       const billsToRemove = allBills.filter((bill) => !finishedScheduleIds.has(bill.scheduleId.toString()))
-      console.log(`Số lượng hóa đơn thuộc về lịch chưa hoàn thành: ${billsToRemove.length}`)
 
       if (billsToRemove.length === 0) {
         return {
@@ -1729,7 +1440,6 @@ export class BillService {
       })
 
       const afterCount = beforeCount - result.deletedCount
-      console.log(`Đã xóa ${result.deletedCount} hóa đơn thuộc về lịch chưa hoàn thành`)
 
       return {
         removedCount: result.deletedCount,
@@ -1810,27 +1520,19 @@ export class BillService {
       const startDateObj = start.toDate()
       const endDateObj = end.toDate()
 
-      // FIX: Sử dụng createdAt thay vì endTime để tránh vấn đề múi giờ
-      // vì createdAt thường được lưu chính xác hơn về thời điểm tạo hóa đơn
+      // FIX: Sử dụng startTime thay vì createdAt để tính doanh thu
+      // Bill được tính vào doanh thu của khoảng thời gian mà session bắt đầu, không phải khoảng thời gian tạo bill
+      // Ví dụ: Bill bắt đầu 23:30 ngày 01/01 và kết thúc 01:00 ngày 02/01
+      // thì bill đó vẫn tính vào doanh thu ngày 01/01
       const bills = await databaseService.bills
         .find({
-          createdAt: {
+          startTime: {
             $gte: startDateObj,
             $lte: endDateObj
           }
         })
-        .sort({ createdAt: -1 })
+        .sort({ startTime: -1 })
         .toArray()
-
-      console.log(`[DOANH THU MỚI] Tìm thấy ${bills.length} hóa đơn trong khoảng thời gian ${timeRangeDescription}`)
-
-      // Log thông tin từng hóa đơn để debug
-      bills.forEach((bill, index) => {
-        const billDate = dayjs(bill.createdAt).tz('Asia/Ho_Chi_Minh')
-        console.log(
-          `[DOANH THU MỚI] Bill ${index + 1}: ID=${bill._id}, ScheduleId=${bill.scheduleId}, CreatedAt=${billDate.format('DD/MM/YYYY HH:mm:ss')}, Amount=${bill.totalAmount}`
-        )
-      })
 
       if (bills.length === 0) {
         return {
@@ -1893,40 +1595,10 @@ export class BillService {
       // Làm tròn tổng tiền của từng hóa đơn (nếu cần)
       finalBills.forEach((bill) => {
         bill.totalAmount = Math.floor(bill.totalAmount / 1000) * 1000
-
-        // Log thông tin chi tiết về hóa đơn và khuyến mãi nếu có
-        const billDate = dayjs(bill.createdAt).tz('Asia/Ho_Chi_Minh')
-        console.log(
-          `- Bill ID: ${bill._id}, CreatedAt: ${billDate.format('DD/MM/YYYY HH:mm:ss')}, Tổng tiền: ${bill.totalAmount.toLocaleString('vi-VN')} VND`
-        )
-        if (bill.activePromotion) {
-          console.log(
-            `  + Khuyến mãi đã áp dụng: ${bill.activePromotion.name} (${bill.activePromotion.discountPercentage}%)`
-          )
-          console.log(`  + Đây là giá trị đã giảm giá, sử dụng trực tiếp từ database`)
-        }
-
-        // Log thông tin từng mục trong hóa đơn
-        if (bill.items && bill.items.length > 0) {
-          bill.items.forEach((item) => {
-            if (item.originalPrice) {
-              console.log(
-                `  + ${item.description}: ${item.quantity} x ${item.price} = ${item.originalPrice} -> ${item.price * item.quantity} VND (đã giảm giá)`
-              )
-            } else {
-              console.log(
-                `  + ${item.description}: ${item.quantity} x ${item.price} = ${item.price * item.quantity} VND`
-              )
-            }
-          })
-        }
       })
 
       // Tính tổng doanh thu
       const totalRevenue = finalBills.reduce((sum, bill) => sum + bill.totalAmount, 0)
-
-      console.log(`[DOANH THU MỚI] Tổng doanh thu ${timeRangeDescription}: ${totalRevenue.toLocaleString('vi-VN')} VND`)
-      console.log(`[DOANH THU MỚI] Số lượng hóa đơn (sau khi lọc trùng): ${finalBills.length}`)
 
       return {
         totalRevenue,
@@ -2159,7 +1831,6 @@ export class BillService {
       }
     } else {
       // Nếu không tìm thấy menu chính, tìm trong fnb_menu_item collection
-      console.log(`Không tìm thấy menu chính, tìm trong fnb_menu_item collection...`)
       const menuItemFromService = await fnbMenuItemService.getMenuItemById(menuId)
       if (menuItemFromService) {
         return {
@@ -2168,7 +1839,6 @@ export class BillService {
         }
       } else {
         // Nếu vẫn không tìm thấy, tìm trong variants của menu chính
-        console.log(`Không tìm thấy trong fnb_menu_item, tìm trong variants...`)
         for (const menuItem of menu) {
           if (menuItem.variants && Array.isArray(menuItem.variants)) {
             const variant = menuItem.variants.find((v: any) => v.id === menuId)
