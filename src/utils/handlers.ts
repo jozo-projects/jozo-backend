@@ -6,7 +6,7 @@ import { NextFunction, Request, Response } from 'express'
  * @param fn The request handler function to wrap.
  * @returns A new request handler function that catches errors and passes them to the next middleware.
  */
-export const wrapRequestHandler = (fn: (req: Request, res: Response, next: NextFunction) => Promise<any>) => {
+export const wrapRequestHandler = <T>(fn: (req: Request, res: Response, next: NextFunction) => Promise<T>) => {
   return async (req: Request, res: Response, next: NextFunction) => {
     try {
       await fn(req, res, next)

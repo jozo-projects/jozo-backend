@@ -212,3 +212,13 @@ export const NOTIFICATION_MESSAGES = {
   SCHEDULE_STATUS_UPDATED_BODY: 'Ca {shiftType} ngày {date} đã chuyển sang trạng thái {status}'
 } as const
 
+export const GIFT_MESSAGES = {
+  GET_GIFTS_SUCCESS: 'Lấy danh sách gift thành công',
+  GET_GIFT_BY_ID_SUCCESS: 'Lấy gift by id thành công',
+  CREATE_GIFT_SUCCESS: 'Tạo gift thành công',
+  UPDATE_GIFT_SUCCESS: 'Cập nhật gift thành công',
+  DELETE_GIFT_SUCCESS: 'Xóa gift thành công',
+  CLAIM_GIFT_SUCCESS: 'Nhận quà thành công',
+  GET_ROOM_GIFT_SUCCESS: 'Lấy thông tin quà của phòng thành công',
+  ACTIVE_SCHEDULE_NOT_FOUND: 'Không tìm thấy lịch đang hoạt động cho phòng'
+} as const

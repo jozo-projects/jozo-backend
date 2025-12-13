@@ -14,6 +14,12 @@ export const createScheduleValidator = validate(
         errorMessage: ROOM_SCHEDULE_MESSAGES.START_TIME_REQUIRED
       }
     },
+    giftEnabled: {
+      optional: true,
+      isBoolean: {
+        errorMessage: 'giftEnabled must be boolean'
+      }
+    },
     status: {
       notEmpty: {
         errorMessage: ROOM_SCHEDULE_MESSAGES.STATUS_REQUIRED

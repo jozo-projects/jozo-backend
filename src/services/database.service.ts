@@ -16,6 +16,7 @@ import { IHoliday } from '~/models/schemas/Holiday.schema'
 import { VirtualRoom } from '~/models/schemas/VirtualRoom.schema'
 import { EmployeeSchedule } from '~/models/schemas/EmployeeSchedule.schema'
 import { Notification } from '~/models/schemas/Notification.schema'
+import { Gift } from '~/models/schemas/Gift.schema'
 dotenv.config()
 
 // Interface cho Client Booking
@@ -108,6 +109,10 @@ class DatabaseService {
 
   get bills(): Collection<IBill> {
     return this.db.collection('bills')
+  }
+
+  get gifts(): Collection<Gift> {
+    return this.db.collection('gifts')
   }
 
   get bookings(): Collection<IClientBooking> {

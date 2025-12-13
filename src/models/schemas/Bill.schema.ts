@@ -24,6 +24,20 @@ export interface IBill {
     discountPercentage: number
     appliesTo: 'sing' | 'all' | string[]
   }
+  gift?: {
+    giftId: ObjectId | string
+    name: string
+    type: 'snacks_drinks' | 'discount'
+    discountPercentage?: number
+    items?: Array<{
+      itemId: ObjectId
+      quantity: number
+      name: string
+      category?: string
+      priceSnapshot?: number
+      source: 'fnb_menu' | 'fnb_menu_item'
+    }>
+  }
   actualEndTime?: Date
   actualStartTime?: Date
   invoiceCode?: string // Mã hóa đơn với format #DDMMHHMM
@@ -58,6 +72,20 @@ export class Bill {
     name: string
     discountPercentage: number
     appliesTo: 'karaoke' | 'all'
+  }
+  gift?: {
+    giftId: ObjectId | string
+    name: string
+    type: 'snacks_drinks' | 'discount'
+    discountPercentage?: number
+    items?: Array<{
+      itemId: ObjectId
+      quantity: number
+      name: string
+      category?: string
+      priceSnapshot?: number
+      source: 'fnb_menu' | 'fnb_menu_item'
+    }>
   }
   actualEndTime: Date
   invoiceCode?: string // Mã hóa đơn với format #DDMMHHMM
