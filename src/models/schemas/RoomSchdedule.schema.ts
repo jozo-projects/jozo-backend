@@ -1,12 +1,22 @@
 import { ObjectId } from 'mongodb'
-import { RoomScheduleStatus, RoomType, RoomSize } from '~/constants/enum'
+import { RoomScheduleStatus, RoomType } from '~/constants/enum'
 import { AddSongRequestBody } from '~/models/requests/Song.request'
 
+export interface VirtualRoomInfo {
+  virtualRoomId: ObjectId
+  virtualRoomName: string
+  virtualSize: RoomType
+  physicalSize: RoomType
+  isVirtualBooking: boolean
+}
+
+/* eslint-disable no-unused-vars */
 export enum BookingSource {
   Staff = 'staff',
   Customer = 'customer',
   System = 'system'
 }
+/* eslint-enable no-unused-vars */
 
 export class RoomSchedule {
   _id?: ObjectId
@@ -20,6 +30,7 @@ export class RoomSchedule {
   updatedBy?: string
   note?: string
   source?: BookingSource
+  applyFreeHourPromo?: boolean
 
   // 🆕 Mã booking 4 chữ số cho khách hàng (dễ nhớ, dễ tra cứu)
   bookingCode?: string // Mã 4 chữ số (0000-9999) - unique trong cùng ngày
@@ -34,13 +45,7 @@ export class RoomSchedule {
   upgraded?: boolean
 
   // 🆕 Virtual Room Info (chỉ field cần thiết)
-  virtualRoomInfo?: {
-    virtualRoomId: ObjectId
-    virtualRoomName: string
-    virtualSize: RoomType
-    physicalSize: RoomType
-    isVirtualBooking: boolean
-  }
+  virtualRoomInfo?: VirtualRoomInfo
 
   // 🆕 Admin Notification (chỉ field quan trọng)
   adminNotes?: {
@@ -60,6 +65,7 @@ export class RoomSchedule {
     updatedBy?: string,
     note?: string,
     source?: BookingSource,
+    applyFreeHourPromo?: boolean,
     bookingCode?: string,
     customerName?: string,
     customerPhone?: string,
@@ -67,8 +73,11 @@ export class RoomSchedule {
     originalRoomType?: RoomType,
     actualRoomType?: RoomType,
     upgraded?: boolean,
-    virtualRoomInfo?: any,
-    adminNotes?: any,
+    virtualRoomInfo?: VirtualRoomInfo,
+    adminNotes?: {
+      virtualSizeToUse: RoomType
+      staffInstructions: string
+    },
     queueSongs?: AddSongRequestBody[],
     dateOfUse?: string
   ) {
@@ -82,6 +91,7 @@ export class RoomSchedule {
     this.updatedBy = updatedBy || 'system'
     this.note = note
     this.source = source || BookingSource.Staff
+    this.applyFreeHourPromo = applyFreeHourPromo || false
 
     // Mã booking 4 chữ số
     this.bookingCode = bookingCode
