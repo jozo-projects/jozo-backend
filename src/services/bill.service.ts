@@ -1,10 +1,11 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+/* eslint-disable no-unused-vars */
 import axios from 'axios'
 import dayjs from 'dayjs'
 import isBetween from 'dayjs/plugin/isBetween'
 import isSameOrBefore from 'dayjs/plugin/isSameOrBefore'
 import timezone from 'dayjs/plugin/timezone'
 import utc from 'dayjs/plugin/utc'
-import iconv from 'iconv-lite'
 import { ObjectId } from 'mongodb'
 import { DayType, RoomScheduleStatus } from '~/constants/enum'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
@@ -56,15 +57,6 @@ declare module 'escpos' {
 declare module 'escpos-usb' {
   function findPrinter(deviceId?: any): any[]
   function findPrinter(deviceId: any, callback: (err: any, device: any) => void): void
-}
-
-function encodeVietnameseText(text: string, encoding = 'windows-1258') {
-  return iconv.encode(text, encoding)
-}
-
-// Hàm format ngày tháng
-function formatDate(date: Date): string {
-  return dayjs(ensureVNTimezone(date)).format('DD/MM/YYYY HH:mm')
 }
 
 // TextPrinter class để giả lập printer
@@ -1780,17 +1772,29 @@ export class BillService {
       }
     })
 
-    printer.text('------------------------------------------------')
-
     // Thông tin giảm giá free giờ đầu trong khung 10-19 (đã trừ vào tổng)
     if (bill.freeHourPromotion && bill.freeHourPromotion.freeMinutesApplied > 0) {
+      // Tính toán thời gian bắt đầu và kết thúc của chương trình KM
+      let promotionTimeText = 'KM gio dau tien'
+      if (bill.actualStartTime) {
+        const startTime = new Date(bill.actualStartTime)
+        const endTime = new Date(startTime.getTime() + 60 * 60 * 1000) // +60 phút
+
+        const startHour = startTime.getHours().toString().padStart(2, '0')
+        const startMinute = startTime.getMinutes().toString().padStart(2, '0')
+        const endHour = endTime.getHours().toString().padStart(2, '0')
+        const endMinute = endTime.getMinutes().toString().padStart(2, '0')
+
+        promotionTimeText = `Chuong trinh KM (${startHour}:${startMinute} - ${endHour}:${endMinute})`
+      }
+
+      printer.text('------------------------------------------------')
+
       printer
         .align('lt')
         .style('b')
         .size(1, 1)
-        .text(`KM gio dau tien: -${bill.freeHourPromotion.freeAmount.toLocaleString('vi-VN')} VND`)
-        .align('rt')
-        .text(`-${bill.freeHourPromotion.freeAmount.toLocaleString('vi-VN')} VND`)
+        .text(`${promotionTimeText}: -${bill.freeHourPromotion.freeAmount.toLocaleString('vi-VN')} VND`)
     }
 
     // Hiển thị discount từ activePromotion nếu có
