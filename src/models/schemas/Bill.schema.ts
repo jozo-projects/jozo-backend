@@ -24,6 +24,10 @@ export interface IBill {
     discountPercentage: number
     appliesTo: 'sing' | 'all' | string[]
   }
+  freeHourPromotion?: {
+    freeMinutesApplied: number
+    freeAmount: number
+  }
   actualEndTime?: Date
   actualStartTime?: Date
   invoiceCode?: string // Mã hóa đơn với format #DDMMHHMM
@@ -58,6 +62,10 @@ export class Bill {
     name: string
     discountPercentage: number
     appliesTo: 'karaoke' | 'all'
+  }
+  freeHourPromotion?: {
+    freeMinutesApplied: number
+    freeAmount: number
   }
   actualEndTime: Date
   invoiceCode?: string // Mã hóa đơn với format #DDMMHHMM
