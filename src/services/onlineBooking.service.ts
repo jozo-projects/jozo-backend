@@ -301,7 +301,7 @@ class OnlineBookingService {
         return !!existingSchedule // return true nếu trùng
       })
 
-      // Tạo RoomSchedule
+      // Tạo RoomSchedule (sử dụng constructor ngắn gọn, set thêm field sau)
       const newSchedule = new RoomSchedule(
         roomResult.room._id.toString(),
         startTime,
@@ -311,18 +311,18 @@ class OnlineBookingService {
         'online_customer',
         autoNote,
         BookingSource.Customer,
-        bookingCode, // Mã 4 chữ số
-        request.customerName,
-        request.customerPhone,
-        request.customerEmail,
-        request.roomType,
-        roomResult.assignedRoomType,
-        roomResult.upgraded,
-        undefined, // virtualRoomInfo
-        undefined, // adminNotes
-        [], // queueSongs - luôn khởi tạo là mảng rỗng
-        dateOfUse // Ngày sử dụng
+        bookingCode // Mã 4 chữ số
       )
+
+      // Gán thêm thông tin cho booking online
+      newSchedule.customerName = request.customerName
+      newSchedule.customerPhone = request.customerPhone
+      newSchedule.customerEmail = request.customerEmail
+      newSchedule.originalRoomType = request.roomType
+      newSchedule.actualRoomType = roomResult.assignedRoomType
+      newSchedule.upgraded = roomResult.upgraded
+      newSchedule.queueSongs = []
+      newSchedule.dateOfUse = dateOfUse
 
       // Lưu vào database
       const result = await databaseService.roomSchedule.insertOne(newSchedule)
