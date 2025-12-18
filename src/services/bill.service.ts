@@ -1776,14 +1776,16 @@ export class BillService {
     if (bill.freeHourPromotion && bill.freeHourPromotion.freeMinutesApplied > 0) {
       // Tính toán thời gian bắt đầu và kết thúc của chương trình KM
       let promotionTimeText = 'KM gio dau tien'
-      if (bill.actualStartTime) {
-        const startTime = new Date(bill.actualStartTime)
-        const endTime = new Date(startTime.getTime() + 60 * 60 * 1000) // +60 phút
+      // Dùng múi giờ VN khi hiển thị khung giờ khuyến mãi
+      const promoStartSource = bill.actualStartTime || bill.startTime
+      if (promoStartSource) {
+        const startTime = dayjs(promoStartSource).tz('Asia/Ho_Chi_Minh')
+        const endTime = startTime.add(60, 'minute') // +60 phút
 
-        const startHour = startTime.getHours().toString().padStart(2, '0')
-        const startMinute = startTime.getMinutes().toString().padStart(2, '0')
-        const endHour = endTime.getHours().toString().padStart(2, '0')
-        const endMinute = endTime.getMinutes().toString().padStart(2, '0')
+        const startHour = startTime.format('HH')
+        const startMinute = startTime.format('mm')
+        const endHour = endTime.format('HH')
+        const endMinute = endTime.format('mm')
 
         promotionTimeText = `Chuong trinh KM (${startHour}:${startMinute} - ${endHour}:${endMinute})`
       }
