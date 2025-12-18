@@ -1,9 +1,8 @@
-import { Request, Response, NextFunction } from 'express'
-import { ObjectId } from 'mongodb'
-import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
+import { NextFunction, Request, Response } from 'express'
 import { RoomScheduleStatus, RoomType } from '~/constants/enum'
-import { virtualRoomService } from '~/services/virtualRoom.service'
+import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import databaseService from '~/services/database.service'
+import { virtualRoomService } from '~/services/virtualRoom.service'
 
 /**
  * @description Lấy dashboard virtual room
