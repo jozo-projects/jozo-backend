@@ -20,6 +20,7 @@ const upload = multer({ storage: multer.memoryStorage() })
 giftRouter.get('/', protect([UserRole.Admin]), wrapRequestHandler(listGifts))
 // Endpoint public để app khác chỉ xem danh sách quà
 giftRouter.get('/public', wrapRequestHandler(listGifts))
+giftRouter.get('/room/:roomIndex', getRoomGiftValidator, wrapRequestHandler(getGiftForRoom))
 giftRouter.get('/:id', protect([UserRole.Admin]), wrapRequestHandler(getGiftById))
 giftRouter.post(
   '/',
@@ -43,6 +44,5 @@ giftRouter.delete('/:id', protect([UserRole.Admin]), wrapRequestHandler(deleteGi
 
 // Endpoint cho box mở quà (không yêu cầu auth nếu cần cho thiết bị; có thể thêm auth nếu có cơ chế riêng)
 giftRouter.post('/claim', claimGiftValidator, wrapRequestHandler(claimGiftForSchedule))
-giftRouter.get('/room/:roomIndex', getRoomGiftValidator, wrapRequestHandler(getGiftForRoom))
 
 export default giftRouter
