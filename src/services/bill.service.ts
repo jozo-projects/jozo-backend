@@ -1,10 +1,11 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+/* eslint-disable no-unused-vars */
 import axios from 'axios'
 import dayjs from 'dayjs'
 import isBetween from 'dayjs/plugin/isBetween'
 import isSameOrBefore from 'dayjs/plugin/isSameOrBefore'
 import timezone from 'dayjs/plugin/timezone'
 import utc from 'dayjs/plugin/utc'
-import iconv from 'iconv-lite'
 import { ObjectId } from 'mongodb'
 import { DayType, RoomScheduleStatus } from '~/constants/enum'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
@@ -56,15 +57,6 @@ declare module 'escpos' {
 declare module 'escpos-usb' {
   function findPrinter(deviceId?: any): any[]
   function findPrinter(deviceId: any, callback: (err: any, device: any) => void): void
-}
-
-function encodeVietnameseText(text: string, encoding = 'windows-1258') {
-  return iconv.encode(text, encoding)
-}
-
-// Hàm format ngày tháng
-function formatDate(date: Date): string {
-  return dayjs(ensureVNTimezone(date)).format('DD/MM/YYYY HH:mm')
 }
 
 // TextPrinter class để giả lập printer
@@ -466,6 +458,12 @@ export class BillService {
       }
     }
 
+    const sessionDurationMinutes = dayjs(validatedEndTime).diff(dayjs(startTime), 'minute')
+    const eligibleForFreeHour = !!schedule?.applyFreeHourPromo && sessionDurationMinutes >= 120
+    let freeMinutesLeft = eligibleForFreeHour ? 60 : 0
+    let freeMinutesApplied = 0
+    let freeAmountTotal = 0
+
     // Lấy thông tin bảng giá cho loại ngày (weekday/weekend)
     const priceDoc = await databaseService.price.findOne({ day_type: dayType })
     if (!priceDoc || !priceDoc.time_slots) {
@@ -577,33 +575,53 @@ export class BillService {
     // Sắp xếp các khung giờ theo thời gian bắt đầu
     applicableTimeSlots.sort((a, b) => a.overlapStart.getTime() - b.overlapStart.getTime())
 
-    // Tính toán phí dịch vụ cho từng khung giờ riêng biệt
+    // Tính toán phí dịch vụ cho từng khung giờ riêng biệt (có thể áp dụng free 60 phút đầu trong khung 10-19)
     for (const timeSlotInfo of applicableTimeSlots) {
-      const { slot, overlapStart, overlapEnd, overlapHours } = timeSlotInfo
+      const { slot, overlapStart, overlapEnd } = timeSlotInfo
 
-      // Tìm giá cho loại phòng
       const priceEntry = slot.prices.find((p: any) => p.room_type === room?.roomType)
+      if (!priceEntry) continue
 
-      if (priceEntry) {
-        const slotServiceFee = Math.floor((overlapHours * priceEntry.price) / 1000) * 1000
-        totalServiceFee += slotServiceFee
-        totalHoursUsed += overlapHours
+      const localOverlapStart = dayjs(overlapStart).tz('Asia/Ho_Chi_Minh')
+      const localOverlapEnd = dayjs(overlapEnd).tz('Asia/Ho_Chi_Minh')
+      const overlapMinutes = localOverlapEnd.diff(localOverlapStart, 'minute')
+      if (overlapMinutes <= 0) continue
 
-        const startTimeStr = dayjs(overlapStart).tz('Asia/Ho_Chi_Minh').format('HH:mm')
-        const endTimeStr = dayjs(overlapEnd).tz('Asia/Ho_Chi_Minh').format('HH:mm')
-        const startDateStr = dayjs(overlapStart).tz('Asia/Ho_Chi_Minh').format('DD/MM')
-        const endDateStr = dayjs(overlapEnd).tz('Asia/Ho_Chi_Minh').format('DD/MM')
+      let slotFreeMinutes = 0
+      if (eligibleForFreeHour && freeMinutesLeft > 0) {
+        const promoStart = localOverlapStart.clone().hour(10).minute(0).second(0).millisecond(0)
+        const promoEnd = localOverlapStart.clone().hour(19).minute(0).second(0).millisecond(0)
+        const promoOverlapStart = promoStart.isAfter(localOverlapStart) ? promoStart : localOverlapStart
+        const promoOverlapEnd = promoEnd.isBefore(localOverlapEnd) ? promoEnd : localOverlapEnd
 
-        // Tạo description với thời gian - luôn xuống dòng từ dấu (
-        const description = `Phi dich vu thu am\n(${startTimeStr}-${endTimeStr})`
-
-        timeSlotItems.push({
-          description: description,
-          quantity: parseFloat(overlapHours.toFixed(2)),
-          price: priceEntry.price,
-          totalPrice: slotServiceFee
-        })
+        if (promoOverlapEnd.isAfter(promoOverlapStart)) {
+          const promoMinutes = promoOverlapEnd.diff(promoOverlapStart, 'minute')
+          slotFreeMinutes = Math.min(freeMinutesLeft, promoMinutes)
+          freeMinutesLeft -= slotFreeMinutes
+          freeMinutesApplied += slotFreeMinutes
+          const slotFreeAmount = Math.floor(((slotFreeMinutes / 60) * priceEntry.price) / 1000) * 1000
+          freeAmountTotal += slotFreeAmount
+        }
       }
+
+      const overlapHoursRounded = Math.round((overlapMinutes / 60) * 100) / 100
+
+      const slotServiceFee = Math.floor(((overlapMinutes / 60) * priceEntry.price) / 1000) * 1000
+
+      totalServiceFee += slotServiceFee
+      totalHoursUsed += overlapHoursRounded
+
+      const startTimeStr = localOverlapStart.format('HH:mm')
+      const endTimeStr = localOverlapEnd.format('HH:mm')
+
+      const description = `Phi dich vu thu am\n(${startTimeStr}-${endTimeStr})`
+
+      timeSlotItems.push({
+        description,
+        quantity: overlapHoursRounded,
+        price: priceEntry.price,
+        totalPrice: slotServiceFee
+      })
     }
 
     // Thêm các mục F&B từ order vào items nếu có
@@ -725,7 +743,6 @@ export class BillService {
     }
 
     // Tính tổng tiền từ các mục đã được làm tròn
-    // --- SỬA ĐOẠN NÀY: TÍNH SUBTOTAL, DISCOUNT, TOTALAMOUNT ---
     let subtotal = timeSlotItems.reduce((acc, item) => {
       return acc + item.totalPrice
     }, 0)
@@ -735,22 +752,8 @@ export class BillService {
       discountAmount = Math.floor((subtotal * activePromotion.discountPercentage) / 100)
     }
 
-    // Gift discount chỉ áp dụng cho phí phòng, không áp dụng F&B
-    const roomChargeItems = timeSlotItems.filter((item) =>
-      item.description.toLowerCase().includes('phi dich vu thu am')
-    )
-    const roomSubtotal = roomChargeItems.reduce((acc, item) => acc + item.totalPrice, 0)
-    let giftDiscountAmount = 0
-    if (giftDiscountPercent > 0) {
-      giftDiscountAmount = Math.floor((roomSubtotal * giftDiscountPercent) / 100)
-      // Gắn thông tin discount lên các item room charge để hiển thị
-      roomChargeItems.forEach((item) => {
-        item.discountPercentage = giftDiscountPercent
-        item.discountName = scheduleGift?.name || 'Gift discount'
-      })
-    }
-
-    const totalAmount = Math.floor((subtotal - discountAmount - giftDiscountAmount) / 1000) * 1000
+    // Trừ khuyến mãi giờ đầu (freeAmountTotal) ở mức tổng, không bỏ record gốc
+    const totalAmount = Math.floor((subtotal - discountAmount - freeAmountTotal) / 1000) * 1000
 
     const bill: IBill = {
       scheduleId: schedule._id,
@@ -784,6 +787,13 @@ export class BillService {
             items: scheduleGift.items
           }
         : undefined,
+      freeHourPromotion:
+        freeMinutesApplied > 0
+          ? {
+              freeMinutesApplied,
+              freeAmount: freeAmountTotal
+            }
+          : undefined,
       actualEndTime: actualEndTime ? new Date(actualEndTime) : undefined,
       actualStartTime: actualStartTime ? new Date(actualStartTime) : undefined,
       // Thêm thông tin FNB order vào bill
@@ -930,9 +940,6 @@ export class BillService {
         actualStartTime: exactStartTime,
         invoiceCode: invoiceCode
       }
-
-      // Kiểm tra status của schedule chỉ để ghi log
-      const schedule = await databaseService.roomSchedule.findOne({ _id: new ObjectId(bill.scheduleId) })
 
       // Gọi API in qua Socket.IO
       await this.printViaAPI(bill)
@@ -1789,7 +1796,32 @@ export class BillService {
       }
     })
 
-    printer.text('------------------------------------------------')
+    // Thông tin giảm giá free giờ đầu trong khung 10-19 (đã trừ vào tổng)
+    if (bill.freeHourPromotion && bill.freeHourPromotion.freeMinutesApplied > 0) {
+      // Tính toán thời gian bắt đầu và kết thúc của chương trình KM
+      let promotionTimeText = 'KM gio dau tien'
+      // Dùng múi giờ VN khi hiển thị khung giờ khuyến mãi
+      const promoStartSource = bill.actualStartTime || bill.startTime
+      if (promoStartSource) {
+        const startTime = dayjs(promoStartSource).tz('Asia/Ho_Chi_Minh')
+        const endTime = startTime.add(60, 'minute') // +60 phút
+
+        const startHour = startTime.format('HH')
+        const startMinute = startTime.format('mm')
+        const endHour = endTime.format('HH')
+        const endMinute = endTime.format('mm')
+
+        promotionTimeText = `Chuong trinh KM (${startHour}:${startMinute} - ${endHour}:${endMinute})`
+      }
+
+      printer.text('------------------------------------------------')
+
+      printer
+        .align('lt')
+        .style('b')
+        .size(1, 1)
+        .text(`${promotionTimeText}: -${bill.freeHourPromotion.freeAmount.toLocaleString('vi-VN')} VND`)
+    }
 
     // Hiển thị discount từ activePromotion nếu có
     if (bill.activePromotion) {

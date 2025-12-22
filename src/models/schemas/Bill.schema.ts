@@ -38,6 +38,10 @@ export interface IBill {
       source: 'fnb_menu' | 'fnb_menu_item'
     }>
   }
+  freeHourPromotion?: {
+    freeMinutesApplied: number
+    freeAmount: number
+  }
   actualEndTime?: Date
   actualStartTime?: Date
   invoiceCode?: string // Mã hóa đơn với format #DDMMHHMM
@@ -54,9 +58,9 @@ export interface IBill {
  */
 export class Bill {
   _id?: ObjectId
-  scheduleId: ObjectId
-  roomId: ObjectId
-  items: Array<{
+  scheduleId!: ObjectId
+  roomId!: ObjectId
+  items!: Array<{
     description: string
     price: number
     quantity: number
@@ -64,8 +68,8 @@ export class Bill {
     discountPercentage?: number
     discountName?: string
   }>
-  totalAmount: number
-  createdAt: Date
+  totalAmount!: number
+  createdAt!: Date
   paymentMethod?: string
   note?: string
   activePromotion?: {
@@ -87,7 +91,11 @@ export class Bill {
       source: 'fnb_menu' | 'fnb_menu_item'
     }>
   }
-  actualEndTime: Date
+  freeHourPromotion?: {
+    freeMinutesApplied: number
+    freeAmount: number
+  }
+  actualEndTime!: Date
   invoiceCode?: string // Mã hóa đơn với format #DDMMHHMM
 
   /**

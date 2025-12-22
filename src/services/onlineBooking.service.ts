@@ -311,7 +311,18 @@ class OnlineBookingService {
         'online_customer',
         autoNote,
         BookingSource.Customer,
-        bookingCode // Mã 4 chữ số
+        true, // Đã fix: truyền 'true' để đáp ứng kiểu boolean (tham số isOnlineBooking)
+        bookingCode, // Mã 4 chữ số
+        request.customerName,
+        request.customerPhone,
+        request.customerEmail,
+        request.roomType,
+        roomResult.assignedRoomType,
+        roomResult.upgraded,
+        undefined, // virtualRoomInfo
+        undefined, // adminNotes
+        [], // queueSongs - luôn khởi tạo là mảng rỗng
+        dateOfUse // Ngày sử dụng
       )
 
       // Gán thêm thông tin cho booking online

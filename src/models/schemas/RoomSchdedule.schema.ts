@@ -37,6 +37,7 @@ export class RoomSchedule {
   note?: string
   source?: BookingSource
   giftEnabled?: boolean
+  applyFreeHourPromo?: boolean
 
   // 🆕 Mã booking 4 chữ số cho khách hàng (dễ nhớ, dễ tra cứu)
   bookingCode?: string // Mã 4 chữ số (0000-9999) - unique trong cùng ngày
@@ -71,6 +72,7 @@ export class RoomSchedule {
     updatedBy?: string,
     note?: string,
     source?: BookingSource,
+    applyFreeHourPromo?: boolean,
     bookingCode?: string,
     customerName?: string,
     customerPhone?: string,
@@ -95,6 +97,7 @@ export class RoomSchedule {
     this.updatedBy = updatedBy || 'system'
     this.note = note
     this.source = source || BookingSource.Staff
+    this.applyFreeHourPromo = applyFreeHourPromo || false
 
     // Mã booking 4 chữ số
     this.bookingCode = bookingCode

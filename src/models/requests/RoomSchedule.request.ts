@@ -19,4 +19,5 @@ export interface IRoomScheduleRequestBody {
   source?: BookingSource
   paymentMethod?: string
   giftEnabled?: boolean
+  applyFreeHourPromo?: boolean
 }
