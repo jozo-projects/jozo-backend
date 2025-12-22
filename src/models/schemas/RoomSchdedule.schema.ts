@@ -1,14 +1,7 @@
 import { ObjectId } from 'mongodb'
 import { RoomScheduleStatus, RoomType } from '~/constants/enum'
 import { AddSongRequestBody } from '~/models/requests/Song.request'
-
-export interface VirtualRoomInfo {
-  virtualRoomId: ObjectId
-  virtualRoomName: string
-  virtualSize: RoomType
-  physicalSize: RoomType
-  isVirtualBooking: boolean
-}
+import { ScheduleGift } from '~/models/schemas/Gift.schema'
 
 /* eslint-disable no-unused-vars */
 export enum BookingSource {
@@ -17,6 +10,19 @@ export enum BookingSource {
   System = 'system'
 }
 /* eslint-enable no-unused-vars */
+
+type VirtualRoomInfo = {
+  virtualRoomId: ObjectId
+  virtualRoomName: string
+  virtualSize: RoomType
+  physicalSize: RoomType
+  isVirtualBooking: boolean
+}
+
+type AdminNotes = {
+  virtualSizeToUse: RoomType // Size admin cần chỉnh khi chuyển "in use"
+  staffInstructions: string // Hướng dẫn cho staff
+}
 
 export class RoomSchedule {
   _id?: ObjectId
@@ -30,6 +36,7 @@ export class RoomSchedule {
   updatedBy?: string
   note?: string
   source?: BookingSource
+  giftEnabled?: boolean
   applyFreeHourPromo?: boolean
 
   // 🆕 Mã booking 4 chữ số cho khách hàng (dễ nhớ, dễ tra cứu)
@@ -48,13 +55,13 @@ export class RoomSchedule {
   virtualRoomInfo?: VirtualRoomInfo
 
   // 🆕 Admin Notification (chỉ field quan trọng)
-  adminNotes?: {
-    virtualSizeToUse: RoomType // Size admin cần chỉnh khi chuyển "in use"
-    staffInstructions: string // Hướng dẫn cho staff
-  }
+  adminNotes?: AdminNotes
 
   // 🆕 Queue Songs cho preorder video
   queueSongs?: AddSongRequestBody[]
+
+  // 🆕 Gift information (assigned/claimed per schedule/box)
+  gift?: ScheduleGift
 
   constructor(
     roomId: string,
@@ -74,12 +81,11 @@ export class RoomSchedule {
     actualRoomType?: RoomType,
     upgraded?: boolean,
     virtualRoomInfo?: VirtualRoomInfo,
-    adminNotes?: {
-      virtualSizeToUse: RoomType
-      staffInstructions: string
-    },
+    adminNotes?: AdminNotes,
     queueSongs?: AddSongRequestBody[],
-    dateOfUse?: string
+    dateOfUse?: string,
+    gift?: ScheduleGift,
+    giftEnabled?: boolean
   ) {
     this.roomId = new ObjectId(roomId)
     this.startTime = startTime
@@ -109,5 +115,9 @@ export class RoomSchedule {
     this.virtualRoomInfo = virtualRoomInfo
     this.adminNotes = adminNotes
     this.queueSongs = queueSongs || []
+    this.gift = gift
+
+    // Cờ quà tặng: chỉ còn giftEnabled
+    this.giftEnabled = giftEnabled ?? false
   }
 }

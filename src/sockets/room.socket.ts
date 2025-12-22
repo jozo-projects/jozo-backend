@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { Server, Socket } from 'socket.io'
 import redis from '~/services/redis.service'
 import { roomMusicServices, roomMusicEventEmitter } from '~/services/roomMusic.service'
@@ -35,12 +36,22 @@ export const RoomSocket = (io: Server) => {
     io.to(roomId).emit('videos_turned_off', { status: 'off' })
   })
 
+  // Gift claimed -> thông báo cho admin/staff (management room)
+  roomEventEmitter.on('gift_claimed', ({ roomId, scheduleId, gift }) => {
+    io.to('management').emit('gift_claimed', { roomId, scheduleId, gift })
+  })
+
   // Listen for booking notifications
   roomEventEmitter.on('new_booking', ({ roomId, booking }) => {
     console.log(`New booking notification for room ${roomId}:`, booking)
     io.to(roomId).emit('new_booking', booking)
     // Also emit to management room (admin & staff)
     io.to('management').emit('booking_notification', { roomId, booking })
+  })
+
+  // Gift enabled notification per room
+  roomEventEmitter.on('gift_enabled', ({ roomId, scheduleId }) => {
+    io.to(roomId).emit('gift_enabled', { scheduleId })
   })
 
   // Listen for roomMusic events

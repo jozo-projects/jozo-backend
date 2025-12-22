@@ -21,6 +21,7 @@ import onlineBookingRouter from '~/routes/onlineBooking.routes'
 import priceRouter from '~/routes/price.routes'
 import printRouter from '~/routes/print.routes'
 import promotionRouter from '~/routes/promotion.routes'
+import giftRouter from '~/routes/gift.routes'
 import recruitmentRouter from '~/routes/recruitment.routes'
 import roomRouter from '~/routes/room.routes'
 import roomMusicRouter from '~/routes/roomMusic.routes'
@@ -137,6 +138,7 @@ app.use('/fnb-orders', fnbOrderRouter)
 app.use('/bill', billRouter)
 app.use('/fnb-menu', fnbMenuRouter)
 app.use('/promotions', promotionRouter)
+app.use('/gifts', giftRouter)
 app.use('/bookings', onlineBookingRouter) // Online booking routes - phải đặt trước
 // app.use('/bookings', bookingRouter)
 app.use('/holidays', holidayRouter)

@@ -6,12 +6,22 @@ import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { ErrorWithStatus } from '~/models/Error'
 import { IRoomScheduleRequestBody, IRoomScheduleRequestQuery } from '~/models/requests/RoomSchedule.request'
 import { BookingSource, RoomSchedule } from '~/models/schemas/RoomSchdedule.schema'
+import { generateUniqueBookingCode, parseDate } from '~/utils/common'
+import billService from './bill.service'
 import databaseService from './database.service'
-import { parseDate, generateUniqueBookingCode } from '~/utils/common'
+import fnbOrderService from './fnbOrder.service'
 import redis from './redis.service'
 import { roomEventEmitter } from './room.service'
-import billService from './bill.service'
-import fnbOrderService from './fnbOrder.service'
+
+type ClientBooking = {
+  _id?: string | ObjectId
+  status: string
+  room_type: string
+  booking_date: string
+  time_slots: string[]
+  customer_name?: string
+  customer_phone?: string
+}
 
 /**
  * RoomScheduleService
@@ -217,7 +227,23 @@ class RoomScheduleService {
       bookingCode
     )
 
+    // Đánh dấu lịch có quà nếu admin/staff chọn
+    const giftEnabled = schedule.giftEnabled ?? false
+    scheduleData.giftEnabled = !!giftEnabled
+
     const result = await databaseService.roomSchedule.insertOne(scheduleData)
+
+    // Emit thông báo gift cho đúng roomIndex nếu giftEnabled
+    if (scheduleData.giftEnabled) {
+      const room = await databaseService.rooms.findOne({ _id: scheduleData.roomId })
+      if (room?.roomId !== undefined && room?.roomId !== null) {
+        const roomIndex = String(room.roomId)
+        roomEventEmitter.emit('gift_enabled', {
+          roomId: roomIndex,
+          scheduleId: result.insertedId.toString()
+        })
+      }
+    }
 
     // Tự động tạo FNB order trống cho room schedule từ admin/staff
     try {
@@ -273,7 +299,7 @@ class RoomScheduleService {
    * @returns Số lượng bản ghi được cập nhật
    */
   async updateSchedule(id: string, schedule: IRoomScheduleRequestBody) {
-    const updateData: any = {}
+    const updateData: Partial<RoomSchedule> = {}
 
     // Lấy thông tin hiện tại của lịch phòng
     const currentSchedule = await databaseService.roomSchedule.findOne({ _id: new ObjectId(id) })
@@ -304,6 +330,9 @@ class RoomScheduleService {
 
     if (schedule.note) {
       updateData.note = schedule.note
+    }
+    if (schedule.giftEnabled !== undefined) {
+      updateData.giftEnabled = !!schedule.giftEnabled
     }
 
     const result = await databaseService.roomSchedule.updateOne({ _id: new ObjectId(id) }, { $set: updateData })
@@ -597,7 +626,7 @@ class RoomScheduleService {
    * @param booking - Thông tin booking từ client
    * @returns mảng các ObjectId của room schedules đã tạo
    */
-  async autoCreateSchedulesFromNewBooking(booking: any) {
+  async autoCreateSchedulesFromNewBooking(booking: ClientBooking) {
     try {
       // Kiểm tra booking phải có status là "pending"
       if (booking.status !== 'pending') {

@@ -24,6 +24,20 @@ export interface IBill {
     discountPercentage: number
     appliesTo: 'sing' | 'all' | string[]
   }
+  gift?: {
+    giftId: ObjectId | string
+    name: string
+    type: 'snacks_drinks' | 'discount'
+    discountPercentage?: number
+    items?: Array<{
+      itemId: ObjectId
+      quantity: number
+      name: string
+      category?: string
+      priceSnapshot?: number
+      source: 'fnb_menu' | 'fnb_menu_item'
+    }>
+  }
   freeHourPromotion?: {
     freeMinutesApplied: number
     freeAmount: number
@@ -44,9 +58,9 @@ export interface IBill {
  */
 export class Bill {
   _id?: ObjectId
-  scheduleId: ObjectId
-  roomId: ObjectId
-  items: Array<{
+  scheduleId!: ObjectId
+  roomId!: ObjectId
+  items!: Array<{
     description: string
     price: number
     quantity: number
@@ -54,8 +68,8 @@ export class Bill {
     discountPercentage?: number
     discountName?: string
   }>
-  totalAmount: number
-  createdAt: Date
+  totalAmount!: number
+  createdAt!: Date
   paymentMethod?: string
   note?: string
   activePromotion?: {
@@ -63,11 +77,25 @@ export class Bill {
     discountPercentage: number
     appliesTo: 'karaoke' | 'all'
   }
+  gift?: {
+    giftId: ObjectId | string
+    name: string
+    type: 'snacks_drinks' | 'discount'
+    discountPercentage?: number
+    items?: Array<{
+      itemId: ObjectId
+      quantity: number
+      name: string
+      category?: string
+      priceSnapshot?: number
+      source: 'fnb_menu' | 'fnb_menu_item'
+    }>
+  }
   freeHourPromotion?: {
     freeMinutesApplied: number
     freeAmount: number
   }
-  actualEndTime: Date
+  actualEndTime!: Date
   invoiceCode?: string // Mã hóa đơn với format #DDMMHHMM
 
   /**

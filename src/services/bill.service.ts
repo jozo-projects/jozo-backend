@@ -675,7 +675,22 @@ export class BillService {
       }
     }
 
-    // Lấy thông tin promotion nếu có promotionId
+    // Gift từ schedule (đã được claim)
+    const scheduleGift = schedule.gift && schedule.gift.status === 'claimed' ? schedule.gift : undefined
+
+    // Nếu gift là snacks/drinks thì hiển thị line 0đ
+    if (scheduleGift && scheduleGift.type === 'snacks_drinks' && scheduleGift.items) {
+      for (const giftItem of scheduleGift.items) {
+        timeSlotItems.push({
+          description: `Gift - ${giftItem.name}`,
+          quantity: giftItem.quantity,
+          price: 0,
+          totalPrice: 0
+        })
+      }
+    }
+
+    // Lấy thông tin promotion nếu có promotionId (bỏ qua nếu có gift discount để tránh chồng khuyến mãi)
     let activePromotion = undefined
     if (promotionId) {
       const promotion = await databaseService.promotions.findOne({ _id: new ObjectId(promotionId) })
@@ -684,9 +699,12 @@ export class BillService {
       }
     }
 
-    // Áp dụng khuyến mãi nếu có
+    // Áp dụng khuyến mãi nếu có và không bị gift discount override
     let shouldApplyPromotion = false
-    if (activePromotion) {
+    const giftDiscountPercent =
+      scheduleGift && scheduleGift.type === 'discount' ? scheduleGift.discountPercentage || 0 : 0
+
+    if (activePromotion && giftDiscountPercent === 0) {
       // Kiểm tra xem promotion có áp dụng cho phòng này không
       const appliesTo = Array.isArray(activePromotion.appliesTo)
         ? activePromotion.appliesTo[0]?.toLowerCase()
@@ -758,6 +776,15 @@ export class BillService {
             name: activePromotion.name,
             discountPercentage: activePromotion.discountPercentage,
             appliesTo: activePromotion.appliesTo
+          }
+        : undefined,
+      gift: scheduleGift
+        ? {
+            giftId: scheduleGift.giftId,
+            name: scheduleGift.name,
+            type: scheduleGift.type,
+            discountPercentage: scheduleGift.discountPercentage,
+            items: scheduleGift.items
           }
         : undefined,
       freeHourPromotion:
@@ -913,9 +940,6 @@ export class BillService {
         actualStartTime: exactStartTime,
         invoiceCode: invoiceCode
       }
-
-      // Kiểm tra status của schedule chỉ để ghi log
-      const schedule = await databaseService.roomSchedule.findOne({ _id: new ObjectId(bill.scheduleId) })
 
       // Gọi API in qua Socket.IO
       await this.printViaAPI(bill)
