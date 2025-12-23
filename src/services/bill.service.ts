@@ -251,12 +251,10 @@ export class BillService {
       return 0.5
     }
 
-    // Calculate difference in minutes only (ignoring seconds and milliseconds)
-    const diffMinutes = endDate.diff(startDate, 'minute')
-    // Convert to hours with 2 decimal places
-    const diffHours = diffMinutes / 60
-
-    // Round to 2 decimal places for consistency
+    // Tính chênh lệch theo giây để tránh mất 59 giây cuối cùng (ví dụ 18:00-19:00)
+    const diffSeconds = endDate.diff(startDate, 'second')
+    // Chuyển sang giờ và làm tròn 2 chữ số thập phân
+    const diffHours = diffSeconds / 3600
     const result = Math.round(diffHours * 100) / 100
 
     return result
@@ -458,7 +456,8 @@ export class BillService {
       }
     }
 
-    const sessionDurationMinutes = dayjs(validatedEndTime).diff(dayjs(startTime), 'minute')
+    const sessionDurationSeconds = dayjs(validatedEndTime).diff(dayjs(startTime), 'second')
+    const sessionDurationMinutes = Math.ceil(sessionDurationSeconds / 60)
     const eligibleForFreeHour = !!schedule?.applyFreeHourPromo && sessionDurationMinutes >= 120
     let freeMinutesLeft = eligibleForFreeHour ? 60 : 0
     let freeMinutesApplied = 0
@@ -584,8 +583,8 @@ export class BillService {
 
       const localOverlapStart = dayjs(overlapStart).tz('Asia/Ho_Chi_Minh')
       const localOverlapEnd = dayjs(overlapEnd).tz('Asia/Ho_Chi_Minh')
-      const overlapMinutes = localOverlapEnd.diff(localOverlapStart, 'minute')
-      if (overlapMinutes <= 0) continue
+      const overlapSeconds = localOverlapEnd.diff(localOverlapStart, 'second')
+      if (overlapSeconds <= 0) continue
 
       let slotFreeMinutes = 0
       if (eligibleForFreeHour && freeMinutesLeft > 0) {
@@ -595,7 +594,8 @@ export class BillService {
         const promoOverlapEnd = promoEnd.isBefore(localOverlapEnd) ? promoEnd : localOverlapEnd
 
         if (promoOverlapEnd.isAfter(promoOverlapStart)) {
-          const promoMinutes = promoOverlapEnd.diff(promoOverlapStart, 'minute')
+          const promoSeconds = promoOverlapEnd.diff(promoOverlapStart, 'second')
+          const promoMinutes = Math.ceil(promoSeconds / 60)
           slotFreeMinutes = Math.min(freeMinutesLeft, promoMinutes)
           freeMinutesLeft -= slotFreeMinutes
           freeMinutesApplied += slotFreeMinutes
@@ -604,9 +604,9 @@ export class BillService {
         }
       }
 
-      const overlapHoursRounded = Math.round((overlapMinutes / 60) * 100) / 100
+      const overlapHoursRounded = Math.round((overlapSeconds / 3600) * 100) / 100
 
-      const slotServiceFee = Math.floor(((overlapMinutes / 60) * priceEntry.price) / 1000) * 1000
+      const slotServiceFee = Math.floor(((overlapSeconds / 3600) * priceEntry.price) / 1000) * 1000
 
       totalServiceFee += slotServiceFee
       totalHoursUsed += overlapHoursRounded
@@ -1696,10 +1696,12 @@ export class BillService {
       )
     }
 
-    printer
-      .text(
-        `Tong gio su dung: ${dayjs(bill.endTime).diff(dayjs(bill.startTime), 'hour')} gio ${dayjs(bill.endTime).diff(dayjs(bill.startTime), 'minute') % 60} phut`
-      )
+    const totalDurationSeconds = dayjs(bill.endTime).diff(dayjs(bill.startTime), 'second')
+    const totalDurationMinutes = Math.ceil(totalDurationSeconds / 60)
+    const displayHours = Math.floor(totalDurationMinutes / 60)
+    const displayMinutes = totalDurationMinutes % 60
+
+    printer.text(`Tong gio su dung: ${displayHours} gio ${displayMinutes} phut`)
       .align('ct')
       .text('--------------------------------------------')
       .style('b')
