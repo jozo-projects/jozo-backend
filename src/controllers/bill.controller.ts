@@ -807,7 +807,7 @@ export const saveBill = async (req: Request, res: Response) => {
   const bill = req.body
 
   console.log('bill', bill)
-  
+
   // Kiểm tra các trường bắt buộc
   if (!bill || !bill.scheduleId || !bill.roomId) {
     return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
@@ -830,6 +830,24 @@ export const saveBill = async (req: Request, res: Response) => {
   }
 
   try {
+    // Nếu chưa có freeHourPromotion, BE tự tính để lưu xuống DB
+    if (!bill.freeHourPromotion) {
+      try {
+        const computed = await billService.getBill(
+          bill.scheduleId.toString(),
+          bill.endTime ? bill.endTime.toString() : undefined,
+          bill.paymentMethod,
+          undefined,
+          bill.startTime ? bill.startTime.toString() : undefined
+        )
+        if (computed.freeHourPromotion) {
+          bill.freeHourPromotion = computed.freeHourPromotion
+        }
+      } catch (err) {
+        console.warn('Không tự tính được freeHourPromotion khi save bill:', err)
+      }
+    }
+
     const now = new Date()
     const billToSave = {
       ...bill,
