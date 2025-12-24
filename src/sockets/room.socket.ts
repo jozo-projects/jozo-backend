@@ -54,6 +54,11 @@ export const RoomSocket = (io: Server) => {
     io.to(roomId).emit('gift_enabled', { scheduleId })
   })
 
+  // Gift status thay đổi (ẩn/hiện nút mở quà trên FE)
+  roomEventEmitter.on('gift_status_changed', ({ roomId, scheduleId, giftEnabled }) => {
+    io.to(roomId).emit('gift_status_changed', { scheduleId, giftEnabled })
+  })
+
   // Listen for roomMusic events
   roomMusicEventEmitter.on('admin_notification', (notification) => {
     console.log('notification', notification)

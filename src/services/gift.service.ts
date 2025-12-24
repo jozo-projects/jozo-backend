@@ -126,7 +126,7 @@ class GiftService {
     return { ...doc, _id: result.insertedId }
   }
 
-  async updateGift(id: string, payload: Partial<Gift>): Promise<Gift> {
+  async updateGift(id: string, payload: Partial<Gift> & { remainingQuantity?: number }): Promise<Gift> {
     const _id = new ObjectId(id)
     const existing = await this.giftsCollection().findOne({ _id })
     if (!existing) {
@@ -155,6 +155,24 @@ class GiftService {
         // Nếu tăng số bundle -> trừ thêm tồn kho, nếu giảm -> hoàn trả
         await this.ensureAndAdjustInventory(existing.items, -diff)
       }
+    }
+
+    if (payload.remainingQuantity !== undefined) {
+      if (payload.remainingQuantity < 0) {
+        throw new ErrorWithStatus({
+          message: 'remainingQuantity phải lớn hơn hoặc bằng 0',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      }
+
+      if (payload.remainingQuantity > totalQuantity) {
+        throw new ErrorWithStatus({
+          message: 'remainingQuantity không được lớn hơn totalQuantity',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      }
+
+      remainingQuantity = payload.remainingQuantity
     }
 
     const updateDoc: Partial<Gift> = {

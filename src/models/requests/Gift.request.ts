@@ -11,4 +11,6 @@ export interface GiftCreateRequest {
   isActive?: boolean
 }
 
-export interface GiftUpdateRequest extends Partial<GiftCreateRequest> {}
+export interface GiftUpdateRequest extends Partial<GiftCreateRequest> {
+  remainingQuantity?: number
+}

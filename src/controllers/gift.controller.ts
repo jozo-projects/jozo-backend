@@ -20,7 +20,7 @@ const getUploadedFile = (req: Request): MaybeFile => {
   return undefined
 }
 
-const normalizeGiftPayload = (body: Record<string, unknown>): GiftCreateRequest => {
+const normalizeGiftPayload = (body: Record<string, unknown>): GiftCreateRequest & { remainingQuantity?: number } => {
   const parseNumber = (value: unknown): number | undefined => {
     if (value === undefined || value === null || value === '') return undefined
     const num = Number(value)
@@ -59,6 +59,7 @@ const normalizeGiftPayload = (body: Record<string, unknown>): GiftCreateRequest 
     discountPercentage: parseNumber(body.discountPercentage),
     items: normalizedItems,
     totalQuantity: (parseNumber(body.totalQuantity) as number) || 0,
+    remainingQuantity: parseNumber(body.remainingQuantity),
     isActive:
       body.isActive !== undefined
         ? body.isActive === 'true' || body.isActive === true || body.isActive === '1'

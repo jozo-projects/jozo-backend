@@ -310,6 +310,8 @@ class RoomScheduleService {
       })
     }
 
+    const previousGiftEnabled = !!currentSchedule.giftEnabled
+
     if (schedule.startTime) {
       updateData.startTime = new Date(schedule.startTime)
     }
@@ -336,6 +338,25 @@ class RoomScheduleService {
     }
 
     const result = await databaseService.roomSchedule.updateOne({ _id: new ObjectId(id) }, { $set: updateData })
+
+    // Emit sự kiện khi giftEnabled thay đổi để FE ẩn/hiện nút mở quà
+    const newGiftEnabled = schedule.giftEnabled !== undefined ? !!schedule.giftEnabled : previousGiftEnabled
+    if (previousGiftEnabled !== newGiftEnabled) {
+      const room = await databaseService.rooms.findOne({ _id: currentSchedule.roomId })
+      if (room?.roomId !== undefined && room?.roomId !== null) {
+        const roomIndex = String(room.roomId)
+        roomEventEmitter.emit('gift_status_changed', {
+          roomId: roomIndex,
+          scheduleId: id,
+          giftEnabled: newGiftEnabled
+        })
+
+        // Giữ nguyên event gift_enabled cho trường hợp bật quà (compatibility với client cũ)
+        if (newGiftEnabled) {
+          roomEventEmitter.emit('gift_enabled', { roomId: roomIndex, scheduleId: id })
+        }
+      }
+    }
 
     // Nếu đang cập nhật trạng thái thành "Finished", xóa tất cả cache của phòng
     if (schedule.status === RoomScheduleStatus.Finished && currentSchedule.status !== RoomScheduleStatus.Finished) {
