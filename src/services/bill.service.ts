@@ -699,12 +699,13 @@ export class BillService {
       }
     }
 
-    // Áp dụng khuyến mãi nếu có và không bị gift discount override
+    // Áp dụng khuyến mãi (có thể cộng dồn với gift)
     let shouldApplyPromotion = false
     const giftDiscountPercent =
       scheduleGift && scheduleGift.type === 'discount' ? scheduleGift.discountPercentage || 0 : 0
+    let giftDiscountAmount = 0
 
-    if (activePromotion && giftDiscountPercent === 0) {
+    if (activePromotion) {
       // Kiểm tra xem promotion có áp dụng cho phòng này không
       const appliesTo = Array.isArray(activePromotion.appliesTo)
         ? activePromotion.appliesTo[0]?.toLowerCase()
@@ -747,13 +748,17 @@ export class BillService {
       return acc + item.totalPrice
     }, 0)
 
+    if (giftDiscountPercent > 0) {
+      giftDiscountAmount = Math.floor((subtotal * giftDiscountPercent) / 100)
+    }
+
     let discountAmount = 0
     if (activePromotion && shouldApplyPromotion) {
       discountAmount = Math.floor((subtotal * activePromotion.discountPercentage) / 100)
     }
 
     // Trừ khuyến mãi giờ đầu (freeAmountTotal) ở mức tổng, không bỏ record gốc
-    const totalAmount = Math.floor((subtotal - discountAmount - freeAmountTotal) / 1000) * 1000
+    const totalAmount = Math.floor((subtotal - discountAmount - freeAmountTotal - giftDiscountAmount) / 1000) * 1000
 
     const bill: IBill = {
       scheduleId: schedule._id,
@@ -770,6 +775,7 @@ export class BillService {
         discountName: item.discountName
       })),
       totalAmount, // ĐÃ SỬA: tổng tiền đã trừ discount
+      giftDiscountAmount: giftDiscountAmount > 0 ? giftDiscountAmount : undefined,
       paymentMethod,
       activePromotion: activePromotion
         ? {
@@ -1823,6 +1829,28 @@ export class BillService {
         .style('b')
         .size(1, 1)
         .text(`${promotionTimeText}: -${bill.freeHourPromotion.freeAmount.toLocaleString('vi-VN')} VND`)
+    }
+
+    // Hiển thị discount từ gift (nếu loại gift là discount)
+    if (bill.gift && bill.gift.type === 'discount' && bill.gift.discountPercentage) {
+      let subtotalAmount = 0
+      bill.items.forEach((item) => {
+        const rawTotal = item.quantity * item.price
+        subtotalAmount += Math.floor(rawTotal / 1000) * 1000
+      })
+
+      const giftDiscountAmount =
+        bill.giftDiscountAmount !== undefined
+          ? bill.giftDiscountAmount
+          : Math.floor((subtotalAmount * bill.gift.discountPercentage) / 100)
+
+      printer
+        .align('lt')
+        .style('b')
+        .size(1, 1)
+        .text(`Gift ${bill.gift.discountPercentage}%:`)
+        .align('rt')
+        .text(`-${giftDiscountAmount.toLocaleString('vi-VN')} VND`)
     }
 
     // Hiển thị discount từ activePromotion nếu có

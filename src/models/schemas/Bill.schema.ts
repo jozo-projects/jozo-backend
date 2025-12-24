@@ -14,6 +14,7 @@ export interface IBill {
     discountName?: string
   }>
   totalAmount: number
+  giftDiscountAmount?: number
   startTime: Date
   endTime: Date
   createdAt: Date
@@ -69,6 +70,7 @@ export class Bill {
     discountName?: string
   }>
   totalAmount!: number
+  giftDiscountAmount?: number
   createdAt!: Date
   paymentMethod?: string
   note?: string
