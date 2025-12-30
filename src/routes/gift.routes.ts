@@ -3,6 +3,7 @@ import multer from 'multer'
 import { UserRole } from '~/constants/enum'
 import {
   claimGiftForSchedule,
+  claimSpecificGiftForSchedule,
   createGift,
   deleteGift,
   getGiftById,
@@ -10,7 +11,7 @@ import {
   listGifts,
   updateGift
 } from '~/controllers/gift.controller'
-import { claimGiftValidator, getRoomGiftValidator } from '~/middlewares/gift.middleware'
+import { claimGiftValidator, claimSpecificGiftValidator, getRoomGiftValidator } from '~/middlewares/gift.middleware'
 import { protect } from '~/middlewares/auth.middleware'
 import { wrapRequestHandler } from '~/utils/handlers'
 
@@ -43,6 +44,7 @@ giftRouter.patch(
 giftRouter.delete('/:id', protect([UserRole.Admin]), wrapRequestHandler(deleteGift))
 
 // Endpoint cho box mở quà (không yêu cầu auth nếu cần cho thiết bị; có thể thêm auth nếu có cơ chế riêng)
+giftRouter.post('/claim/by-id', claimSpecificGiftValidator, wrapRequestHandler(claimSpecificGiftForSchedule))
 giftRouter.post('/claim', claimGiftValidator, wrapRequestHandler(claimGiftForSchedule))
 
 export default giftRouter

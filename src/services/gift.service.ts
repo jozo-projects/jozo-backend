@@ -428,6 +428,140 @@ class GiftService {
     return scheduleGift
   }
 
+  async claimGiftById(scheduleId: string, giftId: string): Promise<ScheduleGift> {
+    if (!ObjectId.isValid(scheduleId)) {
+      throw new ErrorWithStatus({
+        message: 'scheduleId không hợp lệ',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
+    }
+    if (!ObjectId.isValid(giftId)) {
+      throw new ErrorWithStatus({
+        message: 'giftId không hợp lệ',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
+    }
+
+    const schedule = await databaseService.roomSchedule.findOne({ _id: new ObjectId(scheduleId) })
+    if (!schedule) {
+      throw new ErrorWithStatus({
+        message: 'Không tìm thấy schedule',
+        status: HTTP_STATUS_CODE.NOT_FOUND
+      })
+    }
+
+    const room = await databaseService.rooms.findOne({ _id: schedule.roomId })
+    const roomIndex = room?.roomId !== undefined && room?.roomId !== null ? String(room.roomId) : undefined
+
+    if (schedule.gift && schedule.gift.status === 'claimed') {
+      if (schedule.gift.giftId?.toString() !== giftId) {
+        throw new ErrorWithStatus({
+          message: 'Lịch này đã nhận một quà khác',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      }
+      if (!schedule.gift.image) {
+        const giftDoc = await this.giftsCollection().findOne({ _id: schedule.gift.giftId })
+        if (giftDoc?.image) {
+          return { ...schedule.gift, image: giftDoc.image }
+        }
+      }
+      return schedule.gift
+    }
+
+    const isGiftEnabled = schedule.giftEnabled ?? false
+    if (!isGiftEnabled) {
+      throw new ErrorWithStatus({
+        message: 'Lịch này không được nhận quà hoặc đã nhận',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
+    }
+
+    const giftObjectId = new ObjectId(giftId)
+    const picked = await this.giftsCollection().findOne<Gift>({
+      _id: giftObjectId,
+      isActive: true,
+      remainingQuantity: { $gt: 0 }
+    })
+
+    if (!picked) {
+      throw new ErrorWithStatus({
+        message: 'Gift không khả dụng',
+        status: HTTP_STATUS_CODE.NOT_FOUND
+      })
+    }
+
+    const updatedGiftResult = await this.giftsCollection().findOneAndUpdate(
+      { _id: picked._id, remainingQuantity: { $gt: 0 } },
+      {
+        $inc: { remainingQuantity: -1 },
+        $set: { updatedAt: new Date() }
+      },
+      { returnDocument: 'after' }
+    )
+
+    const updatedGift = (updatedGiftResult as any)?.value ?? updatedGiftResult
+    if (!updatedGift) {
+      throw new ErrorWithStatus({
+        message: 'Quà đã hết, vui lòng thử lại',
+        status: HTTP_STATUS_CODE.CONFLICT
+      })
+    }
+
+    const scheduleGift: ScheduleGift = {
+      giftId: picked._id!,
+      name: picked.name,
+      type: picked.type,
+      image: picked.image,
+      status: 'claimed',
+      assignedAt: new Date(),
+      claimedAt: new Date(),
+      discountPercentage: picked.discountPercentage,
+      discountAmount: picked.discountAmount,
+      items: picked.items
+    }
+
+    const scheduleUpdateResult = await databaseService.roomSchedule.findOneAndUpdate(
+      {
+        _id: schedule._id,
+        giftEnabled: true,
+        $or: [{ gift: { $exists: false } }, { 'gift.status': { $ne: 'claimed' } }]
+      },
+      {
+        $set: {
+          gift: scheduleGift,
+          giftEnabled: false,
+          updatedAt: new Date()
+        }
+      },
+      { returnDocument: 'after' }
+    )
+
+    const scheduleUpdate = (scheduleUpdateResult as any)?.value ?? scheduleUpdateResult
+
+    if (!scheduleUpdate) {
+      await this.giftsCollection().updateOne(
+        { _id: picked._id },
+        { $inc: { remainingQuantity: 1 }, $set: { updatedAt: new Date() } }
+      )
+
+      throw new ErrorWithStatus({
+        message: 'Lịch này không được nhận quà hoặc đã nhận',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
+    }
+
+    if (roomIndex) {
+      roomEventEmitter.emit('gift_claimed', {
+        roomId: roomIndex,
+        scheduleId: schedule._id?.toString(),
+        gift: scheduleGift
+      })
+    }
+
+    return scheduleGift
+  }
+
   async getGiftById(id: string): Promise<Gift> {
     const _id = new ObjectId(id)
     const gift = await this.giftsCollection().findOne<Gift>({ _id })

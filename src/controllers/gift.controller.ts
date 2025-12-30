@@ -181,6 +181,23 @@ export const claimGiftForSchedule = async (
   }
 }
 
+export const claimSpecificGiftForSchedule = async (
+  req: Request<ParamsDictionary, unknown, { scheduleId: string; giftId: string }>,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const { scheduleId, giftId } = req.body
+    const gift = await giftService.claimGiftById(scheduleId, giftId)
+    return res.status(HTTP_STATUS_CODE.OK).json({
+      message: GIFT_MESSAGES.CLAIM_GIFT_SUCCESS,
+      result: gift
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
 export const getGiftForRoom = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { roomIndex } = req.params as { roomIndex: string }
