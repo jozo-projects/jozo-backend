@@ -27,6 +27,10 @@ const normalizeGiftPayload = (body: Record<string, unknown>): GiftCreateRequest 
     return Number.isNaN(num) ? undefined : num
   }
 
+  const rawType = body.type as GiftCreateRequest['type'] | 'discount'
+  const normalizedType: GiftCreateRequest['type'] =
+    rawType === 'discount' ? 'discount_percentage' : (rawType as GiftCreateRequest['type'])
+
   let items: GiftBundleItem[] =
     typeof body.items === 'string'
       ? (() => {
@@ -53,10 +57,11 @@ const normalizeGiftPayload = (body: Record<string, unknown>): GiftCreateRequest 
 
   return {
     name: typeof body.name === 'string' ? body.name : '',
-    type: body.type as GiftCreateRequest['type'],
+    type: normalizedType,
     image: typeof body.image === 'string' ? body.image : undefined,
     price: parseNumber(body.price),
     discountPercentage: parseNumber(body.discountPercentage),
+    discountAmount: parseNumber(body.discountAmount),
     items: normalizedItems,
     totalQuantity: (parseNumber(body.totalQuantity) as number) || 0,
     remainingQuantity: parseNumber(body.remainingQuantity),

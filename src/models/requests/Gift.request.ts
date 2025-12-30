@@ -6,6 +6,7 @@ export interface GiftCreateRequest {
   image?: string
   price?: number
   discountPercentage?: number
+  discountAmount?: number
   items?: GiftBundleItem[]
   totalQuantity: number
   isActive?: boolean

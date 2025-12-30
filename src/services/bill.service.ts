@@ -701,8 +701,11 @@ export class BillService {
 
     // Áp dụng khuyến mãi (có thể cộng dồn với gift)
     let shouldApplyPromotion = false
-    const giftDiscountPercent =
-      scheduleGift && scheduleGift.type === 'discount' ? scheduleGift.discountPercentage || 0 : 0
+    const giftType = scheduleGift?.type
+    const isGiftPercent = giftType === 'discount_percentage' || giftType === 'discount'
+    const isGiftAmount = giftType === 'discount_amount'
+    const giftDiscountPercent = isGiftPercent ? scheduleGift?.discountPercentage || 0 : 0
+    const giftDiscountFixed = isGiftAmount ? scheduleGift?.discountAmount || 0 : 0
     let giftDiscountAmount = 0
 
     if (activePromotion) {
@@ -751,6 +754,9 @@ export class BillService {
     if (giftDiscountPercent > 0) {
       giftDiscountAmount = Math.floor((subtotal * giftDiscountPercent) / 100)
     }
+    if (giftDiscountFixed > 0) {
+      giftDiscountAmount += giftDiscountFixed
+    }
 
     let discountAmount = 0
     if (activePromotion && shouldApplyPromotion) {
@@ -758,7 +764,10 @@ export class BillService {
     }
 
     // Trừ khuyến mãi giờ đầu (freeAmountTotal) ở mức tổng, không bỏ record gốc
-    const totalAmount = Math.floor((subtotal - discountAmount - freeAmountTotal - giftDiscountAmount) / 1000) * 1000
+    const totalAmount = Math.max(
+      Math.floor((subtotal - discountAmount - freeAmountTotal - giftDiscountAmount) / 1000) * 1000,
+      0
+    )
 
     const bill: IBill = {
       scheduleId: schedule._id,
@@ -1804,80 +1813,78 @@ export class BillService {
       }
     })
 
-    // Thông tin giảm giá free giờ đầu trong khung 10-19 (đã trừ vào tổng)
+    // Thông tin giảm giá free giờ đầu trong khung 10-19 (đã trừ vào tổng) - in thẳng hàng
     if (bill.freeHourPromotion && bill.freeHourPromotion.freeMinutesApplied > 0) {
-      // Tính toán thời gian bắt đầu và kết thúc của chương trình KM
       let promotionTimeText = 'KM gio dau tien'
-      // Dùng múi giờ VN khi hiển thị khung giờ khuyến mãi
       const promoStartSource = bill.actualStartTime || bill.startTime
       if (promoStartSource) {
         const startTime = dayjs(promoStartSource).tz('Asia/Ho_Chi_Minh')
-        const endTime = startTime.add(60, 'minute') // +60 phút
-
-        const startHour = startTime.format('HH')
-        const startMinute = startTime.format('mm')
-        const endHour = endTime.format('HH')
-        const endMinute = endTime.format('mm')
-
-        promotionTimeText = `Chuong trinh KM (${startHour}:${startMinute} - ${endHour}:${endMinute})`
+        const endTime = startTime.add(60, 'minute')
+        promotionTimeText = `Chuong trinh KM (${startTime.format('HH:mm')} - ${endTime.format('HH:mm')})`
       }
 
       printer.text('------------------------------------------------')
-
-      printer
-        .align('lt')
-        .style('b')
-        .size(1, 1)
-        .text(`${promotionTimeText}: -${bill.freeHourPromotion.freeAmount.toLocaleString('vi-VN')} VND`)
+      printer.tableCustom([
+        { text: promotionTimeText, width: 0.45, align: 'left' },
+        { text: '', width: 0.15, align: 'center' },
+        { text: '', width: 0.2, align: 'right' },
+        { text: `-${bill.freeHourPromotion.freeAmount.toLocaleString('vi-VN')}`, width: 0.2, align: 'right' }
+      ])
     }
 
-    // Hiển thị discount từ gift (nếu loại gift là discount)
-    if (bill.gift && bill.gift.type === 'discount' && bill.gift.discountPercentage) {
+    // Hiển thị discount từ gift (discount_percentage hoặc discount_amount) - in thẳng hàng
+    if (
+      bill.gift &&
+      (bill.gift.type === 'discount' || bill.gift.type === 'discount_percentage' || bill.gift.type === 'discount_amount')
+    ) {
       let subtotalAmount = 0
       bill.items.forEach((item) => {
         const rawTotal = item.quantity * item.price
         subtotalAmount += Math.floor(rawTotal / 1000) * 1000
       })
 
-      const giftDiscountAmount =
+      const isPercentGift = bill.gift.type === 'discount' || bill.gift.type === 'discount_percentage'
+      const computedGiftDiscount =
         bill.giftDiscountAmount !== undefined
           ? bill.giftDiscountAmount
-          : Math.floor((subtotalAmount * bill.gift.discountPercentage) / 100)
+          : isPercentGift && bill.gift.discountPercentage !== undefined
+            ? Math.floor((subtotalAmount * bill.gift.discountPercentage) / 100)
+            : bill.gift.discountAmount || 0
 
-      printer
-        .align('lt')
-        .style('b')
-        .size(1, 1)
-        .text(`Gift ${bill.gift.discountPercentage}%:`)
-        .align('rt')
-        .text(`-${giftDiscountAmount.toLocaleString('vi-VN')} VND`)
+      const giftLabel =
+        isPercentGift && bill.gift.discountPercentage !== undefined ? `Gift ${bill.gift.discountPercentage}%` : 'Gift'
+
+      printer.tableCustom([
+        { text: giftLabel, width: 0.45, align: 'left' },
+        { text: '', width: 0.15, align: 'center' },
+        { text: '', width: 0.2, align: 'right' },
+        { text: `-${computedGiftDiscount.toLocaleString('vi-VN')}`, width: 0.2, align: 'right' }
+      ])
     }
 
-    // Hiển thị discount từ activePromotion nếu có
+    // Hiển thị discount từ activePromotion nếu có - in thẳng hàng
     if (bill.activePromotion) {
-      // Tính tổng tiền gốc (subtotal) - làm tròn xuống 1000 VND để nhất quán
       let subtotalAmount = 0
       bill.items.forEach((item) => {
         const rawTotal = item.quantity * item.price
         subtotalAmount += Math.floor(rawTotal / 1000) * 1000
       })
 
-      // Hiển thị tổng tiền hàng
-      printer
-        .align('rt')
-        .style('b')
-        .size(1, 1)
-        .text(`Tong tien hang: ${subtotalAmount.toLocaleString('vi-VN')} VND`)
-
-      // Hiển thị discount
       const discountAmount = Math.floor((subtotalAmount * bill.activePromotion.discountPercentage) / 100)
-      printer
-        .align('lt')
-        .style('b')
-        .size(1, 1)
-        .text(`Discount ${bill.activePromotion.discountPercentage}%:`)
-        .align('rt')
-        .text(`-${discountAmount.toLocaleString('vi-VN')} VND`)
+
+      printer.tableCustom([
+        { text: 'Tong tien hang', width: 0.45, align: 'left' },
+        { text: '', width: 0.15, align: 'center' },
+        { text: '', width: 0.2, align: 'right' },
+        { text: `${subtotalAmount.toLocaleString('vi-VN')}`, width: 0.2, align: 'right' }
+      ])
+
+      printer.tableCustom([
+        { text: `Discount ${bill.activePromotion.discountPercentage}%`, width: 0.45, align: 'left' },
+        { text: '', width: 0.15, align: 'center' },
+        { text: '', width: 0.2, align: 'right' },
+        { text: `-${discountAmount.toLocaleString('vi-VN')}`, width: 0.2, align: 'right' }
+      ])
     }
 
     printer

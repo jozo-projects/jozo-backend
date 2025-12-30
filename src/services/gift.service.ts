@@ -9,10 +9,15 @@ import databaseService from './database.service'
 import { roomEventEmitter } from './room.service'
 
 type GiftSource = 'fnb_menu' | 'fnb_menu_item'
+type NormalizedGiftType = Exclude<GiftType, 'discount'>
 
 class GiftService {
   private giftsCollection() {
     return databaseService.gifts
+  }
+
+  private normalizeType(type: GiftType): NormalizedGiftType {
+    return type === 'discount' ? 'discount_percentage' : type
   }
 
   private getInventoryCollection(source: GiftSource) {
@@ -78,10 +83,13 @@ class GiftService {
     image?: string
     price?: number
     discountPercentage?: number
+    discountAmount?: number
     items?: GiftBundleItem[]
     totalQuantity: number
     isActive?: boolean
   }): Promise<Gift> {
+    const normalizedType = this.normalizeType(payload.type)
+
     if (payload.totalQuantity <= 0) {
       throw new ErrorWithStatus({
         message: 'totalQuantity phải lớn hơn 0',
@@ -89,14 +97,49 @@ class GiftService {
       })
     }
 
-    if (payload.type === 'discount' && !payload.discountPercentage) {
-      throw new ErrorWithStatus({
-        message: 'discountPercentage bắt buộc với gift discount',
-        status: HTTP_STATUS_CODE.BAD_REQUEST
-      })
+    if (normalizedType === 'discount_percentage') {
+      if (payload.discountPercentage === undefined) {
+        throw new ErrorWithStatus({
+          message: 'discountPercentage bắt buộc với gift discount_percentage',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      }
+      if (payload.discountPercentage <= 0) {
+        throw new ErrorWithStatus({
+          message: 'discountPercentage phải lớn hơn 0',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      }
+      if (payload.discountAmount !== undefined) {
+        throw new ErrorWithStatus({
+          message: 'Không dùng discountAmount cho gift discount_percentage',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      }
     }
 
-    if (payload.type === 'snacks_drinks') {
+    if (normalizedType === 'discount_amount') {
+      if (payload.discountAmount === undefined) {
+        throw new ErrorWithStatus({
+          message: 'discountAmount bắt buộc với gift discount_amount',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      }
+      if (payload.discountAmount <= 0) {
+        throw new ErrorWithStatus({
+          message: 'discountAmount phải lớn hơn 0',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      }
+      if (payload.discountPercentage !== undefined) {
+        throw new ErrorWithStatus({
+          message: 'Không dùng discountPercentage cho gift discount_amount',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      }
+    }
+
+    if (normalizedType === 'snacks_drinks') {
       if (!payload.items || payload.items.length === 0) {
         throw new ErrorWithStatus({
           message: 'Gift snacks_drinks phải có items',
@@ -110,10 +153,11 @@ class GiftService {
     const now = new Date()
     const doc: Gift = {
       name: payload.name,
-      type: payload.type,
+      type: normalizedType,
       image: payload.image,
       price: payload.price,
       discountPercentage: payload.discountPercentage,
+      discountAmount: payload.discountAmount,
       items: payload.items,
       totalQuantity: payload.totalQuantity,
       remainingQuantity: payload.totalQuantity,
@@ -136,11 +180,60 @@ class GiftService {
       })
     }
 
-    if (payload.type && payload.type !== existing.type) {
+    const existingType = this.normalizeType(existing.type)
+    const incomingType = payload.type ? this.normalizeType(payload.type) : existingType
+
+    if (payload.type && incomingType !== existingType) {
       throw new ErrorWithStatus({
         message: 'Không hỗ trợ đổi type gift',
         status: HTTP_STATUS_CODE.BAD_REQUEST
       })
+    }
+
+    const nextDiscountPercentage =
+      payload.discountPercentage !== undefined ? payload.discountPercentage : existing.discountPercentage
+    const nextDiscountAmount = payload.discountAmount !== undefined ? payload.discountAmount : existing.discountAmount
+
+    if (incomingType === 'discount_percentage') {
+      if (nextDiscountPercentage === undefined) {
+        throw new ErrorWithStatus({
+          message: 'discountPercentage bắt buộc với gift discount_percentage',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      }
+      if (nextDiscountPercentage <= 0) {
+        throw new ErrorWithStatus({
+          message: 'discountPercentage phải lớn hơn 0',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      }
+      if (payload.discountAmount !== undefined) {
+        throw new ErrorWithStatus({
+          message: 'Không dùng discountAmount cho gift discount_percentage',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      }
+    }
+
+    if (incomingType === 'discount_amount') {
+      if (nextDiscountAmount === undefined) {
+        throw new ErrorWithStatus({
+          message: 'discountAmount bắt buộc với gift discount_amount',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      }
+      if (nextDiscountAmount <= 0) {
+        throw new ErrorWithStatus({
+          message: 'discountAmount phải lớn hơn 0',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      }
+      if (payload.discountPercentage !== undefined) {
+        throw new ErrorWithStatus({
+          message: 'Không dùng discountPercentage cho gift discount_amount',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      }
     }
 
     let remainingQuantity = existing.remainingQuantity
@@ -179,7 +272,8 @@ class GiftService {
       name: payload.name ?? existing.name,
       image: payload.image ?? existing.image,
       price: payload.price ?? existing.price,
-      discountPercentage: payload.discountPercentage ?? existing.discountPercentage,
+      discountPercentage: incomingType === 'discount_percentage' ? nextDiscountPercentage : undefined,
+      discountAmount: incomingType === 'discount_amount' ? nextDiscountAmount : undefined,
       items: payload.items ?? existing.items,
       totalQuantity,
       remainingQuantity,
@@ -287,6 +381,7 @@ class GiftService {
       assignedAt: new Date(),
       claimedAt: new Date(),
       discountPercentage: picked.discountPercentage,
+      discountAmount: picked.discountAmount,
       items: picked.items
     }
 
