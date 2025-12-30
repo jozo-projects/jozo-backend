@@ -1,5 +1,6 @@
 // src/models/Bill.ts
 import { ObjectId } from 'mongodb'
+import { GiftBundleItem, GiftType } from '~/models/schemas/Gift.schema'
 
 export interface IBill {
   _id?: ObjectId
@@ -28,16 +29,10 @@ export interface IBill {
   gift?: {
     giftId: ObjectId | string
     name: string
-    type: 'snacks_drinks' | 'discount'
+    type: GiftType
     discountPercentage?: number
-    items?: Array<{
-      itemId: ObjectId
-      quantity: number
-      name: string
-      category?: string
-      priceSnapshot?: number
-      source: 'fnb_menu' | 'fnb_menu_item'
-    }>
+    discountAmount?: number
+    items?: GiftBundleItem[]
   }
   freeHourPromotion?: {
     freeMinutesApplied: number
@@ -82,16 +77,10 @@ export class Bill {
   gift?: {
     giftId: ObjectId | string
     name: string
-    type: 'snacks_drinks' | 'discount'
+    type: GiftType
     discountPercentage?: number
-    items?: Array<{
-      itemId: ObjectId
-      quantity: number
-      name: string
-      category?: string
-      priceSnapshot?: number
-      source: 'fnb_menu' | 'fnb_menu_item'
-    }>
+    discountAmount?: number
+    items?: GiftBundleItem[]
   }
   freeHourPromotion?: {
     freeMinutesApplied: number
