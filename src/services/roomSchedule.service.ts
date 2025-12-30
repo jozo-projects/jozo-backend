@@ -7,7 +7,6 @@ import { ErrorWithStatus } from '~/models/Error'
 import { IRoomScheduleRequestBody, IRoomScheduleRequestQuery } from '~/models/requests/RoomSchedule.request'
 import { BookingSource, RoomSchedule } from '~/models/schemas/RoomSchdedule.schema'
 import { generateUniqueBookingCode, parseDate } from '~/utils/common'
-import billService from './bill.service'
 import databaseService from './database.service'
 import fnbOrderService from './fnbOrder.service'
 import redis from './redis.service'
@@ -358,45 +357,10 @@ class RoomScheduleService {
       }
     }
 
-    // Nếu đang cập nhật trạng thái thành "Finished", xóa tất cả cache của phòng
+    // Nếu đang cập nhật trạng thái thành "Finished", chỉ xóa cache (không tự tạo bill)
     if (schedule.status === RoomScheduleStatus.Finished && currentSchedule.status !== RoomScheduleStatus.Finished) {
       // Bỏ dòng xóa cache để tránh lag
       await this.clearRoomCache(currentSchedule.roomId.toString())
-
-      // Khi trạng thái cập nhật thành Finished, tạo và lưu hóa đơn
-      try {
-        // Lấy thông tin hóa đơn từ lịch đặt phòng
-        const billData = await billService.getBill(id, schedule.endTime, schedule.paymentMethod)
-
-        // Tạo mã hóa đơn theo định dạng #DDMMHHMM (ngày, tháng, giờ, phút)
-        // Sử dụng thời gian kết thúc thay vì thời gian hiện tại
-        const endTimeDate = new Date(schedule.endTime || billData.endTime)
-        const invoiceCode = `#${endTimeDate.getDate().toString().padStart(2, '0')}${(endTimeDate.getMonth() + 1).toString().padStart(2, '0')}${endTimeDate.getHours().toString().padStart(2, '0')}${endTimeDate.getMinutes().toString().padStart(2, '0')}`
-
-        // Lưu trực tiếp vào database thay vì gọi printBill
-        const bill = {
-          _id: new ObjectId(),
-          scheduleId: new ObjectId(id),
-          roomId: currentSchedule.roomId,
-          items: billData.items,
-          totalAmount: billData.totalAmount,
-          startTime: billData.startTime,
-          endTime: billData.endTime,
-          createdAt: new Date(),
-          paymentMethod: billData.paymentMethod,
-          note: billData.note,
-          activePromotion: billData.activePromotion,
-          freeHourPromotion: billData.freeHourPromotion,
-          invoiceCode: invoiceCode // Thêm mã hóa đơn
-        }
-
-        // Lưu hóa đơn vào database
-        await databaseService.bills.insertOne(bill)
-        console.log(`Đã lưu hóa đơn khi kết thúc phòng. ScheduleId=${id}, BillId=${bill._id}`)
-      } catch (error) {
-        console.error('Lỗi khi tạo hóa đơn khi kết thúc phòng:', error)
-        // Không throw error để không ảnh hưởng đến việc cập nhật trạng thái
-      }
     }
 
     return result.modifiedCount
