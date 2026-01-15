@@ -149,12 +149,7 @@ usersRouter.get('/:id', wrapRequestHandler(getUserByIdController))
  * @file avatar?: File (multipart/form-data)
  * @author QuangDoo
  */
-usersRouter.put(
-  '/:id',
-  upload.single('avatar'),
-  updateUserValidator,
-  wrapRequestHandler(updateUserController)
-)
+usersRouter.put('/:id', upload.single('avatar'), updateUserValidator, wrapRequestHandler(updateUserController))
 
 /**
  * @description Delete user

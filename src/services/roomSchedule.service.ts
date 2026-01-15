@@ -90,6 +90,45 @@ class RoomScheduleService {
   }
 
   /**
+   * Kiểm tra trùng lịch cho một phòng, cho phép loại trừ một schedule cụ thể.
+   */
+  private async ensureNoOverlap(
+    roomId: ObjectId,
+    startTime: Date,
+    endTime: Date | null,
+    excludeScheduleId?: ObjectId
+  ) {
+    const effectiveEndTime = endTime || new Date('9999-12-31T23:59:59.999Z')
+
+    const overlapQuery: Record<string, unknown> = {
+      roomId,
+      status: { $nin: [RoomScheduleStatus.Cancelled, RoomScheduleStatus.Finished] },
+      $or: [
+        {
+          startTime: { $lt: effectiveEndTime },
+          endTime: { $gt: startTime }
+        },
+        {
+          endTime: null,
+          startTime: { $lt: effectiveEndTime }
+        }
+      ]
+    }
+
+    if (excludeScheduleId) {
+      overlapQuery._id = { $ne: excludeScheduleId }
+    }
+
+    const overlap = await databaseService.roomSchedule.findOne(overlapQuery)
+    if (overlap) {
+      throw new ErrorWithStatus({
+        message: 'An overlapping event exists for the room.',
+        status: HTTP_STATUS_CODE.CONFLICT
+      })
+    }
+  }
+
+  /**
    * Validate thời gian cho lịch phòng.
    * Đối với trạng thái "Booked":
    * - Bắt buộc phải có endTime.
@@ -164,44 +203,8 @@ class RoomScheduleService {
       })
     }
 
-    // Nếu không có endTime (ví dụ: trạng thái "in use"), sử dụng effectiveNewEndTime là một giá trị xa trong tương lai
-    const effectiveNewEndTime = endTime || new Date('9999-12-31T23:59:59.999Z')
-
-    // Kiểm tra event trùng lặp:
-    // Truy vấn các event có cùng roomId và có khoảng thời gian giao nhau với event mới.
-    // Lưu ý: Loại trừ những event có trạng thái "cancelled" hoặc "finished"
-    const overlap = await databaseService.roomSchedule.findOne({
-      roomId: new ObjectId(schedule.roomId),
-      status: { $nin: [RoomScheduleStatus.Cancelled, RoomScheduleStatus.Finished] },
-      $or: [
-        {
-          // Nếu event có endTime xác định: bắt đầu trước effectiveNewEndTime và kết thúc sau startTime
-          startTime: { $lt: effectiveNewEndTime },
-          endTime: { $gt: startTime }
-        },
-        {
-          // Nếu event hiện tại chưa có endTime (đang "in use"): coi như luôn giao nhau nếu bắt đầu trước effectiveNewEndTime
-          endTime: null,
-          startTime: { $lt: effectiveNewEndTime }
-        }
-      ]
-    })
-
-    console.log('overlap', overlap)
-
-    if (overlap) {
-      // Kiểm tra nếu event trùng lặp có status là Finished hoặc finish, thì vẫn cho phép tạo mới
-      if (overlap.status === RoomScheduleStatus.Finished) {
-        // Cho phép tạo event mới nếu event trùng lặp đã kết thúc
-        console.log('Allowing new event creation because overlapping event is finished')
-      } else {
-        // Nếu tìm thấy event giao nhau và không phải trạng thái Finished, ném lỗi
-        throw new ErrorWithStatus({
-          message: 'An overlapping event exists for the room.',
-          status: HTTP_STATUS_CODE.CONFLICT
-        })
-      }
-    }
+    // Kiểm tra trùng lịch tại phòng
+    await this.ensureNoOverlap(new ObjectId(schedule.roomId), startTime, endTime)
 
     // Nếu không có overlap, tiến hành tạo event mới
     // Sinh bookingCode nếu status là Booked
@@ -299,6 +302,8 @@ class RoomScheduleService {
    */
   async updateSchedule(id: string, schedule: IRoomScheduleRequestBody) {
     const updateData: Partial<RoomSchedule> = {}
+    const updateOperations: Record<string, any> = { $set: updateData }
+    const updatedAt = new Date()
 
     // Lấy thông tin hiện tại của lịch phòng
     const currentSchedule = await databaseService.roomSchedule.findOne({ _id: new ObjectId(id) })
@@ -310,12 +315,49 @@ class RoomScheduleService {
     }
 
     const previousGiftEnabled = !!currentSchedule.giftEnabled
+    const targetStartTime = schedule.startTime ? new Date(schedule.startTime) : currentSchedule.startTime
+    const targetEndTime =
+      schedule.endTime !== undefined ? (schedule.endTime ? new Date(schedule.endTime) : null) : currentSchedule.endTime || null
+
+    // Đổi room nếu có yêu cầu newRoomId
+    if (schedule.newRoomId) {
+      if (
+        currentSchedule.status === RoomScheduleStatus.Cancelled ||
+        currentSchedule.status === RoomScheduleStatus.Finished
+      ) {
+        throw new ErrorWithStatus({
+          message: 'Cannot change room for cancelled or finished schedules.',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      }
+
+      const newRoomObjectId = new ObjectId(schedule.newRoomId)
+      if (newRoomObjectId.equals(currentSchedule.roomId)) {
+        throw new ErrorWithStatus({
+          message: 'New roomId must be different from current roomId.',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      }
+
+      await this.ensureNoOverlap(newRoomObjectId, targetStartTime, targetEndTime, currentSchedule._id)
+
+      updateData.roomId = newRoomObjectId
+      updateOperations.$push = {
+        roomChangeLogs: {
+          fromRoomId: currentSchedule.roomId,
+          toRoomId: newRoomObjectId,
+          changedAt: updatedAt,
+          changedBy: schedule.updatedBy || 'system',
+          note: schedule.roomChangeNote
+        }
+      }
+    }
 
     if (schedule.startTime) {
-      updateData.startTime = new Date(schedule.startTime)
+      updateData.startTime = targetStartTime
     }
     if (schedule.endTime !== undefined) {
-      updateData.endTime = schedule.endTime ? new Date(schedule.endTime) : null
+      updateData.endTime = targetEndTime
     }
     if (schedule.status) {
       updateData.status = schedule.status
@@ -324,7 +366,7 @@ class RoomScheduleService {
       updateData.applyFreeHourPromo = schedule.applyFreeHourPromo
     }
     // Có thể cập nhật thêm thông tin audit như updatedBy nếu cần
-    updateData.updatedAt = new Date()
+    updateData.updatedAt = updatedAt
     if (schedule.updatedBy) {
       updateData.updatedBy = schedule.updatedBy
     }
@@ -336,7 +378,7 @@ class RoomScheduleService {
       updateData.giftEnabled = !!schedule.giftEnabled
     }
 
-    const result = await databaseService.roomSchedule.updateOne({ _id: new ObjectId(id) }, { $set: updateData })
+    const result = await databaseService.roomSchedule.updateOne({ _id: new ObjectId(id) }, updateOperations)
 
     // Emit sự kiện khi giftEnabled thay đổi để FE ẩn/hiện nút mở quà
     const newGiftEnabled = schedule.giftEnabled !== undefined ? !!schedule.giftEnabled : previousGiftEnabled
@@ -361,6 +403,14 @@ class RoomScheduleService {
     if (schedule.status === RoomScheduleStatus.Finished && currentSchedule.status !== RoomScheduleStatus.Finished) {
       // Bỏ dòng xóa cache để tránh lag
       await this.clearRoomCache(currentSchedule.roomId.toString())
+    }
+
+    // Nếu đổi room, clear cache cho cả phòng cũ và mới
+    if (schedule.newRoomId) {
+      await Promise.all([
+        this.clearRoomCache(currentSchedule.roomId.toString()),
+        this.clearRoomCache(schedule.newRoomId)
+      ])
     }
 
     return result.modifiedCount
