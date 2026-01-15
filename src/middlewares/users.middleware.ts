@@ -253,6 +253,32 @@ export const accessTokenValidator = validate(
   )
 )
 
+export const requireAdmin = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const userId = req.decoded_authorization?.user_id
+    if (!userId) {
+      return next(
+        new ErrorWithStatus({
+          message: AUTH_MESSAGES.ACCESS_TOKEN_NOT_EMPTY,
+          status: HTTP_STATUS_CODE.UNAUTHORIZED
+        })
+      )
+    }
+    const user = await databaseService.users.findOne({ _id: new ObjectId(userId) })
+    if (!user || user.role !== UserRole.Admin) {
+      return next(
+        new ErrorWithStatus({
+          message: 'Forbidden',
+          status: HTTP_STATUS_CODE.FORBIDDEN
+        })
+      )
+    }
+    next()
+  } catch (error) {
+    next(error)
+  }
+}
+
 export const updateUserValidator = validate(
   checkSchema(
     {

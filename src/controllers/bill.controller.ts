@@ -8,6 +8,8 @@ import utc from 'dayjs/plugin/utc'
 import timezone from 'dayjs/plugin/timezone'
 import { ObjectId } from 'mongodb'
 import databaseService from '~/services/database.service'
+import membershipService from '~/services/membership.service'
+import { RewardSource } from '~/constants/enum'
 
 // Extend dayjs with the required plugins
 dayjs.extend(weekOfYear)
@@ -806,8 +808,6 @@ export const getAllBills = async (req: Request, res: Response) => {
 export const saveBill = async (req: Request, res: Response) => {
   const bill = req.body
 
-  console.log('bill', bill)
-
   // Kiểm tra các trường bắt buộc
   if (!bill || !bill.scheduleId || !bill.roomId) {
     return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
@@ -857,11 +857,26 @@ export const saveBill = async (req: Request, res: Response) => {
       createdAt: bill.createdAt ? new Date(bill.createdAt) : now,
       startTime: bill.startTime ? new Date(bill.startTime) : new Date(),
       endTime: bill.endTime ? new Date(bill.endTime) : new Date(),
+      userId: bill.userId ? new ObjectId(bill.userId) : undefined,
+      customerPhone: bill.customerPhone,
       invoiceCode:
         bill.invoiceCode ||
         `#${now.getDate().toString().padStart(2, '0')}${(now.getMonth() + 1).toString().padStart(2, '0')}${now.getHours().toString().padStart(2, '0')}${now.getMinutes().toString().padStart(2, '0')}`
     }
     await databaseService.bills.insertOne(billToSave)
+    try {
+      if (billToSave.userId) {
+        await membershipService.earnPointsForUser({
+          userId: billToSave.userId,
+          totalAmount: billToSave.totalAmount,
+          source: RewardSource.Point,
+          meta: { invoiceCode: billToSave.invoiceCode, method: 'auto' },
+          visitAt: billToSave.endTime
+        })
+      }
+    } catch (err) {
+      console.warn('Tích điểm membership thất bại nhưng vẫn lưu bill:', err)
+    }
     return res.status(HTTP_STATUS_CODE.OK).json({
       message: 'Bill saved successfully',
       result: billToSave

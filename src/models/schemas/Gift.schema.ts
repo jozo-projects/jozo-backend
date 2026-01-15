@@ -2,7 +2,7 @@ import { ObjectId } from 'mongodb'
 import { FnBCategory } from '~/constants/enum'
 
 // Giữ 'discount' như alias cũ cho backward compatibility
-export type GiftType = 'snacks_drinks' | 'discount_percentage' | 'discount_amount' | 'discount'
+export type GiftType = 'snacks_drinks' | 'discount_percentage' | 'discount_amount' | 'fnb_discount_amount' | 'discount'
 
 export interface GiftBundleItem {
   itemId: ObjectId
@@ -21,6 +21,7 @@ export interface Gift {
   price?: number
   discountPercentage?: number
   discountAmount?: number
+  categories?: FnBCategory[]
   items?: GiftBundleItem[]
   totalQuantity: number // tổng số suất quà (bundle) tạo ra
   remainingQuantity: number // số suất còn lại để random
@@ -41,5 +42,6 @@ export interface ScheduleGift {
   claimedAt?: Date
   discountPercentage?: number
   discountAmount?: number
+  categories?: FnBCategory[]
   items?: GiftBundleItem[]
 }

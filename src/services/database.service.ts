@@ -17,6 +17,9 @@ import { VirtualRoom } from '~/models/schemas/VirtualRoom.schema'
 import { EmployeeSchedule } from '~/models/schemas/EmployeeSchedule.schema'
 import { Notification } from '~/models/schemas/Notification.schema'
 import { Gift } from '~/models/schemas/Gift.schema'
+import { MembershipConfig } from '~/models/schemas/MembershipConfig.schema'
+import { RewardHistory } from '~/models/schemas/RewardHistory.schema'
+import { Streak } from '~/models/schemas/Streak.schema'
 dotenv.config()
 
 // Interface cho Client Booking
@@ -133,6 +136,18 @@ class DatabaseService {
 
   get notifications(): Collection<Notification> {
     return this.db.collection('notifications')
+  }
+
+  get membershipConfigs(): Collection<MembershipConfig> {
+    return this.db.collection('membershipConfigs')
+  }
+
+  get rewardHistories(): Collection<RewardHistory> {
+    return this.db.collection('rewardHistories')
+  }
+
+  get streaks(): Collection<Streak> {
+    return this.db.collection('streaks')
   }
 
   // Cho phép lấy collection bất kỳ

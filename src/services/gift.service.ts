@@ -2,7 +2,7 @@
 import { ObjectId } from 'mongodb'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { ErrorWithStatus } from '~/models/Error'
-import { RoomScheduleStatus } from '~/constants/enum'
+import { FnBCategory, RoomScheduleStatus } from '~/constants/enum'
 import { FnBMenuItem } from '~/models/schemas/FnBMenuItem.schema'
 import { Gift, GiftBundleItem, GiftType, ScheduleGift } from '~/models/schemas/Gift.schema'
 import databaseService from './database.service'
@@ -84,6 +84,7 @@ class GiftService {
     price?: number
     discountPercentage?: number
     discountAmount?: number
+    categories?: FnBCategory[]
     items?: GiftBundleItem[]
     totalQuantity: number
     isActive?: boolean
@@ -139,6 +140,40 @@ class GiftService {
       }
     }
 
+    if (normalizedType === 'fnb_discount_amount') {
+      if (payload.discountAmount === undefined) {
+        throw new ErrorWithStatus({
+          message: 'discountAmount bắt buộc với gift fnb_discount_amount',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      }
+      if (payload.discountAmount <= 0) {
+        throw new ErrorWithStatus({
+          message: 'discountAmount phải lớn hơn 0',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      }
+      if (!payload.categories || payload.categories.length === 0) {
+        throw new ErrorWithStatus({
+          message: 'Gift fnb_discount_amount phải có categories áp dụng',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      }
+      const invalidCategory = payload.categories.some((c) => !Object.values(FnBCategory).includes(c))
+      if (invalidCategory) {
+        throw new ErrorWithStatus({
+          message: 'categories không hợp lệ',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      }
+      if (payload.discountPercentage !== undefined) {
+        throw new ErrorWithStatus({
+          message: 'Không dùng discountPercentage cho gift fnb_discount_amount',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      }
+    }
+
     if (normalizedType === 'snacks_drinks') {
       if (!payload.items || payload.items.length === 0) {
         throw new ErrorWithStatus({
@@ -158,6 +193,7 @@ class GiftService {
       price: payload.price,
       discountPercentage: payload.discountPercentage,
       discountAmount: payload.discountAmount,
+      categories: payload.categories,
       items: payload.items,
       totalQuantity: payload.totalQuantity,
       remainingQuantity: payload.totalQuantity,
@@ -193,6 +229,7 @@ class GiftService {
     const nextDiscountPercentage =
       payload.discountPercentage !== undefined ? payload.discountPercentage : existing.discountPercentage
     const nextDiscountAmount = payload.discountAmount !== undefined ? payload.discountAmount : existing.discountAmount
+    const nextCategories = payload.categories !== undefined ? payload.categories : existing.categories
 
     if (incomingType === 'discount_percentage') {
       if (nextDiscountPercentage === undefined) {
@@ -236,6 +273,40 @@ class GiftService {
       }
     }
 
+    if (incomingType === 'fnb_discount_amount') {
+      if (nextDiscountAmount === undefined) {
+        throw new ErrorWithStatus({
+          message: 'discountAmount bắt buộc với gift fnb_discount_amount',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      }
+      if (nextDiscountAmount <= 0) {
+        throw new ErrorWithStatus({
+          message: 'discountAmount phải lớn hơn 0',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      }
+      if (!nextCategories || nextCategories.length === 0) {
+        throw new ErrorWithStatus({
+          message: 'Gift fnb_discount_amount phải có categories áp dụng',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      }
+      const invalidCategory = nextCategories.some((c) => !Object.values(FnBCategory).includes(c as FnBCategory))
+      if (invalidCategory) {
+        throw new ErrorWithStatus({
+          message: 'categories không hợp lệ',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      }
+      if (payload.discountPercentage !== undefined) {
+        throw new ErrorWithStatus({
+          message: 'Không dùng discountPercentage cho gift fnb_discount_amount',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      }
+    }
+
     let remainingQuantity = existing.remainingQuantity
     let totalQuantity = existing.totalQuantity
 
@@ -273,7 +344,10 @@ class GiftService {
       image: payload.image ?? existing.image,
       price: payload.price ?? existing.price,
       discountPercentage: incomingType === 'discount_percentage' ? nextDiscountPercentage : undefined,
-      discountAmount: incomingType === 'discount_amount' ? nextDiscountAmount : undefined,
+      discountAmount: ['discount_amount', 'fnb_discount_amount'].includes(incomingType)
+        ? nextDiscountAmount
+        : undefined,
+      categories: incomingType === 'fnb_discount_amount' ? nextCategories : undefined,
       items: payload.items ?? existing.items,
       totalQuantity,
       remainingQuantity,
@@ -382,6 +456,7 @@ class GiftService {
       claimedAt: new Date(),
       discountPercentage: picked.discountPercentage,
       discountAmount: picked.discountAmount,
+      categories: picked.categories,
       items: picked.items
     }
 
@@ -518,6 +593,7 @@ class GiftService {
       claimedAt: new Date(),
       discountPercentage: picked.discountPercentage,
       discountAmount: picked.discountAmount,
+      categories: picked.categories,
       items: picked.items
     }
 

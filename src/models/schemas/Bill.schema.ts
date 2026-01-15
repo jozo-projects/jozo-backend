@@ -20,6 +20,8 @@ export interface IBill {
   endTime: Date
   createdAt: Date
   paymentMethod?: string
+  userId?: ObjectId | string
+  customerPhone?: string
   note?: string
   activePromotion?: {
     name: string
@@ -68,6 +70,8 @@ export class Bill {
   giftDiscountAmount?: number
   createdAt!: Date
   paymentMethod?: string
+  userId?: ObjectId
+  customerPhone?: string
   note?: string
   activePromotion?: {
     name: string
