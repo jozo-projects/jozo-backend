@@ -5,6 +5,7 @@ import {
   addSong,
   addSongsToQueue,
   controlPlayback,
+  getBillByRoom,
   getSongName,
   getSongsInQueue,
   getVideoInfo,
@@ -17,7 +18,6 @@ import {
   updateQueue
 } from '~/controllers/roomMusic.controller'
 import { updateLimiter } from '~/middlewares/rateLimiter.middleware'
-import { VideoSchema } from '~/models/schemas/Video.schema'
 import { roomMusicServices } from '~/services/roomMusic.service'
 import { getMediaUrls } from '~/services/video.service'
 import { wrapRequestHandler } from '~/utils/handlers'
@@ -101,6 +101,14 @@ roomMusicRouter.get('/:roomId/now-playing', async (req, res, next) => {
     next(error)
   }
 }) // Lấy bài hát đang phát
+
+/**
+ * @description Get current bill by room
+ * @path /song-queue/:roomId/bill
+ * @method GET
+ * @author QuangDoo
+ */
+roomMusicRouter.get('/:roomId/bill', wrapRequestHandler(getBillByRoom))
 
 /**
  * @description search songs

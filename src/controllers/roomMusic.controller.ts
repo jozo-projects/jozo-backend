@@ -505,8 +505,8 @@ export const streamVideo = async (req: Request, res: Response, next: NextFunctio
  * @method GET
  * @author QuangDoo
  */
-export const searchSongs = async (req: Request, res: Response, next: NextFunction) => {
-  const { q, limit = '10' } = req.query
+export const searchSongs = async (req: Request, res: Response) => {
+  const { q, limit = '30' } = req.query
   const parsedLimit = parseInt(limit as string, 10)
 
   // Validate search query
@@ -534,6 +534,7 @@ export const searchSongs = async (req: Request, res: Response, next: NextFunctio
     console.log('Starting search with query:', q)
 
     // Cài đặt timeout hẹp để tránh chờ quá lâu
+    // eslint-disable-next-line no-async-promise-executor
     const searchPromise = new Promise<any[]>(async (resolve) => {
       try {
         // Dùng timeout tránh trường hợp ytSearch bị treo
@@ -593,5 +594,19 @@ export const searchSongs = async (req: Request, res: Response, next: NextFunctio
       message: SONG_QUEUE_MESSAGES.SEARCH_SONGS_SUCCESS,
       result: [] // Trả về mảng rỗng trong trường hợp lỗi
     })
+  }
+}
+
+export const getBillByRoom = async (req: Request, res: Response, next: NextFunction) => {
+  const { roomId } = req.params
+
+  try {
+    const bill = await roomMusicServices.getBillByRoom(Number(roomId))
+    return res.status(HTTP_STATUS_CODE.OK).json({
+      message: 'Get bill successfully',
+      result: bill
+    })
+  } catch (error) {
+    next(error)
   }
 }

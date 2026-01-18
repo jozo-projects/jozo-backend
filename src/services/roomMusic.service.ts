@@ -1,10 +1,13 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { EventEmitter } from 'events'
 import ytdl from 'youtube-dl-exec'
+import { RoomScheduleStatus } from '~/constants/enum'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { ErrorWithStatus } from '~/models/Error'
 import { AddSongRequestBody } from '~/models/requests/Song.request'
 import { CacheService } from '~/services/cache.service'
+import billService from '~/services/bill.service'
+import databaseService from '~/services/database.service'
 import redis from '~/services/redis.service'
 import { SearchService } from '~/services/search.service'
 import { historyService } from '~/services/songHistory.service'
@@ -494,6 +497,33 @@ class RoomMusicServices {
         status: HTTP_STATUS_CODE.INTERNAL_SERVER_ERROR
       })
     }
+  }
+
+  async getBillByRoom(roomIndex: number) {
+    const room = await databaseService.rooms.findOne({ roomId: roomIndex })
+    if (!room?._id) {
+      throw new ErrorWithStatus({
+        message: 'Room not found',
+        status: HTTP_STATUS_CODE.NOT_FOUND
+      })
+    }
+
+    const activeSchedule = await databaseService.roomSchedule.findOne(
+      {
+        roomId: room._id,
+        status: { $in: [RoomScheduleStatus.Booked, RoomScheduleStatus.InUse] }
+      },
+      { sort: { startTime: -1 } }
+    )
+
+    if (!activeSchedule) {
+      throw new ErrorWithStatus({
+        message: 'Không tìm thấy lịch đang hoạt động cho phòng',
+        status: HTTP_STATUS_CODE.NOT_FOUND
+      })
+    }
+
+    return billService.getBill(activeSchedule._id?.toString())
   }
 }
 
