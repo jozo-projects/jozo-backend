@@ -1,5 +1,9 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { EventEmitter } from 'events'
+import dayjs from 'dayjs'
+import utc from 'dayjs/plugin/utc'
+import timezone from 'dayjs/plugin/timezone'
+import { ObjectId } from 'mongodb'
 import ytdl from 'youtube-dl-exec'
 import { RoomScheduleStatus } from '~/constants/enum'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
@@ -12,6 +16,9 @@ import redis from '~/services/redis.service'
 import { SearchService } from '~/services/search.service'
 import { historyService } from '~/services/songHistory.service'
 import { Logger } from '~/utils/logger'
+
+dayjs.extend(utc)
+dayjs.extend(timezone)
 
 export const roomMusicEventEmitter = new EventEmitter()
 
@@ -508,19 +515,49 @@ class RoomMusicServices {
       })
     }
 
-    const activeSchedule = await databaseService.roomSchedule.findOne(
-      {
-        roomId: room._id,
-        status: { $in: [RoomScheduleStatus.Booked, RoomScheduleStatus.InUse] }
-      },
-      { sort: { startTime: -1 } }
+    const now = dayjs().tz('Asia/Ho_Chi_Minh')
+    const startOfDay = now.startOf('day').toDate()
+    const endOfDay = now.endOf('day').toDate()
+
+    // Lấy danh sách schedule đã có bill (coi như đã success) để loại bỏ khỏi kết quả
+    const billedScheduleIds = (
+      await databaseService.bills.find({ roomId: room._id }).project({ scheduleId: 1 }).toArray()
     )
+      .map((bill) => {
+        const idStr = bill.scheduleId?.toString()
+        return idStr && ObjectId.isValid(idStr) ? new ObjectId(idStr) : null
+      })
+      .filter((id): id is ObjectId => id !== null)
+
+    // Helper: tìm lịch gần nhất theo thời gian dựa trên danh sách status
+    const findNearestSchedule = async (statuses: RoomScheduleStatus[]) => {
+      const match: Record<string, any> = {
+        roomId: room._id,
+        status: { $in: statuses },
+        startTime: { $gte: startOfDay, $lte: endOfDay }
+      }
+      if (billedScheduleIds.length) {
+        match._id = { $nin: billedScheduleIds }
+      }
+
+      return (
+        await databaseService.roomSchedule
+          .aggregate([
+            { $match: match },
+            { $addFields: { timeDistance: { $abs: { $subtract: ['$startTime', now.toDate()] } } } },
+            { $sort: { timeDistance: 1, startTime: -1 } }, // gần nhất hiện tại, ưu tiên startTime mới hơn khi bằng nhau
+            { $limit: 1 }
+          ])
+          .toArray()
+      )[0]
+    }
+
+    // Chỉ lấy lịch InUse trong hôm nay; bỏ Booked
+    const activeSchedule = await findNearestSchedule([RoomScheduleStatus.InUse])
 
     if (!activeSchedule) {
-      throw new ErrorWithStatus({
-        message: 'Không tìm thấy lịch đang hoạt động cho phòng',
-        status: HTTP_STATUS_CODE.NOT_FOUND
-      })
+      // Không còn lịch hợp lệ (đã tính bill hoặc không có lịch), trả về null
+      return null
     }
 
     return billService.getBill(activeSchedule._id?.toString())
