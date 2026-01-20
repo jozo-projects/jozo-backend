@@ -599,14 +599,14 @@ export class BillService {
           slotFreeMinutes = Math.min(freeMinutesLeft, promoMinutes)
           freeMinutesLeft -= slotFreeMinutes
           freeMinutesApplied += slotFreeMinutes
-          const slotFreeAmount = Math.floor(((slotFreeMinutes / 60) * priceEntry.price) / 1000) * 1000
+          const slotFreeAmount = (slotFreeMinutes / 60) * priceEntry.price
           freeAmountTotal += slotFreeAmount
         }
       }
 
       const overlapHoursRounded = Math.round((overlapSeconds / 3600) * 100) / 100
 
-      const slotServiceFee = Math.floor(((overlapSeconds / 3600) * priceEntry.price) / 1000) * 1000
+      const slotServiceFee = (overlapSeconds / 3600) * priceEntry.price
 
       totalServiceFee += slotServiceFee
       totalHoursUsed += overlapHoursRounded
@@ -639,7 +639,7 @@ export class BillService {
               console.error(`Invalid price for menu item ${menuItem.name}: ${menuItem.price}`)
               continue
             }
-            const totalPrice = Math.floor((quantity * price) / 1000) * 1000
+            const totalPrice = quantity * price
             timeSlotItems.push({
               description: menuItem.name,
               quantity: quantity,
@@ -663,7 +663,7 @@ export class BillService {
               console.error(`Invalid price for menu item ${menuItem.name}: ${menuItem.price}`)
               continue
             }
-            const totalPrice = Math.floor((quantity * price) / 1000) * 1000
+            const totalPrice = quantity * price
             timeSlotItems.push({
               description: menuItem.name,
               quantity: quantity,
@@ -752,7 +752,7 @@ export class BillService {
     }, 0)
 
     if (giftDiscountPercent > 0) {
-      giftDiscountAmount = Math.floor((subtotal * giftDiscountPercent) / 100)
+      giftDiscountAmount = (subtotal * giftDiscountPercent) / 100
     }
     if (giftDiscountFixed > 0) {
       giftDiscountAmount += giftDiscountFixed
@@ -760,7 +760,7 @@ export class BillService {
 
     let discountAmount = 0
     if (activePromotion && shouldApplyPromotion) {
-      discountAmount = Math.floor((subtotal * activePromotion.discountPercentage) / 100)
+      discountAmount = (subtotal * activePromotion.discountPercentage) / 100
     }
 
     // Trừ khuyến mãi giờ đầu (freeAmountTotal) ở mức tổng, không bỏ record gốc
@@ -1747,10 +1747,8 @@ export class BillService {
 
         // Định dạng số tiền để hiển thị gọn hơn
         const formattedPrice = item.price.toLocaleString('vi-VN')
-        // Tính tổng tiền và làm tròn xuống 1000 VND để nhất quán
         const rawTotal = quantity * item.price
-        const currentTotal = Math.floor(rawTotal / 1000) * 1000
-        const formattedTotal = currentTotal.toLocaleString('vi-VN')
+        const formattedTotal = rawTotal.toLocaleString('vi-VN')
 
         // In dòng đầu với tên dịch vụ và các cột số liệu
         printer.style('b').tableCustom([
@@ -1792,8 +1790,7 @@ export class BillService {
 
       const formattedPrice = item.price.toLocaleString('vi-VN')
       const rawTotal = item.quantity * item.price
-      const itemTotalDisplay = Math.floor(rawTotal / 1000) * 1000
-      const formattedTotal = itemTotalDisplay.toLocaleString('vi-VN')
+      const formattedTotal = rawTotal.toLocaleString('vi-VN')
 
       // In dòng đầu tiên với tên (phần đầu), SL, Đơn giá, Thành tiền
       printer.tableCustom([
@@ -1840,7 +1837,7 @@ export class BillService {
       let subtotalAmount = 0
       bill.items.forEach((item) => {
         const rawTotal = item.quantity * item.price
-        subtotalAmount += Math.floor(rawTotal / 1000) * 1000
+        subtotalAmount += rawTotal
       })
 
       const isPercentGift = bill.gift.type === 'discount' || bill.gift.type === 'discount_percentage'
@@ -1848,7 +1845,7 @@ export class BillService {
         bill.giftDiscountAmount !== undefined
           ? bill.giftDiscountAmount
           : isPercentGift && bill.gift.discountPercentage !== undefined
-            ? Math.floor((subtotalAmount * bill.gift.discountPercentage) / 100)
+            ? (subtotalAmount * bill.gift.discountPercentage) / 100
             : bill.gift.discountAmount || 0
 
       const giftLabel =
@@ -1867,10 +1864,10 @@ export class BillService {
       let subtotalAmount = 0
       bill.items.forEach((item) => {
         const rawTotal = item.quantity * item.price
-        subtotalAmount += Math.floor(rawTotal / 1000) * 1000
+        subtotalAmount += rawTotal
       })
 
-      const discountAmount = Math.floor((subtotalAmount * bill.activePromotion.discountPercentage) / 100)
+      const discountAmount = (subtotalAmount * bill.activePromotion.discountPercentage) / 100
 
       printer.tableCustom([
         { text: 'Tong tien hang', width: 0.45, align: 'left' },
