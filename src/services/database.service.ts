@@ -4,6 +4,7 @@ import dotenv from 'dotenv'
 import RoomType from '~/models/schemas/RoomType.schema'
 import { Room } from '~/models/schemas/Room.schema'
 import { SongHistory } from '~/models/schemas/SongHistiry.schema'
+import { Song } from '~/models/schemas/Song.schema'
 import { Price } from '~/models/schemas/Price.schema'
 import { RoomCategory } from '~/models/schemas/RoomCategory.schema'
 import { RoomSchedule } from '~/models/schemas/RoomSchdedule.schema'
@@ -85,6 +86,10 @@ class DatabaseService {
 
   get roomCategories(): Collection<RoomCategory> {
     return this.db.collection('roomCategories')
+  }
+
+  get songs(): Collection<Song> {
+    return this.db.collection('songs')
   }
 
   get roomSchedule(): Collection<RoomSchedule> {

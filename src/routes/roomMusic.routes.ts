@@ -1,5 +1,4 @@
 import { Router } from 'express'
-import ytSearch from 'yt-search'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import {
   addSong,
@@ -7,12 +6,15 @@ import {
   controlPlayback,
   getBillByRoom,
   getSongName,
+  getSongsInCollection,
   getSongsInQueue,
   getVideoInfo,
   playChosenSong,
   playNextSong,
   removeAllSongsInQueue,
   removeSong,
+  saveSong,
+  searchSongs,
   sendNotification,
   streamVideo,
   updateQueue
@@ -23,6 +25,14 @@ import { getMediaUrls } from '~/services/video.service'
 import { wrapRequestHandler } from '~/utils/handlers'
 
 const roomMusicRouter = Router()
+
+/**
+ * @description Get songs in collection
+ * @path /room-music/songs-collection
+ * @method GET
+ * @author QuangDoo
+ */
+roomMusicRouter.get('/songs-collection', wrapRequestHandler(getSongsInCollection))
 
 /**
  * @description Add song to queue
@@ -116,75 +126,7 @@ roomMusicRouter.get('/:roomId/bill', wrapRequestHandler(getBillByRoom))
  * @method GET
  * @author QuangDoo
  */
-roomMusicRouter.get('/:roomId/search-songs', async (req, res) => {
-  const { q, limit = '50' } = req.query
-  const parsedLimit = parseInt(limit as string, 10)
-
-  // Simple in-memory cache (for demo, not for production)
-  const cache = (global as any)._ytSearchCache || ((global as any)._ytSearchCache = {})
-  const cacheKey = `${q}|${limit}`
-  const now = Date.now()
-  const CACHE_TTL = 30 * 1000 // 30 seconds
-
-  // Validate search query
-  if (!q || typeof q !== 'string') {
-    return res.status(400).json({ error: 'Missing or invalid search query' })
-  }
-
-  // Validate limit parameter
-  if (isNaN(parsedLimit) || parsedLimit < 1 || parsedLimit > 50) {
-    return res.status(400).json({ error: 'Invalid limit parameter. Must be between 1 and 50' })
-  }
-
-  // Check cache
-  if (cache[cacheKey] && now - cache[cacheKey].timestamp < CACHE_TTL) {
-    return res.status(HTTP_STATUS_CODE.OK).json({ result: cache[cacheKey].data })
-  }
-
-  try {
-    // Sử dụng một chiến lược tìm kiếm duy nhất với từ khóa âm nhạc để giảm thời gian phản hồi
-    const searchQuery = `${q.trim()} music`
-    console.log(`Searching with optimized strategy: "${searchQuery}"`)
-
-    const searchOptions: ytSearch.Options = {
-      query: searchQuery,
-      userAgent:
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      search: 'music',
-      hl: 'vi',
-      pageStart: 1,
-      pageEnd: 1 // Only fetch the first page for speed
-    }
-
-    const searchResults = await ytSearch(searchOptions)
-
-    // Lọc trước khi map để tiết kiệm thời gian xử lý
-    const filteredVideos = searchResults.videos.filter((video) => {
-      const duration = video.duration.seconds
-      return duration >= 30 && duration <= 900
-    })
-
-    // Trích xuất danh sách video với số lượng giới hạn theo yêu cầu
-    const videos = filteredVideos.slice(0, parsedLimit).map((video) => ({
-      video_id: video.videoId,
-      title: video.title,
-      duration: video.duration.seconds,
-      url: video.url,
-      thumbnail: video.thumbnail || '',
-      author: video.author.name
-    }))
-
-    // Lưu vào cache
-    cache[cacheKey] = { data: videos, timestamp: now }
-
-    return res.status(HTTP_STATUS_CODE.OK).json({ result: videos })
-  } catch (error) {
-    return res.status(HTTP_STATUS_CODE.INTERNAL_SERVER_ERROR).json({
-      error: 'Failed to search YouTube',
-      message: (error as Error).message
-    })
-  }
-})
+roomMusicRouter.get('/:roomId/search-songs', wrapRequestHandler(searchSongs))
 
 /**
  * @description Get song name
@@ -226,15 +168,6 @@ roomMusicRouter.post('/:roomId/send-notification', wrapRequestHandler(sendNotifi
  */
 roomMusicRouter.get('/:roomId/:videoId/stream', wrapRequestHandler(streamVideo))
 
-// Hàm bỏ dấu tiếng Việt để so sánh
-function removeAccents(str: string): string {
-  return str
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/đ/g, 'd')
-    .replace(/Đ/g, 'D')
-}
-
 roomMusicRouter.get('/:roomId/song-info/:videoId', async (req, res) => {
   try {
     const { roomId, videoId } = req.params
@@ -271,5 +204,13 @@ roomMusicRouter.get('/:roomId/song-info/:videoId', async (req, res) => {
  * @author QuangDoo
  */
 roomMusicRouter.post('/:roomId/add-songs', updateLimiter(), wrapRequestHandler(addSongsToQueue))
+
+/**
+ * @description Save song to library (global)
+ * @path /song-queue/rooms/:roomId/save-song
+ * @method POST
+ * @author QuangDoo
+ */
+roomMusicRouter.post('/:roomId/save-song', wrapRequestHandler(saveSong))
 
 export default roomMusicRouter

@@ -90,7 +90,8 @@ export const SONG_QUEUE_MESSAGES = {
   UPDATE_QUEUE_SUCCESS: 'Update queue success',
   GET_SONG_NAME_SUCCESS: 'Get song name success',
   SEARCH_SONGS_SUCCESS: 'Search songs success',
-  ADD_SONGS_TO_QUEUE_SUCCESS: 'Add songs to queue success'
+  ADD_SONGS_TO_QUEUE_SUCCESS: 'Add songs to queue success',
+  SAVE_SONG_SUCCESS: 'Save song success'
 } as const
 
 export const Price_MESSAGES = {

@@ -15,6 +15,7 @@ import databaseService from '~/services/database.service'
 import redis from '~/services/redis.service'
 import { SearchService } from '~/services/search.service'
 import { historyService } from '~/services/songHistory.service'
+import { songService } from '~/services/song.service'
 import { Logger } from '~/utils/logger'
 
 dayjs.extend(utc)
@@ -127,6 +128,20 @@ class RoomMusicServices {
       await pipeline.exec()
 
       const updatedQueue = (await redis.lrange(queueKey, 0, -1)).map((item: string) => JSON.parse(item))
+
+      // Lưu bài hát vào collection songs (id gốc ổn định)
+      try {
+        await songService.upsertSong({
+          video_id: song.video_id,
+          title: song.title,
+          author: song.author,
+          duration: song.duration,
+          url: song.url,
+          thumbnail: song.thumbnail
+        })
+      } catch (error) {
+        this.logger.error('Failed to save song when playing next', error)
+      }
 
       return { nowPlaying: nowPlayingData, queue: updatedQueue }
     } catch (error) {
@@ -323,6 +338,20 @@ class RoomMusicServices {
 
     // Lưu vào Redis
     await redis.set(nowPlayingKey, JSON.stringify(nowPlayingData))
+
+    // Lưu bài hát vào collection songs (id gốc ổn định)
+    try {
+      await songService.upsertSong({
+        video_id: chosenSong.video_id,
+        title: chosenSong.title,
+        author: chosenSong.author,
+        duration: chosenSong.duration,
+        url: chosenSong.url,
+        thumbnail: chosenSong.thumbnail
+      })
+    } catch (error) {
+      this.logger.error('Failed to save song when playing chosen song', error)
+    }
 
     // Trả về thông tin bài hát đang phát và hàng đợi đã cập nhật
     return { nowPlaying: nowPlayingData, queue }
@@ -561,6 +590,11 @@ class RoomMusicServices {
     }
 
     return billService.getBill(activeSchedule._id?.toString())
+  }
+
+  async getSongsInCollection() {
+    const songs = await databaseService.songs.find({}).toArray()
+    return songs
   }
 }
 

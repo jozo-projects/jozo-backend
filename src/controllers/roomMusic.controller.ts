@@ -8,6 +8,7 @@ import { AddSongRequestBody } from '~/models/requests/Song.request'
 import { VideoSchema } from '~/models/schemas/Video.schema'
 import redis from '~/services/redis.service'
 import { roomMusicServices } from '~/services/roomMusic.service'
+import { songService } from '~/services/song.service'
 import serverService from '~/services/server.service'
 import { fetchVideoInfo } from '~/utils/common'
 
@@ -75,6 +76,44 @@ export const addSong = async (
         nowPlaying: nowPlaying,
         queue: updatedQueue
       }
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+/**
+ * @description Save song to library (upsert by video_id)
+ * @path /song-queue/rooms/:roomId/save-song
+ * @method POST
+ * @body {video_id: string, title: string, thumbnail?: string, author: string, duration?: number, url?: string}
+ */
+export const saveSong = async (
+  req: Request<ParamsDictionary, any, AddSongRequestBody>,
+  res: Response,
+  next: NextFunction
+) => {
+  const { video_id, title, thumbnail, author, duration, url } = req.body
+
+  try {
+    if (!video_id || !title || !author) {
+      return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
+        message: 'video_id, title và author là bắt buộc'
+      })
+    }
+
+    const savedSong = await songService.upsertSong({
+      video_id,
+      title,
+      author,
+      duration,
+      url,
+      thumbnail
+    })
+
+    return res.status(HTTP_STATUS_CODE.OK).json({
+      message: SONG_QUEUE_MESSAGES.SAVE_SONG_SUCCESS,
+      result: savedSong
     })
   } catch (error) {
     next(error)
@@ -505,7 +544,7 @@ export const streamVideo = async (req: Request, res: Response, next: NextFunctio
  * @method GET
  * @author QuangDoo
  */
-export const searchSongs = async (req: Request, res: Response) => {
+export const searchSongs = async (req: Request, res: Response, next: NextFunction) => {
   const { q, limit = '30' } = req.query
   const parsedLimit = parseInt(limit as string, 10)
 
@@ -582,18 +621,30 @@ export const searchSongs = async (req: Request, res: Response) => {
 
     const videos = await searchPromise
 
-    console.log('Returning videos count:', videos.length)
+    // Ưu tiên các bài đã lưu: lấy map saved theo video_id
+    const savedMap = await songService.getSavedSongsByVideoIds(videos.map((video) => video.video_id))
+
+    const savedVideos: Array<VideoSchema & { is_saved: boolean }> = []
+    const otherVideos: Array<VideoSchema & { is_saved: boolean }> = []
+
+    videos.forEach((video) => {
+      const withFlag = { ...video, is_saved: Boolean(savedMap[video.video_id]) }
+      if (withFlag.is_saved) {
+        savedVideos.push(withFlag)
+      } else {
+        otherVideos.push(withFlag)
+      }
+    })
+
+    const prioritizedVideos = [...savedVideos, ...otherVideos]
 
     return res.status(HTTP_STATUS_CODE.OK).json({
       message: SONG_QUEUE_MESSAGES.SEARCH_SONGS_SUCCESS,
-      result: videos
+      result: prioritizedVideos
     })
   } catch (error) {
     console.error('Search error:', error)
-    return res.status(HTTP_STATUS_CODE.OK).json({
-      message: SONG_QUEUE_MESSAGES.SEARCH_SONGS_SUCCESS,
-      result: [] // Trả về mảng rỗng trong trường hợp lỗi
-    })
+    next(error)
   }
 }
 
@@ -605,6 +656,18 @@ export const getBillByRoom = async (req: Request, res: Response, next: NextFunct
     return res.status(HTTP_STATUS_CODE.OK).json({
       message: 'Get bill successfully',
       result: bill
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+export const getSongsInCollection = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const songs = await roomMusicServices.getSongsInCollection()
+    return res.status(HTTP_STATUS_CODE.OK).json({
+      message: 'Get songs in collection successfully',
+      result: songs
     })
   } catch (error) {
     next(error)
