@@ -1,4 +1,4 @@
-import { FindOneAndUpdateOptions } from 'mongodb'
+import { FindOneAndUpdateOptions, ModifyResult } from 'mongodb'
 import { Song, SongSchema } from '~/models/schemas/Song.schema'
 import databaseService from './database.service'
 import { Logger } from '~/utils/logger'
@@ -32,7 +32,7 @@ class SongService {
       returnDocument: 'after'
     }
 
-    const result = await databaseService.songs.findOneAndUpdate(
+    const result: ModifyResult<Song> | null = await databaseService.songs.findOneAndUpdate(
       { video_id: song.video_id },
       {
         $set: payload,
@@ -41,8 +41,10 @@ class SongService {
       options
     )
 
+    const updatedSong = result?.value ?? null
+
     // Mongo driver có thể trả về null nếu không tìm thấy và không upsert thành công
-    if (!result.value) {
+    if (!updatedSong) {
       // Thử truy vấn lại để tránh trả null
       const found = await databaseService.songs.findOne({ video_id: song.video_id })
       if (!found) {
@@ -51,7 +53,7 @@ class SongService {
       return new SongSchema(found)
     }
 
-    return new SongSchema(result.value)
+    return new SongSchema(updatedSong)
   }
 
   async getSavedSongsByVideoIds(videoIds: string[]): Promise<Record<string, Song>> {
