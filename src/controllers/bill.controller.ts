@@ -46,7 +46,7 @@ export const getBill = async (req: Request, res: Response) => {
 
 export const printBill = async (req: Request, res: Response) => {
   const { scheduleId } = req.params
-  const { actualEndTime, actualStartTime, paymentMethod, promotionId } = req.body
+  const { actualEndTime, actualStartTime, paymentMethod, promotionId, applyFreeHourPromotion } = req.body
 
   // Validate ObjectId format for scheduleId
   if (!ObjectId.isValid(scheduleId)) {
@@ -55,12 +55,17 @@ export const printBill = async (req: Request, res: Response) => {
     })
   }
 
+  // Parse applyFreeHourPromotion từ body (có thể là true/false hoặc 'true'/'false')
+  const shouldApplyFreeHourPromotion =
+    applyFreeHourPromotion === true || applyFreeHourPromotion === 'true' || String(applyFreeHourPromotion) === 'true'
+
   const billData = await billService.getBill(
     scheduleId,
     actualEndTime as string,
     paymentMethod,
     promotionId as string,
-    actualStartTime as string
+    actualStartTime as string,
+    shouldApplyFreeHourPromotion
   )
 
   const bill = await billService.printBill(billData)

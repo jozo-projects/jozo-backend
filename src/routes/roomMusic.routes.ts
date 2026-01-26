@@ -17,6 +17,8 @@ import {
   normalizeSongsLibrary,
   saveSong,
   searchSongs,
+  searchLocalSongs,
+  searchRemoteSongs,
   sendNotification,
   streamVideo,
   updateQueue
@@ -138,12 +140,30 @@ roomMusicRouter.get('/:roomId/now-playing', async (req, res, next) => {
 roomMusicRouter.get('/:roomId/bill', wrapRequestHandler(getBillByRoom))
 
 /**
- * @description search songs
+ * @description search songs (legacy - uses socket)
  * @path /rooms/search-songs
  * @method GET
  * @author QuangDoo
  */
 roomMusicRouter.get('/:roomId/search-songs', wrapRequestHandler(searchSongs))
+
+/**
+ * @description Search local songs from database (fast, returns immediately)
+ * @path /room-music/search-songs/local
+ * @method GET
+ * @query q: string, limit?: number
+ * @author QuangDoo
+ */
+roomMusicRouter.get('/search-songs/local', wrapRequestHandler(searchLocalSongs))
+
+/**
+ * @description Search remote songs from YouTube (may take longer, uses Redis cache)
+ * @path /room-music/search-songs/remote
+ * @method GET
+ * @query q: string, limit?: number
+ * @author QuangDoo
+ */
+roomMusicRouter.get('/search-songs/remote', wrapRequestHandler(searchRemoteSongs))
 
 /**
  * @description Get song name

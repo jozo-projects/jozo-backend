@@ -541,7 +541,7 @@ export const streamVideo = async (req: Request, res: Response, next: NextFunctio
 
 /**
  * @description Search songs
- * @path /song-queue/rooms/:roomId/search-songs
+ * @path /room-music/:roomId/search-songs
  * @method GET
  * @author QuangDoo
  */
@@ -551,6 +551,7 @@ export const searchSongs = async (req: Request, res: Response, next: NextFunctio
   const parsedLimit = parseInt(limit as string, 10)
   const requestId = randomUUID()
   const LOCAL_LIMIT = 25
+  const YT_SEARCH_TIMEOUT = 20000 // 20 giây timeout cho yt-search
 
   // Validate search query
   if (!q || typeof q !== 'string') {
@@ -590,9 +591,32 @@ export const searchSongs = async (req: Request, res: Response, next: NextFunctio
 
     // 2) Chạy yt-search bất đồng bộ và đẩy kết quả qua socket
     void (async () => {
-      try {
-        // Thực hiện yt-search không timeout để giữ nguyên hành vi gốc
+      const startTime = Date.now()
+      let socketEmitted = false
 
+      // Helper function để emit socket một cách an toàn
+      const safeEmit = (data: { requestId: string; source: string; remote: any[]; status: string }) => {
+        try {
+          // Kiểm tra số lượng socket trong room trước khi emit
+          const room = serverService.io.sockets.adapter.rooms.get(roomId)
+          const socketCount = room ? room.size : 0
+
+          if (socketCount === 0) {
+            console.log(`[search-songs] Room ${roomId} has no active sockets, skipping emit for requestId ${requestId}`)
+            return
+          }
+
+          console.log(
+            `[search-songs] Emitting to room ${roomId} (${socketCount} sockets) - requestId: ${requestId}, status: ${data.status}`
+          )
+          serverService.io.to(roomId).emit('search_songs_completed', data)
+          socketEmitted = true
+        } catch (emitError) {
+          console.error(`[search-songs] Error emitting socket for requestId ${requestId}:`, emitError)
+        }
+      }
+
+      try {
         const searchOptions = {
           query: q,
           pageStart: 1,
@@ -600,87 +624,334 @@ export const searchSongs = async (req: Request, res: Response, next: NextFunctio
           limit: parsedLimit
         }
 
-        try {
-          const result = await ytSearch(searchOptions)
-          console.log('[yt-search] query=%s videos=%d', q, result.videos?.length ?? 0)
-          const videos = result.videos
-            .filter((video) => video.seconds >= 30)
-            .slice(0, parsedLimit)
-            .map((video) => ({
-              ...new VideoSchema({
-                video_id: video.videoId,
-                title: video.title,
-                duration: video.seconds,
-                url: video.url,
-                thumbnail: video.thumbnail || '',
-                author: video.author.name
-              }),
-              views: video.views || 0
-            }))
+        console.log(`[search-songs] Starting yt-search for query: "${q}", requestId: ${requestId}, roomId: ${roomId}`)
 
-          const savedMap = await songService.getSavedSongsByVideoIds(videos.map((video) => video.video_id))
+        // Thêm timeout cho yt-search để tránh bị treo
+        const searchPromise = ytSearch(searchOptions)
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          setTimeout(() => {
+            reject(new Error(`yt-search timeout after ${YT_SEARCH_TIMEOUT}ms`))
+          }, YT_SEARCH_TIMEOUT)
+        })
 
-          const savedVideos: Array<VideoSchema & { is_saved: boolean; views: number }> = []
-          const otherVideos: Array<VideoSchema & { is_saved: boolean; views: number }> = []
+        const result = await Promise.race([searchPromise, timeoutPromise])
+        const searchDuration = Date.now() - startTime
+        console.log(
+          `[yt-search] query="${q}" videos=${result.videos?.length ?? 0} duration=${searchDuration}ms requestId=${requestId}`
+        )
 
-          videos.forEach((video) => {
-            const withFlag = { ...video, is_saved: Boolean(savedMap[video.video_id]) }
-            if (withFlag.is_saved) {
-              savedVideos.push(withFlag)
-            } else {
-              otherVideos.push(withFlag)
+        const videos = result.videos
+          .filter((video) => video.seconds >= 30)
+          .slice(0, parsedLimit)
+          .map((video) => ({
+            ...new VideoSchema({
+              video_id: video.videoId,
+              title: video.title,
+              duration: video.seconds,
+              url: video.url,
+              thumbnail: video.thumbnail || '',
+              author: video.author.name
+            }),
+            views: video.views || 0
+          }))
+
+        const savedMap = await songService.getSavedSongsByVideoIds(videos.map((video) => video.video_id))
+
+        const savedVideos: Array<VideoSchema & { is_saved: boolean; views: number }> = []
+        const otherVideos: Array<VideoSchema & { is_saved: boolean; views: number }> = []
+
+        videos.forEach((video) => {
+          const withFlag = { ...video, is_saved: Boolean(savedMap[video.video_id]) }
+          if (withFlag.is_saved) {
+            savedVideos.push(withFlag)
+          } else {
+            otherVideos.push(withFlag)
+          }
+        })
+
+        // Sắp xếp từng nhóm theo view count (giảm dần)
+        savedVideos.sort((a, b) => (b.views || 0) - (a.views || 0))
+        otherVideos.sort((a, b) => (b.views || 0) - (a.views || 0))
+
+        const prioritizedVideos = [...savedVideos, ...otherVideos]
+          .map((video) => {
+            const scored = songService.computeMatchScore(q as string, video.title, video.author)
+            return {
+              ...video,
+              source: 'yt',
+              match_score: scored.match_score,
+              is_phrase_match: scored.is_phrase_match
             }
           })
+          // Lọc bỏ các video có match_score quá thấp (không liên quan)
+          .filter((video) => video.match_score >= 0)
+          // Sắp xếp theo match_score giảm dần để ưu tiên kết quả liên quan nhất
+          .sort((a, b) => b.match_score - a.match_score)
+          // Giới hạn số lượng kết quả
+          .slice(0, parsedLimit)
 
-          // Sắp xếp từng nhóm theo view count (giảm dần)
-          savedVideos.sort((a, b) => (b.views || 0) - (a.views || 0))
-          otherVideos.sort((a, b) => (b.views || 0) - (a.views || 0))
+        console.log(`[yt-emit] count=${prioritizedVideos.length} requestId=${requestId} roomId=${roomId}`)
+        safeEmit({
+          requestId,
+          source: 'yt',
+          remote: prioritizedVideos,
+          status: 'ok'
+        })
+      } catch (error) {
+        const errorDuration = Date.now() - startTime
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+        console.error(
+          `[search-songs] Error after ${errorDuration}ms - requestId: ${requestId}, roomId: ${roomId}, error:`,
+          errorMessage
+        )
 
-          const prioritizedVideos = [...savedVideos, ...otherVideos]
-            .map((video) => {
-              const scored = songService.computeMatchScore(q as string, video.title, video.author)
-              return {
-                ...video,
-                source: 'yt',
-                match_score: scored.match_score,
-                is_phrase_match: scored.is_phrase_match
-              }
-            })
-            // Lọc bỏ các video có match_score quá thấp (không liên quan)
-            .filter((video) => video.match_score >= 0)
-            // Sắp xếp theo match_score giảm dần để ưu tiên kết quả liên quan nhất
-            .sort((a, b) => b.match_score - a.match_score)
-            // Giới hạn số lượng kết quả
-            .slice(0, parsedLimit)
-
-          console.log('[yt-emit] count=%d', prioritizedVideos.length)
-          serverService.io.to(roomId).emit('search_songs_completed', {
-            requestId,
-            source: 'yt',
-            remote: prioritizedVideos,
-            status: 'ok'
-          })
-        } catch (error) {
-          console.error('Search error (async yt):', error)
-          serverService.io.to(roomId).emit('search_songs_completed', {
+        // Đảm bảo luôn emit error response để client biết
+        if (!socketEmitted) {
+          safeEmit({
             requestId,
             source: 'yt',
             remote: [],
             status: 'error'
           })
         }
-      } catch (error) {
-        console.error('Search error (async yt):', error)
-        serverService.io.to(roomId).emit('search_songs_completed', {
-          requestId,
-          source: 'yt',
-          remote: [],
-          status: 'error'
-        })
       }
     })()
   } catch (error) {
-    console.error('Search error:', error)
+    console.error('[search-songs] Fatal error:', error)
+    next(error)
+  }
+}
+
+/**
+ * @description Search local songs (from database) - Fast response
+ * @path /room-music/search-songs/local
+ * @method GET
+ * @query q: string, limit?: number
+ * @author QuangDoo
+ */
+export const searchLocalSongs = async (req: Request, res: Response, next: NextFunction) => {
+  const { q, limit = '25' } = req.query
+  const parsedLimit = parseInt(limit as string, 10)
+
+  // Validate search query
+  if (!q || typeof q !== 'string') {
+    return res.status(400).json({ error: 'Missing or invalid search query' })
+  }
+
+  // Validate limit parameter
+  if (isNaN(parsedLimit) || parsedLimit < 1 || parsedLimit > 50) {
+    return res.status(400).json({ error: 'Invalid limit parameter. Must be between 1 and 50' })
+  }
+
+  try {
+    const startTime = Date.now()
+    const localSongs = await songService.searchSongs(q, parsedLimit)
+    const searchDuration = Date.now() - startTime
+
+    const localResults = localSongs.map((song) => ({
+      ...new VideoSchema({
+        video_id: song.video_id,
+        title: song.title,
+        duration: song.duration ?? 0,
+        url: song.url ?? '',
+        thumbnail: song.thumbnail ?? '',
+        author: song.author
+      }),
+      match_score: song.match_score,
+      is_phrase_match: song.is_phrase_match,
+      is_saved: true,
+      source: 'local'
+    }))
+
+    console.log(`[search-local] query="${q}" results=${localResults.length} duration=${searchDuration}ms`)
+
+    res.status(HTTP_STATUS_CODE.OK).json({
+      message: SONG_QUEUE_MESSAGES.SEARCH_SONGS_SUCCESS,
+      result: {
+        songs: localResults,
+        source: 'local',
+        duration: searchDuration
+      }
+    })
+  } catch (error) {
+    console.error('[search-local] Error:', error)
+    next(error)
+  }
+}
+
+/**
+ * @description Search remote songs (from YouTube) - May take longer, uses Redis cache
+ * @path /room-music/search-songs/remote
+ * @method GET
+ * @query q: string, limit?: number
+ * @author QuangDoo
+ */
+export const searchRemoteSongs = async (req: Request, res: Response, next: NextFunction) => {
+  const { q, limit = '30' } = req.query
+  const parsedLimit = parseInt(limit as string, 10)
+  const YT_SEARCH_TIMEOUT = 20000 // 20 giây timeout
+
+  // Validate search query
+  if (!q || typeof q !== 'string') {
+    return res.status(400).json({ error: 'Missing or invalid search query' })
+  }
+
+  // Validate limit parameter
+  if (isNaN(parsedLimit) || parsedLimit < 1 || parsedLimit > 50) {
+    return res.status(400).json({ error: 'Invalid limit parameter. Must be between 1 and 50' })
+  }
+
+  try {
+    const startTime = Date.now()
+    const cacheKey = `remote_search:${q.toLowerCase().trim()}:${parsedLimit}`
+    const CACHE_TTL = 300 // Cache 5 phút
+
+    // Kiểm tra cache trước
+    const cachedResult = await redis.get(cacheKey)
+    if (cachedResult) {
+      const cachedData = JSON.parse(cachedResult)
+      console.log(`[search-remote] Cache hit for query="${q}"`)
+      return res.status(HTTP_STATUS_CODE.OK).json({
+        message: SONG_QUEUE_MESSAGES.SEARCH_SONGS_SUCCESS,
+        result: {
+          ...cachedData,
+          source: 'remote',
+          cached: true,
+          duration: Date.now() - startTime
+        }
+      })
+    }
+
+    // Kiểm tra xem có request đang chạy không (tránh duplicate requests)
+    const lockKey = `remote_search_lock:${q.toLowerCase().trim()}:${parsedLimit}`
+    const lockExists = await redis.exists(lockKey)
+
+    if (lockExists) {
+      // Nếu có request đang chạy, đợi một chút rồi check cache lại
+      console.log(`[search-remote] Request in progress for query="${q}", waiting...`)
+      await new Promise((resolve) => setTimeout(resolve, 1000))
+
+      const retryCachedResult = await redis.get(cacheKey)
+      if (retryCachedResult) {
+        const cachedData = JSON.parse(retryCachedResult)
+        return res.status(HTTP_STATUS_CODE.OK).json({
+          message: SONG_QUEUE_MESSAGES.SEARCH_SONGS_SUCCESS,
+          result: {
+            ...cachedData,
+            source: 'remote',
+            cached: true,
+            duration: Date.now() - startTime
+          }
+        })
+      }
+    }
+
+    // Set lock để tránh duplicate requests
+    await redis.setex(lockKey, 30, '1') // Lock trong 30 giây
+
+    try {
+      const searchOptions = {
+        query: q,
+        pageStart: 1,
+        pageEnd: 1,
+        limit: parsedLimit
+      }
+
+      console.log(`[search-remote] Starting yt-search for query: "${q}"`)
+
+      // Thêm timeout cho yt-search
+      const searchPromise = ytSearch(searchOptions)
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => {
+          reject(new Error(`yt-search timeout after ${YT_SEARCH_TIMEOUT}ms`))
+        }, YT_SEARCH_TIMEOUT)
+      })
+
+      const result = await Promise.race([searchPromise, timeoutPromise])
+      const searchDuration = Date.now() - startTime
+
+      const videos = result.videos
+        .filter((video) => video.seconds >= 30)
+        .slice(0, parsedLimit)
+        .map((video) => ({
+          ...new VideoSchema({
+            video_id: video.videoId,
+            title: video.title,
+            duration: video.seconds,
+            url: video.url,
+            thumbnail: video.thumbnail || '',
+            author: video.author.name
+          }),
+          views: video.views || 0
+        }))
+
+      const savedMap = await songService.getSavedSongsByVideoIds(videos.map((video) => video.video_id))
+
+      const savedVideos: Array<VideoSchema & { is_saved: boolean; views: number }> = []
+      const otherVideos: Array<VideoSchema & { is_saved: boolean; views: number }> = []
+
+      videos.forEach((video) => {
+        const withFlag = { ...video, is_saved: Boolean(savedMap[video.video_id]) }
+        if (withFlag.is_saved) {
+          savedVideos.push(withFlag)
+        } else {
+          otherVideos.push(withFlag)
+        }
+      })
+
+      // Sắp xếp từng nhóm theo view count (giảm dần)
+      savedVideos.sort((a, b) => (b.views || 0) - (a.views || 0))
+      otherVideos.sort((a, b) => (b.views || 0) - (a.views || 0))
+
+      const prioritizedVideos = [...savedVideos, ...otherVideos]
+        .map((video) => {
+          const scored = songService.computeMatchScore(q as string, video.title, video.author)
+          return {
+            ...video,
+            source: 'yt',
+            match_score: scored.match_score,
+            is_phrase_match: scored.is_phrase_match
+          }
+        })
+        .filter((video) => video.match_score >= 0)
+        .sort((a, b) => b.match_score - a.match_score)
+        .slice(0, parsedLimit)
+
+      const responseData = {
+        songs: prioritizedVideos,
+        source: 'remote',
+        cached: false,
+        duration: searchDuration
+      }
+
+      // Lưu vào cache
+      await redis.setex(cacheKey, CACHE_TTL, JSON.stringify(responseData))
+
+      console.log(`[search-remote] query="${q}" results=${prioritizedVideos.length} duration=${searchDuration}ms`)
+
+      // Xóa lock
+      await redis.del(lockKey)
+
+      res.status(HTTP_STATUS_CODE.OK).json({
+        message: SONG_QUEUE_MESSAGES.SEARCH_SONGS_SUCCESS,
+        result: responseData
+      })
+    } catch (error) {
+      // Xóa lock khi có lỗi
+      await redis.del(lockKey)
+
+      const errorDuration = Date.now() - startTime
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      console.error(`[search-remote] Error after ${errorDuration}ms - query: "${q}", error:`, errorMessage)
+
+      res.status(HTTP_STATUS_CODE.INTERNAL_SERVER_ERROR).json({
+        error: 'Failed to search remote songs',
+        message: errorMessage,
+        duration: errorDuration
+      })
+    }
+  } catch (error) {
+    console.error('[search-remote] Fatal error:', error)
     next(error)
   }
 }
