@@ -375,6 +375,7 @@ export class BillService {
     const dayType = await this.determineDayType(dayjs.utc(schedule.startTime).tz('Asia/Ho_Chi_Minh').toDate())
 
     // Tính tổng snack và drinks để kiểm tra điều kiện áp dụng freeHourPromotion
+    // Chỉ cần tổng snacks + drinks >= 35000 là đủ điều kiện
     let totalSnacksAndDrinks = 0
     if (order && order.order) {
       // Tính tổng đồ uống
@@ -487,10 +488,10 @@ export class BillService {
 
     // Kiểm tra điều kiện áp dụng freeHourPromotion:
     // 1. FE phải gửi flag applyFreeHourPromotion = true
-    // 2. Tổng snack + drinks > 35000
+    // 2. Tổng snacks + drinks >= 35000
     // 3. Thời gian sử dụng >= 120 phút
     const eligibleForFreeHour =
-      applyFreeHourPromotion === true && totalSnacksAndDrinks > 35000 && sessionDurationMinutes >= 120
+      applyFreeHourPromotion === true && totalSnacksAndDrinks >= 35000 && sessionDurationMinutes >= 120
 
     let freeMinutesLeft = eligibleForFreeHour ? 60 : 0
     let freeMinutesApplied = 0
@@ -1749,7 +1750,8 @@ export class BillService {
     const displayHours = Math.floor(totalDurationMinutes / 60)
     const displayMinutes = totalDurationMinutes % 60
 
-    printer.text(`Tong gio su dung: ${displayHours} gio ${displayMinutes} phut`)
+    printer
+      .text(`Tong gio su dung: ${displayHours} gio ${displayMinutes} phut`)
       .align('ct')
       .text('--------------------------------------------')
       .style('b')
@@ -1865,7 +1867,9 @@ export class BillService {
     // Hiển thị discount từ gift (discount_percentage hoặc discount_amount) - in thẳng hàng
     if (
       bill.gift &&
-      (bill.gift.type === 'discount' || bill.gift.type === 'discount_percentage' || bill.gift.type === 'discount_amount')
+      (bill.gift.type === 'discount' ||
+        bill.gift.type === 'discount_percentage' ||
+        bill.gift.type === 'discount_amount')
     ) {
       let subtotalAmount = 0
       bill.items.forEach((item) => {

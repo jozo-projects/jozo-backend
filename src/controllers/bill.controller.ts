@@ -1,12 +1,12 @@
-import { Request, Response } from 'express'
-import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
-import billService, { printUnicodeWithEscpos, printBitmapUnicode, printBitmapWithEscpos } from '~/services/bill.service'
 import dayjs from 'dayjs'
+import timezone from 'dayjs/plugin/timezone'
+import utc from 'dayjs/plugin/utc'
 import weekOfYear from 'dayjs/plugin/weekOfYear'
 import weekday from 'dayjs/plugin/weekday'
-import utc from 'dayjs/plugin/utc'
-import timezone from 'dayjs/plugin/timezone'
+import { Request, Response } from 'express'
 import { ObjectId } from 'mongodb'
+import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
+import billService from '~/services/bill.service'
 import databaseService from '~/services/database.service'
 
 // Extend dayjs with the required plugins
@@ -27,8 +27,7 @@ export const getBill = async (req: Request, res: Response) => {
   }
 
   // Parse applyFreeHourPromotion từ query string (có thể là 'true' hoặc 'false')
-  const shouldApplyFreeHourPromotion =
-    applyFreeHourPromotion === 'true' || String(applyFreeHourPromotion) === 'true'
+  const shouldApplyFreeHourPromotion = applyFreeHourPromotion === 'true' || String(applyFreeHourPromotion) === 'true'
 
   const bill = await billService.getBill(
     scheduleId,
