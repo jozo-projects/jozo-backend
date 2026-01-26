@@ -17,7 +17,7 @@ dayjs.extend(timezone)
 
 export const getBill = async (req: Request, res: Response) => {
   const { scheduleId } = req.params
-  const { actualEndTime, actualStartTime, promotionId } = req.query
+  const { actualEndTime, actualStartTime, promotionId, applyFreeHourPromotion } = req.query
 
   // Validate ObjectId format for scheduleId
   if (!ObjectId.isValid(scheduleId)) {
@@ -26,12 +26,17 @@ export const getBill = async (req: Request, res: Response) => {
     })
   }
 
+  // Parse applyFreeHourPromotion từ query string (có thể là 'true' hoặc 'false')
+  const shouldApplyFreeHourPromotion =
+    applyFreeHourPromotion === 'true' || String(applyFreeHourPromotion) === 'true'
+
   const bill = await billService.getBill(
     scheduleId,
     actualEndTime as string,
     undefined,
     promotionId as string,
-    actualStartTime as string
+    actualStartTime as string,
+    shouldApplyFreeHourPromotion
   )
 
   return res.status(HTTP_STATUS_CODE.OK).json({

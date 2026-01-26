@@ -4,6 +4,7 @@ import {
   addSong,
   addSongsToQueue,
   controlPlayback,
+  deleteSong,
   getBillByRoom,
   getSongName,
   getSongsInCollection,
@@ -13,6 +14,7 @@ import {
   playNextSong,
   removeAllSongsInQueue,
   removeSong,
+  normalizeSongsLibrary,
   saveSong,
   searchSongs,
   sendNotification,
@@ -33,6 +35,21 @@ const roomMusicRouter = Router()
  * @author QuangDoo
  */
 roomMusicRouter.get('/songs-collection', wrapRequestHandler(getSongsInCollection))
+
+/**
+ * @description Delete song from collection
+ * @path /room-music/songs-collection/:videoId
+ * @method DELETE
+ * @author QuangDoo
+ */
+roomMusicRouter.delete('/songs-collection/:videoId', wrapRequestHandler(deleteSong))
+
+/**
+ * @description Normalize songs library (fill normalized fields)
+ * @path /room-music/songs/normalize
+ * @method POST
+ */
+roomMusicRouter.post('/songs/normalize', wrapRequestHandler(normalizeSongsLibrary))
 
 /**
  * @description Add song to queue

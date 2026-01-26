@@ -592,9 +592,57 @@ class RoomMusicServices {
     return billService.getBill(activeSchedule._id?.toString())
   }
 
-  async getSongsInCollection() {
-    const songs = await databaseService.songs.find({}).toArray()
-    return songs
+  async getSongsInCollection(options?: { page?: number; limit?: number; keyword?: string }) {
+    const page = options?.page ?? 1
+    const limit = options?.limit ?? 50
+    const keyword = options?.keyword?.trim()
+
+    // Validate pagination
+    const pageNum = Math.max(1, page)
+    const limitNum = Math.min(Math.max(1, limit), 100) // Max 100 per page
+    const skip = (pageNum - 1) * limitNum
+
+    // Nếu có keyword, sử dụng search logic
+    if (keyword) {
+      // Lấy đủ kết quả để paginate (tối đa 1000 để tránh quá tải)
+      const maxSearchLimit = Math.min(1000, pageNum * limitNum + limitNum)
+      const searchResults = await songService.searchSongs(keyword, maxSearchLimit)
+
+      // Tính toán pagination
+      const total = searchResults.length
+      const paginatedResults = searchResults.slice(skip, skip + limitNum)
+      const hasMoreResults = total >= maxSearchLimit // Nếu đạt max limit, có thể còn nhiều kết quả hơn
+
+      return {
+        songs: paginatedResults,
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total: hasMoreResults ? maxSearchLimit : total, // Nếu có nhiều hơn, chỉ hiển thị số đã tìm được
+          totalPages: hasMoreResults ? Math.ceil(maxSearchLimit / limitNum) : Math.ceil(total / limitNum),
+          hasNextPage: hasMoreResults || skip + limitNum < total,
+          hasPrevPage: pageNum > 1
+        }
+      }
+    }
+
+    // Nếu không có keyword, chỉ paginate tất cả songs
+    const [songs, total] = await Promise.all([
+      databaseService.songs.find({}).sort({ updated_at: -1, created_at: -1 }).skip(skip).limit(limitNum).toArray(),
+      databaseService.songs.countDocuments({})
+    ])
+
+    return {
+      songs,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total: total,
+        totalPages: Math.ceil(total / limitNum),
+        hasNextPage: skip + limitNum < total,
+        hasPrevPage: pageNum > 1
+      }
+    }
   }
 }
 

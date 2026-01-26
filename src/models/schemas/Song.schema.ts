@@ -9,6 +9,8 @@ export interface Song {
   duration?: number
   url?: string
   thumbnail?: string
+  title_normalized?: string
+  author_normalized?: string
   created_at: Date
   updated_at: Date
 }
@@ -21,6 +23,8 @@ export class SongSchema implements Song {
   duration?: number
   url?: string
   thumbnail?: string
+  title_normalized?: string
+  author_normalized?: string
   created_at: Date
   updated_at: Date
 

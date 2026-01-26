@@ -329,7 +329,8 @@ export class BillService {
     actualEndTime?: string,
     paymentMethod?: string,
     promotionId?: string,
-    actualStartTime?: string
+    actualStartTime?: string,
+    applyFreeHourPromotion?: boolean
   ): Promise<IBill> {
     // Validate ObjectId format for scheduleId
     if (!ObjectId.isValid(scheduleId)) {
@@ -372,6 +373,31 @@ export class BillService {
       })
     }
     const dayType = await this.determineDayType(dayjs.utc(schedule.startTime).tz('Asia/Ho_Chi_Minh').toDate())
+
+    // Tính tổng snack và drinks để kiểm tra điều kiện áp dụng freeHourPromotion
+    let totalSnacksAndDrinks = 0
+    if (order && order.order) {
+      // Tính tổng đồ uống
+      if (order.order.drinks && typeof order.order.drinks === 'object' && Object.keys(order.order.drinks).length > 0) {
+        for (const [menuId, quantity] of Object.entries(order.order.drinks)) {
+          const menuItem = await this.findMenuItemById(menuId, menu)
+          if (menuItem) {
+            const price = this.parsePrice(menuItem.price)
+            totalSnacksAndDrinks += quantity * price
+          }
+        }
+      }
+      // Tính tổng đồ ăn
+      if (order.order.snacks && typeof order.order.snacks === 'object' && Object.keys(order.order.snacks).length > 0) {
+        for (const [menuId, quantity] of Object.entries(order.order.snacks)) {
+          const menuItem = await this.findMenuItemById(menuId, menu)
+          if (menuItem) {
+            const price = this.parsePrice(menuItem.price)
+            totalSnacksAndDrinks += quantity * price
+          }
+        }
+      }
+    }
 
     // Xử lý actualStartTime nếu được cung cấp
     let validatedStartTime: Date
@@ -458,7 +484,14 @@ export class BillService {
 
     const sessionDurationSeconds = dayjs(validatedEndTime).diff(dayjs(startTime), 'second')
     const sessionDurationMinutes = Math.ceil(sessionDurationSeconds / 60)
-    const eligibleForFreeHour = !!schedule?.applyFreeHourPromo && sessionDurationMinutes >= 120
+
+    // Kiểm tra điều kiện áp dụng freeHourPromotion:
+    // 1. FE phải gửi flag applyFreeHourPromotion = true
+    // 2. Tổng snack + drinks > 35000
+    // 3. Thời gian sử dụng >= 120 phút
+    const eligibleForFreeHour =
+      applyFreeHourPromotion === true && totalSnacksAndDrinks > 35000 && sessionDurationMinutes >= 120
+
     let freeMinutesLeft = eligibleForFreeHour ? 60 : 0
     let freeMinutesApplied = 0
     let freeAmountTotal = 0

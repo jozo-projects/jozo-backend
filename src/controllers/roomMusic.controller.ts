@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { NextFunction, Request, Response } from 'express'
 import { type ParamsDictionary } from 'express-serve-static-core'
+import { randomUUID } from 'crypto'
 import ytSearch from 'yt-search'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { SONG_QUEUE_MESSAGES } from '~/constants/messages'
@@ -546,7 +547,10 @@ export const streamVideo = async (req: Request, res: Response, next: NextFunctio
  */
 export const searchSongs = async (req: Request, res: Response, next: NextFunction) => {
   const { q, limit = '30' } = req.query
+  const { roomId } = req.params
   const parsedLimit = parseInt(limit as string, 10)
+  const requestId = randomUUID()
+  const LOCAL_LIMIT = 25
 
   // Validate search query
   if (!q || typeof q !== 'string') {
@@ -558,90 +562,123 @@ export const searchSongs = async (req: Request, res: Response, next: NextFunctio
     return res.status(400).json({ error: 'Invalid limit parameter. Must be between 1 and 50' })
   }
 
-  // Tạo một Promise với built-in timeout trong 3 giây
   try {
-    let searchPromiseResolved = false
+    // 1) Tìm nhanh trong DB và trả về ngay
+    const localSongs = await songService.searchSongs(q, LOCAL_LIMIT)
+    const localResults = localSongs.map((song) => ({
+      ...new VideoSchema({
+        video_id: song.video_id,
+        title: song.title,
+        duration: song.duration ?? 0,
+        url: song.url ?? '',
+        thumbnail: song.thumbnail ?? '',
+        author: song.author
+      }),
+      match_score: song.match_score,
+      is_phrase_match: song.is_phrase_match
+    }))
 
-    // Phương pháp 1: ytSearch với tham số đơn giản
-    const searchOptions = {
-      query: q,
-      pageStart: 1,
-      pageEnd: 1,
-      limit: parsedLimit
-    }
+    res.status(HTTP_STATUS_CODE.OK).json({
+      message: SONG_QUEUE_MESSAGES.SEARCH_SONGS_SUCCESS,
+      result: {
+        requestId,
+        local: localResults.map((video) => ({ ...video, is_saved: true, source: 'local' })),
+        remote: [],
+        remote_pending: true
+      }
+    })
 
-    console.log('Starting search with query:', q)
-
-    // Cài đặt timeout hẹp để tránh chờ quá lâu
-    // eslint-disable-next-line no-async-promise-executor
-    const searchPromise = new Promise<any[]>(async (resolve) => {
+    // 2) Chạy yt-search bất đồng bộ và đẩy kết quả qua socket
+    void (async () => {
       try {
-        // Dùng timeout tránh trường hợp ytSearch bị treo
-        setTimeout(() => {
-          if (!searchPromiseResolved) {
-            console.log('Search timeout, returning empty results')
-            resolve([])
-            searchPromiseResolved = true
-          }
-        }, 3000)
+        // Thực hiện yt-search không timeout để giữ nguyên hành vi gốc
 
-        // Thực hiện tìm kiếm
-        const result = await ytSearch(searchOptions)
+        const searchOptions = {
+          query: q,
+          pageStart: 1,
+          pageEnd: 1,
+          limit: parsedLimit
+        }
 
-        if (!searchPromiseResolved) {
-          console.log('Search completed successfully, found videos:', result.videos.length)
-
-          // Map kết quả thành video schema
+        try {
+          const result = await ytSearch(searchOptions)
+          console.log('[yt-search] query=%s videos=%d', q, result.videos?.length ?? 0)
           const videos = result.videos
             .filter((video) => video.seconds >= 30)
             .slice(0, parsedLimit)
-            .map(
-              (video) =>
-                new VideoSchema({
-                  video_id: video.videoId,
-                  title: video.title,
-                  duration: video.seconds,
-                  url: video.url,
-                  thumbnail: video.thumbnail || '',
-                  author: video.author.name
-                })
-            )
+            .map((video) => ({
+              ...new VideoSchema({
+                video_id: video.videoId,
+                title: video.title,
+                duration: video.seconds,
+                url: video.url,
+                thumbnail: video.thumbnail || '',
+                author: video.author.name
+              }),
+              views: video.views || 0
+            }))
 
-          resolve(videos)
-          searchPromiseResolved = true
+          const savedMap = await songService.getSavedSongsByVideoIds(videos.map((video) => video.video_id))
+
+          const savedVideos: Array<VideoSchema & { is_saved: boolean; views: number }> = []
+          const otherVideos: Array<VideoSchema & { is_saved: boolean; views: number }> = []
+
+          videos.forEach((video) => {
+            const withFlag = { ...video, is_saved: Boolean(savedMap[video.video_id]) }
+            if (withFlag.is_saved) {
+              savedVideos.push(withFlag)
+            } else {
+              otherVideos.push(withFlag)
+            }
+          })
+
+          // Sắp xếp từng nhóm theo view count (giảm dần)
+          savedVideos.sort((a, b) => (b.views || 0) - (a.views || 0))
+          otherVideos.sort((a, b) => (b.views || 0) - (a.views || 0))
+
+          const prioritizedVideos = [...savedVideos, ...otherVideos]
+            .map((video) => {
+              const scored = songService.computeMatchScore(q as string, video.title, video.author)
+              return {
+                ...video,
+                source: 'yt',
+                match_score: scored.match_score,
+                is_phrase_match: scored.is_phrase_match
+              }
+            })
+            // Lọc bỏ các video có match_score quá thấp (không liên quan)
+            .filter((video) => video.match_score >= 0)
+            // Sắp xếp theo match_score giảm dần để ưu tiên kết quả liên quan nhất
+            .sort((a, b) => b.match_score - a.match_score)
+            // Giới hạn số lượng kết quả
+            .slice(0, parsedLimit)
+
+          console.log('[yt-emit] count=%d', prioritizedVideos.length)
+          serverService.io.to(roomId).emit('search_songs_completed', {
+            requestId,
+            source: 'yt',
+            remote: prioritizedVideos,
+            status: 'ok'
+          })
+        } catch (error) {
+          console.error('Search error (async yt):', error)
+          serverService.io.to(roomId).emit('search_songs_completed', {
+            requestId,
+            source: 'yt',
+            remote: [],
+            status: 'error'
+          })
         }
       } catch (error) {
-        console.error('Error in ytSearch:', error)
-        if (!searchPromiseResolved) {
-          resolve([])
-          searchPromiseResolved = true
-        }
+        console.error('Search error (async yt):', error)
+        serverService.io.to(roomId).emit('search_songs_completed', {
+          requestId,
+          source: 'yt',
+          remote: [],
+          status: 'error'
+        })
       }
-    })
-
-    const videos = await searchPromise
-
-    // Ưu tiên các bài đã lưu: lấy map saved theo video_id
-    const savedMap = await songService.getSavedSongsByVideoIds(videos.map((video) => video.video_id))
-
-    const savedVideos: Array<VideoSchema & { is_saved: boolean }> = []
-    const otherVideos: Array<VideoSchema & { is_saved: boolean }> = []
-
-    videos.forEach((video) => {
-      const withFlag = { ...video, is_saved: Boolean(savedMap[video.video_id]) }
-      if (withFlag.is_saved) {
-        savedVideos.push(withFlag)
-      } else {
-        otherVideos.push(withFlag)
-      }
-    })
-
-    const prioritizedVideos = [...savedVideos, ...otherVideos]
-
-    return res.status(HTTP_STATUS_CODE.OK).json({
-      message: SONG_QUEUE_MESSAGES.SEARCH_SONGS_SUCCESS,
-      result: prioritizedVideos
-    })
+    })()
   } catch (error) {
     console.error('Search error:', error)
     next(error)
@@ -664,10 +701,84 @@ export const getBillByRoom = async (req: Request, res: Response, next: NextFunct
 
 export const getSongsInCollection = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const songs = await roomMusicServices.getSongsInCollection()
+    const { page, limit, keyword } = req.query
+
+    const pageNum = page ? parseInt(page as string, 10) : undefined
+    const limitNum = limit ? parseInt(limit as string, 10) : undefined
+    const keywordStr = keyword ? (keyword as string) : undefined
+
+    // Validate page and limit if provided
+    if (pageNum !== undefined && (isNaN(pageNum) || pageNum < 1)) {
+      return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
+        message: 'Page must be a positive number'
+      })
+    }
+
+    if (limitNum !== undefined && (isNaN(limitNum) || limitNum < 1 || limitNum > 100)) {
+      return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
+        message: 'Limit must be between 1 and 100'
+      })
+    }
+
+    const result = await roomMusicServices.getSongsInCollection({
+      page: pageNum,
+      limit: limitNum,
+      keyword: keywordStr
+    })
+
     return res.status(HTTP_STATUS_CODE.OK).json({
       message: 'Get songs in collection successfully',
-      result: songs
+      result
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+/**
+ * @description Delete song from collection
+ * @path /room-music/songs-collection/:videoId
+ * @method DELETE
+ * @author QuangDoo
+ */
+export const deleteSong = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { videoId } = req.params
+
+    if (!videoId) {
+      return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
+        message: 'Video ID is required'
+      })
+    }
+
+    const deleted = await songService.deleteSong(videoId)
+
+    if (!deleted) {
+      return res.status(HTTP_STATUS_CODE.NOT_FOUND).json({
+        message: SONG_QUEUE_MESSAGES.SONG_NOT_FOUND
+      })
+    }
+
+    return res.status(HTTP_STATUS_CODE.OK).json({
+      message: SONG_QUEUE_MESSAGES.DELETE_SONG_SUCCESS,
+      result: { video_id: videoId }
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+/**
+ * @description Normalize existing songs to support accent-insensitive search
+ * @path /room-music/songs/normalize
+ * @method POST
+ */
+export const normalizeSongsLibrary = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const result = await songService.normalizeAllSongs()
+    return res.status(HTTP_STATUS_CODE.OK).json({
+      message: 'Normalize songs successfully',
+      result
     })
   } catch (error) {
     next(error)
