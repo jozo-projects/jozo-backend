@@ -1845,23 +1845,21 @@ export class BillService {
       }
     })
 
-    // Thông tin giảm giá free giờ đầu trong khung 10-19 (đã trừ vào tổng) - in thẳng hàng
+    // Thông tin giảm giá free giờ đầu trong khung 10-19 (đã trừ vào tổng) - in xuống dòng
     if (bill.freeHourPromotion && bill.freeHourPromotion.freeMinutesApplied > 0) {
       let promotionTimeText = 'KM gio dau tien'
       const promoStartSource = bill.actualStartTime || bill.startTime
       if (promoStartSource) {
         const startTime = dayjs(promoStartSource).tz('Asia/Ho_Chi_Minh')
         const endTime = startTime.add(60, 'minute')
-        promotionTimeText = `Chuong trinh KM (${startTime.format('HH:mm')} - ${endTime.format('HH:mm')})`
+        promotionTimeText = `KM (${startTime.format('HH:mm')} - ${endTime.format('HH:mm')})`
       }
 
       printer.text('------------------------------------------------')
-      printer.tableCustom([
-        { text: promotionTimeText, width: 0.45, align: 'left' },
-        { text: '', width: 0.15, align: 'center' },
-        { text: '', width: 0.2, align: 'right' },
-        { text: `-${bill.freeHourPromotion.freeAmount.toLocaleString('vi-VN')}`, width: 0.2, align: 'right' }
-      ])
+      // In tên khuyến mãi trên dòng đầu
+      printer.align('lt').text(promotionTimeText)
+      // In số tiền giảm trên dòng thứ hai, căn phải
+      printer.align('rt').text(`-${bill.freeHourPromotion.freeAmount.toLocaleString('vi-VN')}`)
     }
 
     // Hiển thị discount từ gift (discount_percentage hoặc discount_amount) - in thẳng hàng

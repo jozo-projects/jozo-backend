@@ -551,7 +551,17 @@ export const getBillById = async (req: Request, res: Response) => {
       formattedEndTime: dayjs(bill.endTime).tz('Asia/Ho_Chi_Minh').format('DD/MM/YYYY HH:mm'),
       formattedCreatedAt: dayjs(bill.createdAt).tz('Asia/Ho_Chi_Minh').format('DD/MM/YYYY HH:mm'),
       usageDuration: billService.calculateHours(bill.startTime, bill.endTime).toFixed(2),
-      invoiceCode: bill.invoiceCode || 'N/A'
+      invoiceCode: bill.invoiceCode || 'N/A',
+      // Thêm thông tin free hour promotion để người quản lý biết bill đã được giảm giá chưa
+      freeHourPromotion: bill.freeHourPromotion
+        ? {
+            freeMinutesApplied: bill.freeHourPromotion.freeMinutesApplied,
+            freeAmount: bill.freeHourPromotion.freeAmount,
+            isApplied: true
+          }
+        : {
+            isApplied: false
+          }
     }
 
     return res.status(HTTP_STATUS_CODE.OK).json({
@@ -847,7 +857,8 @@ export const saveBill = async (req: Request, res: Response) => {
           bill.endTime ? bill.endTime.toString() : undefined,
           bill.paymentMethod,
           undefined,
-          bill.startTime ? bill.startTime.toString() : undefined
+          bill.startTime ? bill.startTime.toString() : undefined,
+          true // Tự động áp dụng free hour promotion nếu đủ điều kiện
         )
         if (computed.freeHourPromotion) {
           bill.freeHourPromotion = computed.freeHourPromotion
