@@ -169,3 +169,118 @@ export const grantMemberPoints = async (req: Request, res: Response, next: NextF
     )
   }
 }
+
+export const getMemberStreak = async (req: Request, res: Response, next: NextFunction) => {
+  const { id } = req.params
+  if (!id) {
+    return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
+      message: 'Thiếu id'
+    })
+  }
+
+  try {
+    const streak = await membershipService.getStreak(id)
+    return res.status(HTTP_STATUS_CODE.OK).json({
+      message: 'Thông tin streak',
+      result: streak
+    })
+  } catch (error) {
+    return next(
+      error instanceof ErrorWithStatus
+        ? error
+        : new ErrorWithStatus({
+            message: (error as Error)?.message || 'Không lấy được thông tin streak',
+            status: HTTP_STATUS_CODE.BAD_REQUEST
+          })
+    )
+  }
+}
+
+export const updateMemberStreak = async (req: Request, res: Response, next: NextFunction) => {
+  const { id } = req.params
+  if (!id) {
+    return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
+      message: 'Thiếu id'
+    })
+  }
+
+  try {
+    const result = await membershipService.adminUpdateStreak(id, {
+      count: req.body.count !== undefined ? Number(req.body.count) : undefined,
+      reset: req.body.reset === true
+    })
+    return res.status(HTTP_STATUS_CODE.OK).json({
+      message: result.message,
+      result: result.streak
+    })
+  } catch (error) {
+    return next(
+      error instanceof ErrorWithStatus
+        ? error
+        : new ErrorWithStatus({
+            message: (error as Error)?.message || 'Không cập nhật được streak',
+            status: HTTP_STATUS_CODE.BAD_REQUEST
+          })
+    )
+  }
+}
+
+export const getPendingGifts = async (req: Request, res: Response, next: NextFunction) => {
+  // Support both query param (phone) and path param (userId)
+  const identifier = req.query.phone ? String(req.query.phone) : req.params.id
+  
+  if (!identifier) {
+    return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
+      message: 'Thiếu phone hoặc userId'
+    })
+  }
+
+  try {
+    const data = await membershipService.getPendingAndEligibleGifts(identifier)
+    return res.status(HTTP_STATUS_CODE.OK).json({
+      message: 'Pending gifts',
+      result: data
+    })
+  } catch (error) {
+    return next(
+      error instanceof ErrorWithStatus
+        ? error
+        : new ErrorWithStatus({
+            message: (error as Error)?.message || 'Không lấy được danh sách quà',
+            status: HTTP_STATUS_CODE.BAD_REQUEST
+          })
+    )
+  }
+}
+
+export const claimGift = async (req: Request, res: Response, next: NextFunction) => {
+  // Support both userId/phone and streakCount
+  const { userIdOrPhone, phone, userId, streakCount, scheduleId } = req.body
+  const staffId = req.decoded_authorization?.user_id
+
+  // Flexible input: userIdOrPhone, phone, or userId
+  const identifier = userIdOrPhone || phone || userId
+
+  if (!identifier || !streakCount || !scheduleId || !staffId) {
+    return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
+      message: 'Thiếu userIdOrPhone/phone, streakCount, scheduleId hoặc staffId'
+    })
+  }
+
+  try {
+    const result = await membershipService.claimStreakGift(identifier, Number(streakCount), scheduleId, staffId)
+    return res.status(HTTP_STATUS_CODE.OK).json({
+      message: 'Gift đã được phục vụ',
+      result
+    })
+  } catch (error) {
+    return next(
+      error instanceof ErrorWithStatus
+        ? error
+        : new ErrorWithStatus({
+            message: (error as Error)?.message || 'Không thể claim gift',
+            status: HTTP_STATUS_CODE.BAD_REQUEST
+          })
+    )
+  }
+}

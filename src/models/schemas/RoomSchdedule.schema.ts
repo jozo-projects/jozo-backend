@@ -3,6 +3,17 @@ import { RoomScheduleStatus, RoomType } from '~/constants/enum'
 import { AddSongRequestBody } from '~/models/requests/Song.request'
 import { ScheduleGift } from '~/models/schemas/Gift.schema'
 
+export interface StreakGiftServed {
+  rewardHistoryId: ObjectId
+  giftId: ObjectId
+  giftName: string
+  giftType: string
+  giftImage?: string
+  streakCount: number
+  servedBy: ObjectId
+  servedAt: Date
+}
+
 /* eslint-disable no-unused-vars */
 export enum BookingSource {
   Staff = 'staff',
@@ -62,6 +73,9 @@ export class RoomSchedule {
 
   // 🆕 Gift information (assigned/claimed per schedule/box)
   gift?: ScheduleGift
+  
+  // Streak gifts served this session
+  streakGifts?: StreakGiftServed[]
 
   constructor(
     roomId: string,

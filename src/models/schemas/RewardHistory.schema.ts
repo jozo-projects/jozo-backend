@@ -10,6 +10,11 @@ export interface IRewardHistory {
   usedAt: Date
   meta?: Record<string, any>
   createdAt?: Date
+  // Gift claim tracking
+  giftStatus?: 'assigned' | 'claimed'
+  claimedBy?: ObjectId
+  giftClaimedAt?: Date
+  scheduleId?: ObjectId
 }
 
 export class RewardHistory {
@@ -21,6 +26,10 @@ export class RewardHistory {
   usedAt: Date
   meta?: Record<string, any>
   createdAt: Date
+  giftStatus?: 'assigned' | 'claimed'
+  claimedBy?: ObjectId
+  giftClaimedAt?: Date
+  scheduleId?: ObjectId
 
   constructor(history: IRewardHistory) {
     const now = new Date()
@@ -32,6 +41,10 @@ export class RewardHistory {
     this.usedAt = history.usedAt ?? now
     this.meta = history.meta
     this.createdAt = history.createdAt ?? now
+    this.giftStatus = history.giftStatus
+    this.claimedBy = history.claimedBy
+    this.giftClaimedAt = history.giftClaimedAt
+    this.scheduleId = history.scheduleId
   }
 }
 

@@ -848,38 +848,25 @@ export const saveBill = async (req: Request, res: Response) => {
       }
     }
 
-    const now = new Date()
-    const billToSave = {
-      ...bill,
-      _id: bill._id ? (bill._id instanceof ObjectId ? bill._id : new ObjectId(bill._id)) : new ObjectId(),
-      scheduleId: bill.scheduleId,
-      roomId: bill.roomId,
-      createdAt: bill.createdAt ? new Date(bill.createdAt) : now,
-      startTime: bill.startTime ? new Date(bill.startTime) : new Date(),
-      endTime: bill.endTime ? new Date(bill.endTime) : new Date(),
-      userId: bill.userId ? new ObjectId(bill.userId) : undefined,
-      customerPhone: bill.customerPhone,
-      invoiceCode:
-        bill.invoiceCode ||
-        `#${now.getDate().toString().padStart(2, '0')}${(now.getMonth() + 1).toString().padStart(2, '0')}${now.getHours().toString().padStart(2, '0')}${now.getMinutes().toString().padStart(2, '0')}`
+    // Sử dụng service method mới để lưu bill và tích điểm
+    const result = await billService.saveBillWithMembership(bill)
+
+    // Tạo response message dựa trên kết quả membership
+    let message = 'Bill saved successfully'
+    if (result.membership.success) {
+      message += ' and membership points added'
+    } else if (result.membership.skipped) {
+      message += ` (membership skipped: ${result.membership.reason})`
+    } else if (result.membership.error) {
+      message += ` (membership error: ${result.membership.error})`
     }
-    await databaseService.bills.insertOne(billToSave)
-    try {
-      if (billToSave.userId) {
-        await membershipService.earnPointsForUser({
-          userId: billToSave.userId,
-          totalAmount: billToSave.totalAmount,
-          source: RewardSource.Point,
-          meta: { invoiceCode: billToSave.invoiceCode, method: 'auto' },
-          visitAt: billToSave.endTime
-        })
-      }
-    } catch (err) {
-      console.warn('Tích điểm membership thất bại nhưng vẫn lưu bill:', err)
-    }
+
     return res.status(HTTP_STATUS_CODE.OK).json({
-      message: 'Bill saved successfully',
-      result: billToSave
+      message,
+      result: {
+        bill: result.bill,
+        membership: result.membership
+      }
     })
   } catch (error: any) {
     return res.status(HTTP_STATUS_CODE.INTERNAL_SERVER_ERROR).json({

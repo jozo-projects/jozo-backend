@@ -6,7 +6,11 @@ import {
   upsertMembershipConfig,
   listMembers,
   getMemberDetail,
-  grantMemberPoints
+  grantMemberPoints,
+  getMemberStreak,
+  updateMemberStreak,
+  getPendingGifts,
+  claimGift
 } from '~/controllers/membership.controller'
 import { protect } from '~/middlewares/auth.middleware'
 import { UserRole } from '~/constants/enum'
@@ -21,5 +25,10 @@ membershipRouter.put('/config', protect([UserRole.Admin]), wrapRequestHandler(up
 membershipRouter.get('/members', protect([UserRole.Admin]), wrapRequestHandler(listMembers))
 membershipRouter.get('/members/:id', protect([UserRole.Admin]), wrapRequestHandler(getMemberDetail))
 membershipRouter.post('/members/:id/points', protect([UserRole.Admin]), wrapRequestHandler(grantMemberPoints))
+membershipRouter.get('/members/:id/streak', protect([UserRole.Admin]), wrapRequestHandler(getMemberStreak))
+membershipRouter.put('/members/:id/streak', protect([UserRole.Admin]), wrapRequestHandler(updateMemberStreak))
+membershipRouter.get('/members/:id/pending-gifts', protect([UserRole.Admin, UserRole.Staff]), wrapRequestHandler(getPendingGifts))
+membershipRouter.get('/pending-gifts', protect([UserRole.Admin, UserRole.Staff]), wrapRequestHandler(getPendingGifts))
+membershipRouter.post('/claim-gift', protect([UserRole.Admin, UserRole.Staff]), wrapRequestHandler(claimGift))
 
 export default membershipRouter
