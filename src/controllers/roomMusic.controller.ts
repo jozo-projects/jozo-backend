@@ -825,24 +825,32 @@ export const searchRemoteSongs = async (req: Request, res: Response, next: NextF
     // Kiểm tra xem có request đang chạy không (tránh duplicate requests)
     const lockKey = `remote_search_lock:${q.toLowerCase().trim()}:${parsedLimit}`
     const lockExists = await redis.exists(lockKey)
+    const POLL_INTERVAL_MS = 1500
+    const MAX_WAIT_FOR_CACHE_MS = 25000 // ~25s, nhiều hơn YT_SEARCH_TIMEOUT để đợi request đầu hoàn thành
 
     if (lockExists) {
-      // Nếu có request đang chạy, đợi một chút rồi check cache lại
-      console.log(`[search-remote] Request in progress for query="${q}", waiting...`)
-      await new Promise((resolve) => setTimeout(resolve, 1000))
-
-      const retryCachedResult = await redis.get(cacheKey)
-      if (retryCachedResult) {
-        const cachedData = JSON.parse(retryCachedResult)
-        return res.status(HTTP_STATUS_CODE.OK).json({
-          message: SONG_QUEUE_MESSAGES.SEARCH_SONGS_SUCCESS,
-          result: {
-            ...cachedData,
-            source: 'remote',
-            cached: true,
-            duration: Date.now() - startTime
-          }
-        })
+      // Poll cache thay vì chạy thêm yt-search trùng → request sau đợi và dùng kết quả cache từ request đầu
+      console.log(`[search-remote] Request in progress for query="${q}", polling cache...`)
+      let waited = 0
+      while (waited < MAX_WAIT_FOR_CACHE_MS) {
+        await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
+        waited += POLL_INTERVAL_MS
+        const retryCachedResult = await redis.get(cacheKey)
+        if (retryCachedResult) {
+          const cachedData = JSON.parse(retryCachedResult)
+          console.log(`[search-remote] Cache hit after waiting ${waited}ms for query="${q}"`)
+          return res.status(HTTP_STATUS_CODE.OK).json({
+            message: SONG_QUEUE_MESSAGES.SEARCH_SONGS_SUCCESS,
+            result: {
+              ...cachedData,
+              source: 'remote',
+              cached: true,
+              duration: Date.now() - startTime
+            }
+          })
+        }
+        const stillLocked = await redis.exists(lockKey)
+        if (!stillLocked) break // request đầu đã xong (lỗi hoặc timeout), mình chạy tiếp
       }
     }
 
@@ -868,24 +876,41 @@ export const searchRemoteSongs = async (req: Request, res: Response, next: NextF
       })
 
       const result = await Promise.race([searchPromise, timeoutPromise])
-      const searchDuration = Date.now() - startTime
+      const ytSearchDuration = Date.now() - startTime
+      console.log(`[search-remote] yt-search done in ${ytSearchDuration}ms for query="${q}"`)
+
+      if (!result?.videos || !Array.isArray(result.videos)) {
+        throw new Error('yt-search returned invalid result (missing or empty videos)')
+      }
 
       const videos = result.videos
-        .filter((video) => video.seconds >= 30)
+        .filter((video) => video && video.seconds >= 30)
         .slice(0, parsedLimit)
-        .map((video) => ({
-          ...new VideoSchema({
-            video_id: video.videoId,
-            title: video.title,
-            duration: video.seconds,
-            url: video.url,
-            thumbnail: video.thumbnail || '',
-            author: video.author.name
-          }),
-          views: video.views || 0
-        }))
+        .map((video) => {
+          const authorName =
+            video.author && typeof video.author === 'object' && 'name' in video.author
+              ? (video.author as { name?: string }).name
+              : typeof video.author === 'string'
+                ? video.author
+                : ''
+          return {
+            ...new VideoSchema({
+              video_id: video.videoId,
+              title: video.title ?? '',
+              duration: video.seconds,
+              url: video.url ?? '',
+              thumbnail: video.thumbnail || '',
+              author: authorName ?? ''
+            }),
+            views: video.views || 0
+          }
+        })
 
+      const beforeSaved = Date.now()
       const savedMap = await songService.getSavedSongsByVideoIds(videos.map((video) => video.video_id))
+      console.log(
+        `[search-remote] getSavedSongsByVideoIds in ${Date.now() - beforeSaved}ms for ${videos.length} videos`
+      )
 
       const savedVideos: Array<VideoSchema & { is_saved: boolean; views: number }> = []
       const otherVideos: Array<VideoSchema & { is_saved: boolean; views: number }> = []
@@ -917,6 +942,7 @@ export const searchRemoteSongs = async (req: Request, res: Response, next: NextF
         .sort((a, b) => b.match_score - a.match_score)
         .slice(0, parsedLimit)
 
+      const searchDuration = Date.now() - startTime
       const responseData = {
         songs: prioritizedVideos,
         source: 'remote',
@@ -941,12 +967,26 @@ export const searchRemoteSongs = async (req: Request, res: Response, next: NextF
       await redis.del(lockKey)
 
       const errorDuration = Date.now() - startTime
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
-      console.error(`[search-remote] Error after ${errorDuration}ms - query: "${q}", error:`, errorMessage)
+      // yt-search có thể throw string, object (vd { statusCode, message }) hoặc Error — chuẩn hóa để log + trả client
+      const rawMessage = (() => {
+        if (error instanceof Error) return error.message
+        if (typeof error === 'string') return error
+        if (error && typeof error === 'object' && 'message' in error) {
+          return String((error as { message: unknown }).message)
+        }
+        return error != null ? String(error) : 'Unknown error'
+      })()
+      const safeMessage = rawMessage.length > 200 ? rawMessage.slice(0, 200) + '…' : rawMessage
+
+      console.error(
+        `[search-remote] Error after ${errorDuration}ms - query: "${q}", message:`,
+        safeMessage,
+        error instanceof Error ? error.stack : error
+      )
 
       res.status(HTTP_STATUS_CODE.INTERNAL_SERVER_ERROR).json({
         error: 'Failed to search remote songs',
-        message: errorMessage,
+        message: safeMessage,
         duration: errorDuration
       })
     }
