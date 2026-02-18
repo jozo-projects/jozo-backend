@@ -9,6 +9,7 @@ import {
   getBillDetails,
   getFnbOrderById,
   getFnbOrdersByRoomSchedule,
+  getFnbSalesStats,
   getOrderDetail,
   getUpdatedBill,
   upsertFnbOrder,
@@ -61,6 +62,8 @@ fnbOrderRouter.put('/:roomScheduleId', checkRoomScheduleIdValidator, checkRoomSc
 
 // Legacy routes - deprecated but kept for backward compatibility
 fnbOrderRouter.post('/', createFNBOrderValidator, createFnbOrder)
+// Lưu ý: route /stats phải đứng TRƯỚC /:id để không bị match id = "stats" → Invalid id
+fnbOrderRouter.get('/stats', getFnbSalesStats)
 fnbOrderRouter.get('/:id', checkFNBOrderIdValidator, checkFNBOrderNotExists, getFnbOrderById)
 fnbOrderRouter.delete('/:id', checkFNBOrderIdValidator, checkFNBOrderNotExists, deleteFnbOrder)
 fnbOrderRouter.post('/upsert', upsertFnbOrderValidator, upsertFnbOrder)

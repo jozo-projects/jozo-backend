@@ -1,7 +1,14 @@
 import { ObjectId } from 'mongodb'
+import dayjs from 'dayjs'
+import timezone from 'dayjs/plugin/timezone'
+import utc from 'dayjs/plugin/utc'
 import { RoomScheduleFNBOrder, FNBOrder, FNBOrderHistoryRecord } from '~/models/schemas/FNB.schema'
 import databaseService from './database.service'
 import fnbMenuItemService from './fnbMenuItem.service'
+
+dayjs.extend(utc)
+dayjs.extend(timezone)
+const VIETNAM_TZ = 'Asia/Ho_Chi_Minh'
 
 class FnbOrderService {
   private initialized = false
@@ -162,6 +169,185 @@ class FnbOrderService {
           record.billId?.toString()
         )
     )
+  }
+
+  /**
+   * Lấy thống kê FNB theo khoảng thời gian (ngày/tuần/tháng) theo giờ Việt Nam.
+   * @param period 'day' | 'week' | 'month'
+   * @param dateStr Ngày theo VN (YYYY-MM-DD). Nếu không truyền: day = hôm nay, week = tuần hiện tại, month = tháng hiện tại
+   * @param category Lọc theo category: 'drink' | 'snack' (optional)
+   * @param search Tìm theo tên item (optional, không phân biệt hoa thường)
+   */
+  async getFnbSalesStats(
+    period: 'day' | 'week' | 'month',
+    dateStr?: string,
+    category?: 'drink' | 'snack',
+    search?: string
+  ): Promise<{
+    period: { from: Date; to: Date; fromFormatted: string; toFormatted: string }
+    totalItemsSold: number
+    ordersCount: number
+    itemsBreakdown: Array<{ itemId: string; name: string; category: 'drink' | 'snack'; quantity: number }>
+  }> {
+    const now = dayjs().tz(VIETNAM_TZ)
+    const baseDate = dateStr ? dayjs.tz(dateStr, 'YYYY-MM-DD', VIETNAM_TZ) : now
+
+    let fromDate: dayjs.Dayjs
+    let toDate: dayjs.Dayjs
+
+    switch (period) {
+      case 'day':
+        fromDate = baseDate.startOf('day')
+        toDate = baseDate.endOf('day')
+        break
+      case 'week':
+        // Tuần từ thứ 2 00:00 đến Chủ nhật 23:59:59.999 (theo VN). day(): 0 = Chủ nhật, 1 = Thứ 2
+        fromDate =
+          baseDate.day() === 0
+            ? baseDate.subtract(6, 'day').startOf('day')
+            : baseDate.subtract(baseDate.day() - 1, 'day').startOf('day')
+        toDate = fromDate.add(6, 'day').endOf('day')
+        break
+      case 'month':
+        fromDate = baseDate.startOf('month')
+        toDate = baseDate.endOf('month')
+        break
+      default:
+        fromDate = baseDate.startOf('day')
+        toDate = baseDate.endOf('day')
+    }
+
+    const fromUtc = fromDate.toDate()
+    const toUtc = toDate.toDate()
+
+    // Mỗi roomScheduleId chỉ tính MỘT lần (lấy bản ghi completedAt mới nhất) để tránh trùng khi
+    // cùng đơn được ghi history nhiều lần (complete order + lưu bill).
+    const agg = await databaseService.fnbOrderHistory
+      .aggregate([
+        { $match: { completedAt: { $gte: fromUtc, $lte: toUtc } } },
+        { $sort: { roomScheduleId: 1, completedAt: -1 } },
+        {
+          $group: {
+            _id: '$roomScheduleId',
+            doc: { $first: '$$ROOT' }
+          }
+        },
+        { $replaceRoot: { newRoot: '$doc' } },
+        {
+          $addFields: {
+            drinksArr: { $objectToArray: { $ifNull: ['$order.drinks', {}] } },
+            snacksArr: { $objectToArray: { $ifNull: ['$order.snacks', {}] } }
+          }
+        },
+        {
+          $addFields: {
+            allItems: {
+              $concatArrays: [
+                { $map: { input: '$drinksArr', as: 'd', in: { k: '$$d.k', v: '$$d.v', cat: 'drink' } } },
+                { $map: { input: '$snacksArr', as: 's', in: { k: '$$s.k', v: '$$s.v', cat: 'snack' } } }
+              ]
+            }
+          }
+        },
+        { $match: { $expr: { $gt: [ { $size: '$allItems' }, 0 ] } } },
+        { $unwind: '$allItems' },
+        {
+          $group: {
+            _id: { itemId: '$allItems.k', category: '$allItems.cat' },
+            quantity: { $sum: '$allItems.v' }
+          }
+        },
+        {
+          $group: {
+            _id: null,
+            totalItemsSold: { $sum: '$quantity' },
+            items: { $push: { itemId: '$_id.itemId', category: '$_id.category', quantity: '$quantity' } }
+          }
+        },
+        { $project: { _id: 0, totalItemsSold: 1, items: 1 } }
+      ])
+      .toArray()
+
+    // Số đơn = số roomScheduleId khác nhau trong kỳ (đã dedupe ở trên)
+    const ordersCountAgg = await databaseService.fnbOrderHistory
+      .aggregate([
+        { $match: { completedAt: { $gte: fromUtc, $lte: toUtc } } },
+        { $group: { _id: '$roomScheduleId' } },
+        { $count: 'count' }
+      ])
+      .toArray()
+    const ordersCount = (ordersCountAgg[0] as { count?: number } | undefined)?.count ?? 0
+
+    let totalItemsSold = 0
+    const itemsByKey: Array<{ itemId: string; category: 'drink' | 'snack'; quantity: number }> = []
+
+    if (agg.length > 0 && agg[0]) {
+      const first = agg[0] as {
+        totalItemsSold?: number
+        ordersCount?: number
+        items?: Array<{ itemId: string; category: 'drink' | 'snack'; quantity: number }>
+      }
+      totalItemsSold = first.totalItemsSold ?? 0
+      if (Array.isArray(first.items)) {
+        itemsByKey.push(...first.items)
+      }
+    }
+
+    const itemsBreakdown: Array<{
+      itemId: string
+      name: string
+      category: 'drink' | 'snack'
+      quantity: number
+    }> = []
+
+    for (const row of itemsByKey) {
+      let name = 'N/A'
+      let item: any = await databaseService.fnbMenu.findOne({ _id: new ObjectId(row.itemId) })
+      if (item) {
+        name = item.name
+      } else {
+        const menuItem = await fnbMenuItemService.getMenuItemById(row.itemId)
+        if (menuItem) {
+          name = menuItem.name
+          if (menuItem.parentId) {
+            const parent = await databaseService.fnbMenu.findOne({ _id: new ObjectId(menuItem.parentId) })
+            if (parent) name = `${parent.name} - ${menuItem.name}`
+          }
+        }
+      }
+      itemsBreakdown.push({
+        itemId: row.itemId,
+        name,
+        category: row.category,
+        quantity: row.quantity
+      })
+    }
+
+    // Filter theo category (drink | snack)
+    let filteredBreakdown = itemsBreakdown
+    if (category) {
+      filteredBreakdown = filteredBreakdown.filter((item) => item.category === category)
+    }
+    // Filter theo search (tên item, không phân biệt hoa thường)
+    if (search && search.trim()) {
+      const searchLower = search.trim().toLowerCase()
+      filteredBreakdown = filteredBreakdown.filter((item) => item.name.toLowerCase().includes(searchLower))
+    }
+
+    filteredBreakdown.sort((a, b) => b.quantity - a.quantity)
+    const totalItemsSoldFiltered = filteredBreakdown.reduce((sum, item) => sum + item.quantity, 0)
+
+    return {
+      period: {
+        from: fromUtc,
+        to: toUtc,
+        fromFormatted: fromDate.format('DD/MM/YYYY HH:mm'),
+        toFormatted: toDate.format('DD/MM/YYYY HH:mm')
+      },
+      totalItemsSold: totalItemsSoldFiltered,
+      ordersCount: ordersCount,
+      itemsBreakdown: filteredBreakdown
+    }
   }
 
   // Method mới: Kiểm tra tồn kho cho multiple items
