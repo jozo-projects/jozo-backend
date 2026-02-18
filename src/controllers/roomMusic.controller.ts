@@ -2,7 +2,7 @@
 import { NextFunction, Request, Response } from 'express'
 import { type ParamsDictionary } from 'express-serve-static-core'
 import { randomUUID } from 'crypto'
-import ytSearch from 'yt-search'
+import { searchYoutube } from '~/services/youtubeSearch.service'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { SONG_QUEUE_MESSAGES } from '~/constants/messages'
 import { AddSongRequestBody } from '~/models/requests/Song.request'
@@ -617,43 +617,34 @@ export const searchSongs = async (req: Request, res: Response, next: NextFunctio
       }
 
       try {
-        const searchOptions = {
-          query: q,
-          pageStart: 1,
-          pageEnd: 1,
-          limit: parsedLimit
-        }
+        console.log(
+          `[search-songs] Starting YouTube search for query: "${q}", requestId: ${requestId}, roomId: ${roomId}`
+        )
 
-        console.log(`[search-songs] Starting yt-search for query: "${q}", requestId: ${requestId}, roomId: ${roomId}`)
-
-        // Thêm timeout cho yt-search để tránh bị treo
-        const searchPromise = ytSearch(searchOptions)
+        const searchPromise = searchYoutube(q, { limit: parsedLimit })
         const timeoutPromise = new Promise<never>((_, reject) => {
           setTimeout(() => {
-            reject(new Error(`yt-search timeout after ${YT_SEARCH_TIMEOUT}ms`))
+            reject(new Error(`YouTube search timeout after ${YT_SEARCH_TIMEOUT}ms`))
           }, YT_SEARCH_TIMEOUT)
         })
 
         const result = await Promise.race([searchPromise, timeoutPromise])
         const searchDuration = Date.now() - startTime
         console.log(
-          `[yt-search] query="${q}" videos=${result.videos?.length ?? 0} duration=${searchDuration}ms requestId=${requestId}`
+          `[search-songs] query="${q}" videos=${result.videos?.length ?? 0} duration=${searchDuration}ms requestId=${requestId}`
         )
 
-        const videos = result.videos
-          .filter((video) => video.seconds >= 30)
-          .slice(0, parsedLimit)
-          .map((video) => ({
-            ...new VideoSchema({
-              video_id: video.videoId,
-              title: video.title,
-              duration: video.seconds,
-              url: video.url,
-              thumbnail: video.thumbnail || '',
-              author: video.author.name
-            }),
-            views: video.views || 0
-          }))
+        const videos = (result.videos ?? []).slice(0, parsedLimit).map((video) => ({
+          ...new VideoSchema({
+            video_id: video.videoId,
+            title: video.title ?? '',
+            duration: video.seconds,
+            url: video.url ?? '',
+            thumbnail: video.thumbnail || '',
+            author: video.author?.name ?? ''
+          }),
+          views: video.views || 0
+        }))
 
         const savedMap = await songService.getSavedSongsByVideoIds(videos.map((video) => video.video_id))
 
@@ -805,6 +796,20 @@ export const searchRemoteSongs = async (req: Request, res: Response, next: NextF
     const startTime = Date.now()
     const cacheKey = `remote_search:${q.toLowerCase().trim()}:${parsedLimit}`
     const CACHE_TTL = 300 // Cache 5 phút
+    const RATE_LIMIT_CACHE_TTL = 90 // Cache lỗi 429 trong 90s để tránh gọi liên tục
+
+    // Kiểm tra cache "đang bị rate limit" (prod hay gặp 429) — trả 503 ngay, không gọi yt-search
+    const rateLimitKey = `remote_search_429:${q.toLowerCase().trim()}:${parsedLimit}`
+    const rateLimitCached = await redis.get(rateLimitKey)
+    if (rateLimitCached) {
+      console.log(`[search-remote] Rate limit cache hit for query="${q}", returning 503`)
+      return res.status(503).json({
+        error: 'Search temporarily unavailable',
+        message: 'Quá tải, vui lòng thử lại sau vài phút.',
+        code: 'RATE_LIMIT',
+        duration: Date.now() - startTime
+      })
+    }
 
     // Kiểm tra cache trước
     const cachedResult = await redis.get(cacheKey)
@@ -858,53 +863,34 @@ export const searchRemoteSongs = async (req: Request, res: Response, next: NextF
     await redis.setex(lockKey, 30, '1') // Lock trong 30 giây
 
     try {
-      const searchOptions = {
-        query: q,
-        pageStart: 1,
-        pageEnd: 1,
-        limit: parsedLimit
-      }
+      console.log(`[search-remote] Starting YouTube search for query: "${q}"`)
 
-      console.log(`[search-remote] Starting yt-search for query: "${q}"`)
-
-      // Thêm timeout cho yt-search
-      const searchPromise = ytSearch(searchOptions)
+      const searchPromise = searchYoutube(q, { limit: parsedLimit })
       const timeoutPromise = new Promise<never>((_, reject) => {
         setTimeout(() => {
-          reject(new Error(`yt-search timeout after ${YT_SEARCH_TIMEOUT}ms`))
+          reject(new Error(`YouTube search timeout after ${YT_SEARCH_TIMEOUT}ms`))
         }, YT_SEARCH_TIMEOUT)
       })
 
       const result = await Promise.race([searchPromise, timeoutPromise])
       const ytSearchDuration = Date.now() - startTime
-      console.log(`[search-remote] yt-search done in ${ytSearchDuration}ms for query="${q}"`)
+      console.log(`[search-remote] YouTube search done in ${ytSearchDuration}ms for query="${q}"`)
 
       if (!result?.videos || !Array.isArray(result.videos)) {
-        throw new Error('yt-search returned invalid result (missing or empty videos)')
+        throw new Error('YouTube search returned invalid result (missing or empty videos)')
       }
 
-      const videos = result.videos
-        .filter((video) => video && video.seconds >= 30)
-        .slice(0, parsedLimit)
-        .map((video) => {
-          const authorName =
-            video.author && typeof video.author === 'object' && 'name' in video.author
-              ? (video.author as { name?: string }).name
-              : typeof video.author === 'string'
-                ? video.author
-                : ''
-          return {
-            ...new VideoSchema({
-              video_id: video.videoId,
-              title: video.title ?? '',
-              duration: video.seconds,
-              url: video.url ?? '',
-              thumbnail: video.thumbnail || '',
-              author: authorName ?? ''
-            }),
-            views: video.views || 0
-          }
-        })
+      const videos = result.videos.slice(0, parsedLimit).map((video) => ({
+        ...new VideoSchema({
+          video_id: video.videoId,
+          title: video.title ?? '',
+          duration: video.seconds,
+          url: video.url ?? '',
+          thumbnail: video.thumbnail || '',
+          author: video.author?.name ?? ''
+        }),
+        views: video.views || 0
+      }))
 
       const beforeSaved = Date.now()
       const savedMap = await songService.getSavedSongsByVideoIds(videos.map((video) => video.video_id))
@@ -977,12 +963,25 @@ export const searchRemoteSongs = async (req: Request, res: Response, next: NextF
         return error != null ? String(error) : 'Unknown error'
       })()
       const safeMessage = rawMessage.length > 200 ? rawMessage.slice(0, 200) + '…' : rawMessage
+      const is429 =
+        /429|rate limit|too many requests/i.test(rawMessage) ||
+        (error && typeof error === 'object' && (error as { statusCode?: number }).statusCode === 429)
 
       console.error(
         `[search-remote] Error after ${errorDuration}ms - query: "${q}", message:`,
         safeMessage,
         error instanceof Error ? error.stack : error
       )
+
+      if (is429) {
+        await redis.setex(rateLimitKey, RATE_LIMIT_CACHE_TTL, '1')
+        return res.status(503).json({
+          error: 'Search temporarily unavailable',
+          message: 'Quá tải, vui lòng thử lại sau vài phút.',
+          code: 'RATE_LIMIT',
+          duration: errorDuration
+        })
+      }
 
       res.status(HTTP_STATUS_CODE.INTERNAL_SERVER_ERROR).json({
         error: 'Failed to search remote songs',
