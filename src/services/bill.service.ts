@@ -448,13 +448,10 @@ export class BillService {
         .millisecond(0)
         .toDate()
 
-      // Kiểm tra nếu actualEndTime trước startTime (chỉ tính giờ và phút)
+      // Khi end (HH:mm) trước start (HH:mm) trên cùng ngày => session qua đêm, coi end là ngày hôm sau
+      // VD: start 23:00, end "01:00" => end = ngày tiếp theo 01:00 (không còn bị ép về 00:00 hay 23:59)
       if (!this.compareTimeIgnoreSeconds(validatedEndTime, startTime)) {
-        console.warn(
-          `Warning: Actual end time (${actualEndTime}) is before start time (${dayjs(startTime).format('HH:mm')}) - comparing only hours and minutes`
-        )
-        // Đặt giá trị mặc định là startTime + 1 giờ
-        validatedEndTime = dayjs(startTime).add(1, 'hour').second(0).millisecond(0).toDate()
+        validatedEndTime = dayjs(validatedEndTime).tz('Asia/Ho_Chi_Minh').add(1, 'day').toDate()
       }
     } else if (actualEndTime) {
       // Nếu là định dạng datetime đầy đủ - reset giây và millisecond về 0
@@ -601,6 +598,47 @@ export class BillService {
             slotEnd: slotBoundary.end,
             date: slotBoundary.date
           })
+        }
+      }
+    }
+
+    // Session qua đêm: đoạn 00:00 -> end (sáng sớm ngày hôm sau) không nằm trong khung nào (khung đầu ngày thường từ 09:00).
+    // Tính thêm đoạn này và áp giá theo khung cuối ngày trước (cùng mức với 18:00-23:59).
+    const sessionEndDateStr = sessionEndVN.format('YYYY-MM-DD')
+    const sessionStartDateStr = sessionStartVN.format('YYYY-MM-DD')
+    if (sessionEndDateStr > sessionStartDateStr) {
+      const midnightNextDay = sessionEndVN.startOf('day').toDate()
+      const sessionEndDate = sessionEndVN.toDate()
+      if (sessionEndDate.getTime() > midnightNextDay.getTime()) {
+        const boundariesStartDate = timeSlotBoundaries.filter((b) => b.date === sessionStartDateStr)
+        const lastSlotOfPrevDay = boundariesStartDate.length
+          ? boundariesStartDate.reduce((latest, b) => (b.end.getTime() > latest.end.getTime() ? b : latest))
+          : null
+        if (lastSlotOfPrevDay) {
+          const earlyOverlapStart = midnightNextDay
+          const earlyOverlapEnd = sessionEndDate
+          const earlyOverlapHours = this.calculateHours(earlyOverlapStart, earlyOverlapEnd)
+          if (earlyOverlapHours > 0) {
+            const originalSlot =
+              sortedTimeSlots.find(
+                (slot) =>
+                  slot.start === dayjs(lastSlotOfPrevDay.start).format('HH:mm') &&
+                  slot.end === dayjs(lastSlotOfPrevDay.end).format('HH:mm')
+              ) || sortedTimeSlots.find((slot) => slot.start === dayjs(lastSlotOfPrevDay.start).format('HH:mm'))
+            applicableTimeSlots.push({
+              slot: originalSlot || {
+                start: dayjs(lastSlotOfPrevDay.start).format('HH:mm'),
+                end: dayjs(lastSlotOfPrevDay.end).format('HH:mm'),
+                prices: lastSlotOfPrevDay.prices
+              },
+              overlapStart: earlyOverlapStart,
+              overlapEnd: earlyOverlapEnd,
+              overlapHours: earlyOverlapHours,
+              slotStart: lastSlotOfPrevDay.start,
+              slotEnd: lastSlotOfPrevDay.end,
+              date: sessionEndDateStr
+            })
+          }
         }
       }
     }

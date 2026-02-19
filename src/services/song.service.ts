@@ -258,7 +258,7 @@ class SongService {
             }
           }
         )
-        .sort({ score: { $meta: 'textScore' }, updated_at: -1 })
+        .sort({ score: { $meta: 'textScore' }, created_at: -1 })
         .limit(limit)
 
       const textSongs = await textCursor.toArray()
@@ -269,13 +269,15 @@ class SongService {
           return { ...(song as Song), match_score: scored.match_score, is_phrase_match: scored.is_phrase_match }
         })
 
-        // Sắp xếp: phrase match trước, sau đó theo match_score giảm dần
+        // Sắp xếp: phrase match trước, match_score giảm dần, sau đó ưu tiên bài add gần nhất
         return scoredSongs.sort((a, b) => {
-          // Ưu tiên phrase match
           if (a.is_phrase_match && !b.is_phrase_match) return -1
           if (!a.is_phrase_match && b.is_phrase_match) return 1
-          // Nếu cùng loại, sắp xếp theo match_score
-          return b.match_score - a.match_score
+          const scoreDiff = b.match_score - a.match_score
+          if (scoreDiff !== 0) return scoreDiff
+          const aTime = a.created_at ? new Date(a.created_at).getTime() : 0
+          const bTime = b.created_at ? new Date(b.created_at).getTime() : 0
+          return bTime - aTime
         })
       }
     } catch (error) {
@@ -308,7 +310,7 @@ class SongService {
     const cursor = databaseService.songs
       .find(query)
       .collation({ locale: 'en', strength: 1 })
-      .sort({ updated_at: -1, created_at: -1 })
+      .sort({ created_at: -1, updated_at: -1 })
       .limit(limit)
 
     const songs = await cursor.toArray()
@@ -321,11 +323,14 @@ class SongService {
 
     const filtered = scored.filter((item) => item.recall >= 0.6)
     const toUse = (filtered.length > 0 ? filtered : scored).sort((a, b) => {
-      // Ưu tiên phrase match
       if (a.is_phrase_match && !b.is_phrase_match) return -1
       if (!a.is_phrase_match && b.is_phrase_match) return 1
-      // Nếu cùng loại, sắp xếp theo match_score giảm dần
-      return b.match_score - a.match_score
+      const scoreDiff = b.match_score - a.match_score
+      if (scoreDiff !== 0) return scoreDiff
+      // Ưu tiên bài add gần nhất
+      const aTime = a.song?.created_at ? new Date(a.song.created_at).getTime() : 0
+      const bTime = b.song?.created_at ? new Date(b.song.created_at).getTime() : 0
+      return bTime - aTime
     })
 
     return toUse.map((item) => ({

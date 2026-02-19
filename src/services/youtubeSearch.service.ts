@@ -1,9 +1,8 @@
 /**
- * Adapter YouTube search — dùng cả youtube-sr và yt-search, gộp kết quả (nếu một bên bị 429 vẫn còn bên kia).
- * Chuẩn hóa kết quả về cùng format { videos: [...] }. Hỗ trợ tiếng Việt không dấu.
+ * Adapter YouTube search — chỉ dùng yt-search (để test).
+ * Hỗ trợ tiếng Việt không dấu.
  */
 
-import YouTube from 'youtube-sr'
 import yts from 'yt-search'
 
 export interface YoutubeSearchVideo {
@@ -130,30 +129,16 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-function toVideo(v: {
-  id?: string | null
-  title?: string | null
-  duration?: number | null
-  url?: string | null
-  thumbnail?: { url?: string; displayThumbnailURL?: () => string } | null
-  channel?: { name?: string } | null
-  views?: number | null
+function fromYtSearchVideo(v: {
+  videoId: string
+  title: string
+  seconds: number
+  url: string
+  thumbnail?: string
+  image?: string
+  author?: { name: string }
+  views: number
 }): YoutubeSearchVideo | null {
-  if (!v?.id) return null
-  const seconds = typeof v.duration === 'number' ? v.duration : 0
-  if (seconds < 30) return null
-  return {
-    videoId: v.id,
-    title: v.title ?? '',
-    seconds,
-    url: v.url ?? `https://www.youtube.com/watch?v=${v.id}`,
-    thumbnail: v.thumbnail?.url ?? (v.thumbnail as { displayThumbnailURL?: () => string })?.displayThumbnailURL?.() ?? '',
-    author: { name: (v.channel as { name?: string })?.name ?? '' },
-    views: typeof v.views === 'number' ? v.views : 0
-  }
-}
-
-function fromYtSearchVideo(v: { videoId: string; title: string; seconds: number; url: string; thumbnail?: string; image?: string; author?: { name: string }; views: number }): YoutubeSearchVideo | null {
   const seconds = typeof v.seconds === 'number' ? v.seconds : 0
   if (seconds < 30) return null
   return {
@@ -167,44 +152,39 @@ function fromYtSearchVideo(v: { videoId: string; title: string; seconds: number;
   }
 }
 
-/**
- * Search YouTube qua cả youtube-sr và yt-search, gộp kết quả (loại trùng theo videoId), ưu tiên youtube-sr trước.
- * Chuẩn hóa query không dấu → có dấu. Nếu một nguồn lỗi (vd. 429) vẫn trả về kết quả nguồn còn lại.
- */
-export async function searchYoutube(query: string, options: { limit?: number } = {}): Promise<YoutubeSearchResult> {
-  const limit = Math.min(Math.max(options.limit ?? DEFAULT_LIMIT, 1), 50)
-  const normalizedQuery = restoreVietnameseDiacritics(query)
-
-  const [srSettled, ytsSettled] = await Promise.allSettled([
-    YouTube.search(normalizedQuery, { limit, type: 'video' }),
-    yts.search(normalizedQuery)
-  ])
-
-  const fromSr: YoutubeSearchVideo[] = []
-  if (srSettled.status === 'fulfilled') {
-    for (const v of srSettled.value) {
-      const item = toVideo(v)
-      if (item) fromSr.push(item)
-    }
-  }
-
-  const fromYts: YoutubeSearchVideo[] = []
-  if (ytsSettled.status === 'fulfilled' && ytsSettled.value?.videos?.length) {
-    for (const v of ytsSettled.value.videos) {
-      if (v.type !== 'video') continue
-      const item = fromYtSearchVideo(v as Parameters<typeof fromYtSearchVideo>[0])
-      if (item) fromYts.push(item)
-    }
-  }
-
+/** Lấy tối đa `limit` video, bỏ trùng theo videoId (giữ thứ tự). */
+function dedupAndLimit(list: YoutubeSearchVideo[], limit: number): YoutubeSearchVideo[] {
   const seen = new Set<string>()
-  const videos: YoutubeSearchVideo[] = []
-  for (const v of [...fromSr, ...fromYts]) {
+  const out: YoutubeSearchVideo[] = []
+  for (const v of list) {
+    if (out.length >= limit) break
     if (seen.has(v.videoId)) continue
     seen.add(v.videoId)
-    videos.push(v)
-    if (videos.length >= limit) break
+    out.push(v)
   }
+  return out
+}
 
-  return { videos }
+/**
+ * Search YouTube — chỉ dùng yt-search (để test).
+ */
+export async function searchYoutube(query: string, options: { limit?: number } = {}): Promise<YoutubeSearchResult> {
+  const limit = Math.min(Math.max(options.limit ?? DEFAULT_LIMIT, 1), 30)
+  const normalizedQuery = restoreVietnameseDiacritics(query)
+
+  try {
+    const ytsResult = await yts.search(normalizedQuery)
+    const fromYts: YoutubeSearchVideo[] = []
+    if (ytsResult?.videos?.length) {
+      for (const v of ytsResult.videos) {
+        if (v.type !== 'video') continue
+        const item = fromYtSearchVideo(v as Parameters<typeof fromYtSearchVideo>[0])
+        if (item) fromYts.push(item)
+      }
+    }
+    return { videos: dedupAndLimit(fromYts, limit) }
+  } catch (e) {
+    console.log('[yt-search] search failed:', (e as Error)?.message ?? e)
+    return { videos: [] }
+  }
 }
