@@ -1,12 +1,12 @@
-import { Request, Response } from 'express'
-import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
-import billService, { printUnicodeWithEscpos, printBitmapUnicode, printBitmapWithEscpos } from '~/services/bill.service'
 import dayjs from 'dayjs'
+import timezone from 'dayjs/plugin/timezone'
+import utc from 'dayjs/plugin/utc'
 import weekOfYear from 'dayjs/plugin/weekOfYear'
 import weekday from 'dayjs/plugin/weekday'
-import utc from 'dayjs/plugin/utc'
-import timezone from 'dayjs/plugin/timezone'
+import { Request, Response } from 'express'
 import { ObjectId } from 'mongodb'
+import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
+import billService from '~/services/bill.service'
 import databaseService from '~/services/database.service'
 import membershipService from '~/services/membership.service'
 import { RewardSource } from '~/constants/enum'
@@ -19,7 +19,7 @@ dayjs.extend(timezone)
 
 export const getBill = async (req: Request, res: Response) => {
   const { scheduleId } = req.params
-  const { actualEndTime, actualStartTime, promotionId } = req.query
+  const { actualEndTime, actualStartTime, promotionId, applyFreeHourPromotion } = req.query
 
   // Validate ObjectId format for scheduleId
   if (!ObjectId.isValid(scheduleId)) {
@@ -28,12 +28,16 @@ export const getBill = async (req: Request, res: Response) => {
     })
   }
 
+  // Parse applyFreeHourPromotion từ query string (có thể là 'true' hoặc 'false')
+  const shouldApplyFreeHourPromotion = applyFreeHourPromotion === 'true' || String(applyFreeHourPromotion) === 'true'
+
   const bill = await billService.getBill(
     scheduleId,
     actualEndTime as string,
     undefined,
     promotionId as string,
-    actualStartTime as string
+    actualStartTime as string,
+    shouldApplyFreeHourPromotion
   )
 
   return res.status(HTTP_STATUS_CODE.OK).json({
@@ -44,7 +48,7 @@ export const getBill = async (req: Request, res: Response) => {
 
 export const printBill = async (req: Request, res: Response) => {
   const { scheduleId } = req.params
-  const { actualEndTime, actualStartTime, paymentMethod, promotionId } = req.body
+  const { actualEndTime, actualStartTime, paymentMethod, promotionId, applyFreeHourPromotion } = req.body
 
   // Validate ObjectId format for scheduleId
   if (!ObjectId.isValid(scheduleId)) {
@@ -53,12 +57,17 @@ export const printBill = async (req: Request, res: Response) => {
     })
   }
 
+  // Parse applyFreeHourPromotion từ body (có thể là true/false hoặc 'true'/'false')
+  const shouldApplyFreeHourPromotion =
+    applyFreeHourPromotion === true || applyFreeHourPromotion === 'true' || String(applyFreeHourPromotion) === 'true'
+
   const billData = await billService.getBill(
     scheduleId,
     actualEndTime as string,
     paymentMethod,
     promotionId as string,
-    actualStartTime as string
+    actualStartTime as string,
+    shouldApplyFreeHourPromotion
   )
 
   const bill = await billService.printBill(billData)
@@ -544,7 +553,17 @@ export const getBillById = async (req: Request, res: Response) => {
       formattedEndTime: dayjs(bill.endTime).tz('Asia/Ho_Chi_Minh').format('DD/MM/YYYY HH:mm'),
       formattedCreatedAt: dayjs(bill.createdAt).tz('Asia/Ho_Chi_Minh').format('DD/MM/YYYY HH:mm'),
       usageDuration: billService.calculateHours(bill.startTime, bill.endTime).toFixed(2),
-      invoiceCode: bill.invoiceCode || 'N/A'
+      invoiceCode: bill.invoiceCode || 'N/A',
+      // Thêm thông tin free hour promotion để người quản lý biết bill đã được giảm giá chưa
+      freeHourPromotion: bill.freeHourPromotion
+        ? {
+            freeMinutesApplied: bill.freeHourPromotion.freeMinutesApplied,
+            freeAmount: bill.freeHourPromotion.freeAmount,
+            isApplied: true
+          }
+        : {
+            isApplied: false
+          }
     }
 
     return res.status(HTTP_STATUS_CODE.OK).json({
@@ -838,7 +857,8 @@ export const saveBill = async (req: Request, res: Response) => {
           bill.endTime ? bill.endTime.toString() : undefined,
           bill.paymentMethod,
           undefined,
-          bill.startTime ? bill.startTime.toString() : undefined
+          bill.startTime ? bill.startTime.toString() : undefined,
+          true // Tự động áp dụng free hour promotion nếu đủ điều kiện
         )
         if (computed.freeHourPromotion) {
           bill.freeHourPromotion = computed.freeHourPromotion

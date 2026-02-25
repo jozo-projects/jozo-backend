@@ -35,6 +35,14 @@ type AdminNotes = {
   staffInstructions: string // Hướng dẫn cho staff
 }
 
+type RoomChangeLog = {
+  fromRoomId: ObjectId
+  toRoomId: ObjectId
+  changedAt: Date
+  changedBy?: string
+  note?: string
+}
+
 export class RoomSchedule {
   _id?: ObjectId
   roomId: ObjectId
@@ -76,6 +84,9 @@ export class RoomSchedule {
   
   // Streak gifts served this session
   streakGifts?: StreakGiftServed[]
+
+  // 🆕 Lịch sử đổi phòng
+  roomChangeLogs?: RoomChangeLog[]
 
   constructor(
     roomId: string,
@@ -133,5 +144,8 @@ export class RoomSchedule {
 
     // Cờ quà tặng: chỉ còn giftEnabled
     this.giftEnabled = giftEnabled ?? false
+
+    // Khởi tạo lịch sử đổi phòng
+    this.roomChangeLogs = []
   }
 }

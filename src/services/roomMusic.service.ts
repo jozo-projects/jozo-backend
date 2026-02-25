@@ -1,14 +1,25 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { EventEmitter } from 'events'
+import dayjs from 'dayjs'
+import utc from 'dayjs/plugin/utc'
+import timezone from 'dayjs/plugin/timezone'
+import { ObjectId } from 'mongodb'
 import ytdl from 'youtube-dl-exec'
+import { RoomScheduleStatus } from '~/constants/enum'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { ErrorWithStatus } from '~/models/Error'
 import { AddSongRequestBody } from '~/models/requests/Song.request'
 import { CacheService } from '~/services/cache.service'
+import billService from '~/services/bill.service'
+import databaseService from '~/services/database.service'
 import redis from '~/services/redis.service'
 import { SearchService } from '~/services/search.service'
 import { historyService } from '~/services/songHistory.service'
+import { songService } from '~/services/song.service'
 import { Logger } from '~/utils/logger'
+
+dayjs.extend(utc)
+dayjs.extend(timezone)
 
 export const roomMusicEventEmitter = new EventEmitter()
 
@@ -117,6 +128,20 @@ class RoomMusicServices {
       await pipeline.exec()
 
       const updatedQueue = (await redis.lrange(queueKey, 0, -1)).map((item: string) => JSON.parse(item))
+
+      // Lưu bài hát vào collection songs (id gốc ổn định)
+      try {
+        await songService.upsertSong({
+          video_id: song.video_id,
+          title: song.title,
+          author: song.author,
+          duration: song.duration,
+          url: song.url,
+          thumbnail: song.thumbnail
+        })
+      } catch (error) {
+        this.logger.error('Failed to save song when playing next', error)
+      }
 
       return { nowPlaying: nowPlayingData, queue: updatedQueue }
     } catch (error) {
@@ -314,6 +339,20 @@ class RoomMusicServices {
     // Lưu vào Redis
     await redis.set(nowPlayingKey, JSON.stringify(nowPlayingData))
 
+    // Lưu bài hát vào collection songs (id gốc ổn định)
+    try {
+      await songService.upsertSong({
+        video_id: chosenSong.video_id,
+        title: chosenSong.title,
+        author: chosenSong.author,
+        duration: chosenSong.duration,
+        url: chosenSong.url,
+        thumbnail: chosenSong.thumbnail
+      })
+    } catch (error) {
+      this.logger.error('Failed to save song when playing chosen song', error)
+    }
+
     // Trả về thông tin bài hát đang phát và hàng đợi đã cập nhật
     return { nowPlaying: nowPlayingData, queue }
   }
@@ -493,6 +532,116 @@ class RoomMusicServices {
         message: 'Failed to add songs to queue',
         status: HTTP_STATUS_CODE.INTERNAL_SERVER_ERROR
       })
+    }
+  }
+
+  async getBillByRoom(roomIndex: number) {
+    const room = await databaseService.rooms.findOne({ roomId: roomIndex })
+    if (!room?._id) {
+      throw new ErrorWithStatus({
+        message: 'Room not found',
+        status: HTTP_STATUS_CODE.NOT_FOUND
+      })
+    }
+
+    const now = dayjs().tz('Asia/Ho_Chi_Minh')
+    const startOfDay = now.startOf('day').toDate()
+    const endOfDay = now.endOf('day').toDate()
+
+    // Lấy danh sách schedule đã có bill (coi như đã success) để loại bỏ khỏi kết quả
+    const billedScheduleIds = (
+      await databaseService.bills.find({ roomId: room._id }).project({ scheduleId: 1 }).toArray()
+    )
+      .map((bill) => {
+        const idStr = bill.scheduleId?.toString()
+        return idStr && ObjectId.isValid(idStr) ? new ObjectId(idStr) : null
+      })
+      .filter((id): id is ObjectId => id !== null)
+
+    // Helper: tìm lịch gần nhất theo thời gian dựa trên danh sách status
+    const findNearestSchedule = async (statuses: RoomScheduleStatus[]) => {
+      const match: Record<string, any> = {
+        roomId: room._id,
+        status: { $in: statuses },
+        startTime: { $gte: startOfDay, $lte: endOfDay }
+      }
+      if (billedScheduleIds.length) {
+        match._id = { $nin: billedScheduleIds }
+      }
+
+      return (
+        await databaseService.roomSchedule
+          .aggregate([
+            { $match: match },
+            { $addFields: { timeDistance: { $abs: { $subtract: ['$startTime', now.toDate()] } } } },
+            { $sort: { timeDistance: 1, startTime: -1 } }, // gần nhất hiện tại, ưu tiên startTime mới hơn khi bằng nhau
+            { $limit: 1 }
+          ])
+          .toArray()
+      )[0]
+    }
+
+    // Chỉ lấy lịch InUse trong hôm nay; bỏ Booked
+    const activeSchedule = await findNearestSchedule([RoomScheduleStatus.InUse])
+
+    if (!activeSchedule) {
+      // Không còn lịch hợp lệ (đã tính bill hoặc không có lịch), trả về null
+      return null
+    }
+
+    return billService.getBill(activeSchedule._id?.toString())
+  }
+
+  async getSongsInCollection(options?: { page?: number; limit?: number; keyword?: string }) {
+    const page = options?.page ?? 1
+    const limit = options?.limit ?? 50
+    const keyword = options?.keyword?.trim()
+
+    // Validate pagination
+    const pageNum = Math.max(1, page)
+    const limitNum = Math.min(Math.max(1, limit), 100) // Max 100 per page
+    const skip = (pageNum - 1) * limitNum
+
+    // Nếu có keyword, sử dụng search logic
+    if (keyword) {
+      // Lấy đủ kết quả để paginate (tối đa 1000 để tránh quá tải)
+      const maxSearchLimit = Math.min(1000, pageNum * limitNum + limitNum)
+      const searchResults = await songService.searchSongs(keyword, maxSearchLimit)
+
+      // Tính toán pagination
+      const total = searchResults.length
+      const paginatedResults = searchResults.slice(skip, skip + limitNum)
+      const hasMoreResults = total >= maxSearchLimit // Nếu đạt max limit, có thể còn nhiều kết quả hơn
+
+      return {
+        songs: paginatedResults,
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total: hasMoreResults ? maxSearchLimit : total, // Nếu có nhiều hơn, chỉ hiển thị số đã tìm được
+          totalPages: hasMoreResults ? Math.ceil(maxSearchLimit / limitNum) : Math.ceil(total / limitNum),
+          hasNextPage: hasMoreResults || skip + limitNum < total,
+          hasPrevPage: pageNum > 1
+        }
+      }
+    }
+
+    // Nếu không có keyword, chỉ paginate tất cả songs
+    const [songs, total] = await Promise.all([
+      databaseService.songs.find({}).sort({ updated_at: -1, created_at: -1 }).skip(skip).limit(limitNum).toArray(),
+      databaseService.songs.countDocuments({})
+    ])
+
+    return {
+      songs,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total: total,
+        totalPages: Math.ceil(total / limitNum),
+        hasNextPage: skip + limitNum < total,
+        hasPrevPage: pageNum > 1
+      }
     }
   }
 }

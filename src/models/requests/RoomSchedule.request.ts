@@ -20,4 +20,7 @@ export interface IRoomScheduleRequestBody {
   paymentMethod?: string
   giftEnabled?: boolean
   applyFreeHourPromo?: boolean
+  // Trường mở rộng để đổi phòng
+  newRoomId?: string
+  roomChangeNote?: string
 }

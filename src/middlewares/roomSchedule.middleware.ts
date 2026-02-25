@@ -47,6 +47,12 @@ export const updateScheduleValidator = validate(
       notEmpty: {
         errorMessage: ROOM_SCHEDULE_MESSAGES.SCHEDULE_ID_REQUIRED
       }
+    },
+    newRoomId: {
+      optional: true,
+      notEmpty: {
+        errorMessage: ROOM_SCHEDULE_MESSAGES.ROOM_ID_REQUIRED
+      }
     }
   })
 )

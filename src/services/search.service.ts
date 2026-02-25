@@ -1,4 +1,4 @@
-import ytSearch from 'yt-search'
+import { searchYoutube } from '~/services/youtubeSearch.service'
 import { Logger } from '~/utils/logger'
 
 interface SearchResult {
@@ -80,15 +80,11 @@ export class SearchService {
       if (cleanKeyword.length < 2) return []
 
       const searchQuery = isKaraoke ? `${cleanKeyword} karaoke` : cleanKeyword
-      const searchResults = await ytSearch({
-        query: searchQuery,
-        pageStart: 1,
-        pageEnd: 2
-      })
+      const searchResults = await searchYoutube(searchQuery, { limit: 30 })
 
       const results: SearchResult[] = searchResults.videos.map((video) => {
         const title = this.cleanTitle(video.title)
-        const artist = video.author.name || ''
+        const artist = video.author?.name ?? ''
         const titleScore = this.calculateSimilarity(cleanKeyword, title)
         const artistScore = this.calculateSimilarity(cleanKeyword, artist)
 

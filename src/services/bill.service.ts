@@ -329,7 +329,8 @@ export class BillService {
     actualEndTime?: string,
     paymentMethod?: string,
     promotionId?: string,
-    actualStartTime?: string
+    actualStartTime?: string,
+    applyFreeHourPromotion?: boolean
   ): Promise<IBill> {
     // Validate ObjectId format for scheduleId
     if (!ObjectId.isValid(scheduleId)) {
@@ -372,6 +373,32 @@ export class BillService {
       })
     }
     const dayType = await this.determineDayType(dayjs.utc(schedule.startTime).tz('Asia/Ho_Chi_Minh').toDate())
+
+    // Tính tổng snack và drinks để kiểm tra điều kiện áp dụng freeHourPromotion
+    // Chỉ cần tổng snacks + drinks >= 35000 là đủ điều kiện
+    let totalSnacksAndDrinks = 0
+    if (order && order.order) {
+      // Tính tổng đồ uống
+      if (order.order.drinks && typeof order.order.drinks === 'object' && Object.keys(order.order.drinks).length > 0) {
+        for (const [menuId, quantity] of Object.entries(order.order.drinks)) {
+          const menuItem = await this.findMenuItemById(menuId, menu)
+          if (menuItem) {
+            const price = this.parsePrice(menuItem.price)
+            totalSnacksAndDrinks += quantity * price
+          }
+        }
+      }
+      // Tính tổng đồ ăn
+      if (order.order.snacks && typeof order.order.snacks === 'object' && Object.keys(order.order.snacks).length > 0) {
+        for (const [menuId, quantity] of Object.entries(order.order.snacks)) {
+          const menuItem = await this.findMenuItemById(menuId, menu)
+          if (menuItem) {
+            const price = this.parsePrice(menuItem.price)
+            totalSnacksAndDrinks += quantity * price
+          }
+        }
+      }
+    }
 
     // Xử lý actualStartTime nếu được cung cấp
     let validatedStartTime: Date
@@ -421,13 +448,10 @@ export class BillService {
         .millisecond(0)
         .toDate()
 
-      // Kiểm tra nếu actualEndTime trước startTime (chỉ tính giờ và phút)
+      // Khi end (HH:mm) trước start (HH:mm) trên cùng ngày => session qua đêm, coi end là ngày hôm sau
+      // VD: start 23:00, end "01:00" => end = ngày tiếp theo 01:00 (không còn bị ép về 00:00 hay 23:59)
       if (!this.compareTimeIgnoreSeconds(validatedEndTime, startTime)) {
-        console.warn(
-          `Warning: Actual end time (${actualEndTime}) is before start time (${dayjs(startTime).format('HH:mm')}) - comparing only hours and minutes`
-        )
-        // Đặt giá trị mặc định là startTime + 1 giờ
-        validatedEndTime = dayjs(startTime).add(1, 'hour').second(0).millisecond(0).toDate()
+        validatedEndTime = dayjs(validatedEndTime).tz('Asia/Ho_Chi_Minh').add(1, 'day').toDate()
       }
     } else if (actualEndTime) {
       // Nếu là định dạng datetime đầy đủ - reset giây và millisecond về 0
@@ -458,7 +482,14 @@ export class BillService {
 
     const sessionDurationSeconds = dayjs(validatedEndTime).diff(dayjs(startTime), 'second')
     const sessionDurationMinutes = Math.ceil(sessionDurationSeconds / 60)
-    const eligibleForFreeHour = !!schedule?.applyFreeHourPromo && sessionDurationMinutes >= 120
+
+    // Kiểm tra điều kiện áp dụng freeHourPromotion:
+    // 1. FE phải gửi flag applyFreeHourPromotion = true
+    // 2. Tổng snacks + drinks >= 35000
+    // 3. Thời gian sử dụng >= 120 phút
+    const eligibleForFreeHour =
+      applyFreeHourPromotion === true && totalSnacksAndDrinks >= 35000 && sessionDurationMinutes >= 120
+
     let freeMinutesLeft = eligibleForFreeHour ? 60 : 0
     let freeMinutesApplied = 0
     let freeAmountTotal = 0
@@ -571,6 +602,47 @@ export class BillService {
       }
     }
 
+    // Session qua đêm: đoạn 00:00 -> end (sáng sớm ngày hôm sau) không nằm trong khung nào (khung đầu ngày thường từ 09:00).
+    // Tính thêm đoạn này và áp giá theo khung cuối ngày trước (cùng mức với 18:00-23:59).
+    const sessionEndDateStr = sessionEndVN.format('YYYY-MM-DD')
+    const sessionStartDateStr = sessionStartVN.format('YYYY-MM-DD')
+    if (sessionEndDateStr > sessionStartDateStr) {
+      const midnightNextDay = sessionEndVN.startOf('day').toDate()
+      const sessionEndDate = sessionEndVN.toDate()
+      if (sessionEndDate.getTime() > midnightNextDay.getTime()) {
+        const boundariesStartDate = timeSlotBoundaries.filter((b) => b.date === sessionStartDateStr)
+        const lastSlotOfPrevDay = boundariesStartDate.length
+          ? boundariesStartDate.reduce((latest, b) => (b.end.getTime() > latest.end.getTime() ? b : latest))
+          : null
+        if (lastSlotOfPrevDay) {
+          const earlyOverlapStart = midnightNextDay
+          const earlyOverlapEnd = sessionEndDate
+          const earlyOverlapHours = this.calculateHours(earlyOverlapStart, earlyOverlapEnd)
+          if (earlyOverlapHours > 0) {
+            const originalSlot =
+              sortedTimeSlots.find(
+                (slot) =>
+                  slot.start === dayjs(lastSlotOfPrevDay.start).format('HH:mm') &&
+                  slot.end === dayjs(lastSlotOfPrevDay.end).format('HH:mm')
+              ) || sortedTimeSlots.find((slot) => slot.start === dayjs(lastSlotOfPrevDay.start).format('HH:mm'))
+            applicableTimeSlots.push({
+              slot: originalSlot || {
+                start: dayjs(lastSlotOfPrevDay.start).format('HH:mm'),
+                end: dayjs(lastSlotOfPrevDay.end).format('HH:mm'),
+                prices: lastSlotOfPrevDay.prices
+              },
+              overlapStart: earlyOverlapStart,
+              overlapEnd: earlyOverlapEnd,
+              overlapHours: earlyOverlapHours,
+              slotStart: lastSlotOfPrevDay.start,
+              slotEnd: lastSlotOfPrevDay.end,
+              date: sessionEndDateStr
+            })
+          }
+        }
+      }
+    }
+
     // Sắp xếp các khung giờ theo thời gian bắt đầu
     applicableTimeSlots.sort((a, b) => a.overlapStart.getTime() - b.overlapStart.getTime())
 
@@ -599,14 +671,14 @@ export class BillService {
           slotFreeMinutes = Math.min(freeMinutesLeft, promoMinutes)
           freeMinutesLeft -= slotFreeMinutes
           freeMinutesApplied += slotFreeMinutes
-          const slotFreeAmount = Math.floor(((slotFreeMinutes / 60) * priceEntry.price) / 1000) * 1000
+          const slotFreeAmount = (slotFreeMinutes / 60) * priceEntry.price
           freeAmountTotal += slotFreeAmount
         }
       }
 
       const overlapHoursRounded = Math.round((overlapSeconds / 3600) * 100) / 100
 
-      const slotServiceFee = Math.floor(((overlapSeconds / 3600) * priceEntry.price) / 1000) * 1000
+      const slotServiceFee = (overlapSeconds / 3600) * priceEntry.price
 
       totalServiceFee += slotServiceFee
       totalHoursUsed += overlapHoursRounded
@@ -639,7 +711,7 @@ export class BillService {
               console.error(`Invalid price for menu item ${menuItem.name}: ${menuItem.price}`)
               continue
             }
-            const totalPrice = Math.floor((quantity * price) / 1000) * 1000
+            const totalPrice = quantity * price
             timeSlotItems.push({
               description: menuItem.name,
               quantity: quantity,
@@ -663,7 +735,7 @@ export class BillService {
               console.error(`Invalid price for menu item ${menuItem.name}: ${menuItem.price}`)
               continue
             }
-            const totalPrice = Math.floor((quantity * price) / 1000) * 1000
+            const totalPrice = quantity * price
             timeSlotItems.push({
               description: menuItem.name,
               quantity: quantity,
@@ -752,7 +824,7 @@ export class BillService {
     }, 0)
 
     if (giftDiscountPercent > 0) {
-      giftDiscountAmount = Math.floor((subtotal * giftDiscountPercent) / 100)
+      giftDiscountAmount = (subtotal * giftDiscountPercent) / 100
     }
     if (giftDiscountFixed > 0) {
       giftDiscountAmount += giftDiscountFixed
@@ -760,7 +832,7 @@ export class BillService {
 
     let discountAmount = 0
     if (activePromotion && shouldApplyPromotion) {
-      discountAmount = Math.floor((subtotal * activePromotion.discountPercentage) / 100)
+      discountAmount = (subtotal * activePromotion.discountPercentage) / 100
     }
 
     // Trừ khuyến mãi giờ đầu (freeAmountTotal) ở mức tổng, không bỏ record gốc
@@ -1748,10 +1820,8 @@ export class BillService {
 
         // Định dạng số tiền để hiển thị gọn hơn
         const formattedPrice = item.price.toLocaleString('vi-VN')
-        // Tính tổng tiền và làm tròn xuống 1000 VND để nhất quán
         const rawTotal = quantity * item.price
-        const currentTotal = Math.floor(rawTotal / 1000) * 1000
-        const formattedTotal = currentTotal.toLocaleString('vi-VN')
+        const formattedTotal = rawTotal.toLocaleString('vi-VN')
 
         // In dòng đầu với tên dịch vụ và các cột số liệu
         printer.style('b').tableCustom([
@@ -1793,8 +1863,7 @@ export class BillService {
 
       const formattedPrice = item.price.toLocaleString('vi-VN')
       const rawTotal = item.quantity * item.price
-      const itemTotalDisplay = Math.floor(rawTotal / 1000) * 1000
-      const formattedTotal = itemTotalDisplay.toLocaleString('vi-VN')
+      const formattedTotal = rawTotal.toLocaleString('vi-VN')
 
       // In dòng đầu tiên với tên (phần đầu), SL, Đơn giá, Thành tiền
       printer.tableCustom([
@@ -1814,23 +1883,21 @@ export class BillService {
       }
     })
 
-    // Thông tin giảm giá free giờ đầu trong khung 10-19 (đã trừ vào tổng) - in thẳng hàng
+    // Thông tin giảm giá free giờ đầu trong khung 10-19 (đã trừ vào tổng) - in xuống dòng
     if (bill.freeHourPromotion && bill.freeHourPromotion.freeMinutesApplied > 0) {
       let promotionTimeText = 'KM gio dau tien'
       const promoStartSource = bill.actualStartTime || bill.startTime
       if (promoStartSource) {
         const startTime = dayjs(promoStartSource).tz('Asia/Ho_Chi_Minh')
         const endTime = startTime.add(60, 'minute')
-        promotionTimeText = `Chuong trinh KM (${startTime.format('HH:mm')} - ${endTime.format('HH:mm')})`
+        promotionTimeText = `KM (${startTime.format('HH:mm')} - ${endTime.format('HH:mm')})`
       }
 
       printer.text('------------------------------------------------')
-      printer.tableCustom([
-        { text: promotionTimeText, width: 0.45, align: 'left' },
-        { text: '', width: 0.15, align: 'center' },
-        { text: '', width: 0.2, align: 'right' },
-        { text: `-${bill.freeHourPromotion.freeAmount.toLocaleString('vi-VN')}`, width: 0.2, align: 'right' }
-      ])
+      // In tên khuyến mãi trên dòng đầu
+      printer.align('lt').text(promotionTimeText)
+      // In số tiền giảm trên dòng thứ hai, căn phải
+      printer.align('rt').text(`-${bill.freeHourPromotion.freeAmount.toLocaleString('vi-VN')}`)
     }
 
     // Hiển thị discount từ gift (discount_percentage hoặc discount_amount) - in thẳng hàng
@@ -1843,7 +1910,7 @@ export class BillService {
       let subtotalAmount = 0
       bill.items.forEach((item) => {
         const rawTotal = item.quantity * item.price
-        subtotalAmount += Math.floor(rawTotal / 1000) * 1000
+        subtotalAmount += rawTotal
       })
 
       const isPercentGift = bill.gift.type === 'discount' || bill.gift.type === 'discount_percentage'
@@ -1851,7 +1918,7 @@ export class BillService {
         bill.giftDiscountAmount !== undefined
           ? bill.giftDiscountAmount
           : isPercentGift && bill.gift.discountPercentage !== undefined
-            ? Math.floor((subtotalAmount * bill.gift.discountPercentage) / 100)
+            ? (subtotalAmount * bill.gift.discountPercentage) / 100
             : bill.gift.discountAmount || 0
 
       const giftLabel =
@@ -1870,10 +1937,10 @@ export class BillService {
       let subtotalAmount = 0
       bill.items.forEach((item) => {
         const rawTotal = item.quantity * item.price
-        subtotalAmount += Math.floor(rawTotal / 1000) * 1000
+        subtotalAmount += rawTotal
       })
 
-      const discountAmount = Math.floor((subtotalAmount * bill.activePromotion.discountPercentage) / 100)
+      const discountAmount = (subtotalAmount * bill.activePromotion.discountPercentage) / 100
 
       printer.tableCustom([
         { text: 'Tong tien hang', width: 0.45, align: 'left' },

@@ -1177,3 +1177,58 @@ export const setAdminFnbOrder = async (req: Request, res: Response, next: NextFu
     next(error)
   }
 }
+
+/**
+ * @description Thống kê FNB: số item bán được theo ngày/tuần/tháng (theo giờ Việt Nam)
+ * @path GET /fnb-orders/stats
+ * @query period: 'day' | 'week' | 'month'
+ * @query date: YYYY-MM-DD (optional - ngày cụ thể; không gửi thì dùng hôm nay / tuần hiện tại / tháng hiện tại)
+ * @query category: 'drink' | 'snack' (optional - lọc theo loại)
+ * @query search: string (optional - tìm theo tên item)
+ */
+export const getFnbSalesStats = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const period = (req.query.period as string) || 'day'
+    const dateStr = req.query.date as string | undefined
+    const category = req.query.category as string | undefined
+    const search = req.query.search as string | undefined
+
+    if (!['day', 'week', 'month'].includes(period)) {
+      throw new ErrorWithStatus({
+        message: 'period phải là day, week hoặc month',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
+    }
+
+    if (dateStr) {
+      const dateRegex = /^\d{4}-\d{2}-\d{2}$/
+      if (!dateRegex.test(dateStr)) {
+        throw new ErrorWithStatus({
+          message: 'date phải có format YYYY-MM-DD',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      }
+    }
+
+    if (category && !['drink', 'snack'].includes(category)) {
+      throw new ErrorWithStatus({
+        message: 'category phải là drink hoặc snack',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
+    }
+
+    const result = await fnbOrderService.getFnbSalesStats(
+      period as 'day' | 'week' | 'month',
+      dateStr,
+      category as 'drink' | 'snack' | undefined,
+      search
+    )
+
+    return res.status(HTTP_STATUS_CODE.OK).json({
+      message: 'Lấy thống kê FNB thành công',
+      result
+    })
+  } catch (error) {
+    next(error)
+  }
+}

@@ -1,21 +1,20 @@
 import { Router } from 'express'
+import { UserRole } from '~/constants/enum'
 import {
   cancelSchedule,
+  convertBookingToSchedules,
   createSchedule,
   getSchedules,
   getSchedulesByRoom,
-  updateSchedule,
-  convertBookingToSchedules
+  updateSchedule
 } from '~/controllers/roomSchedule.controller'
-import { wrapRequestHandler } from '~/utils/handlers'
+import { protect } from '~/middlewares/auth.middleware'
 import {
   createScheduleValidator,
   getSchedulesByRoomValidator,
-  getSchedulesValidator,
   updateScheduleValidator
 } from '~/middlewares/roomSchedule.middleware'
-import { protect } from '~/middlewares/auth.middleware'
-import { UserRole } from '~/constants/enum'
+import { wrapRequestHandler } from '~/utils/handlers'
 
 const roomScheduleRouter = Router()
 
