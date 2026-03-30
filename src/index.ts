@@ -28,6 +28,7 @@ import roomMusicRouter from '~/routes/roomMusic.routes'
 import roomScheduleRouter from '~/routes/roomSchedule.routes'
 import roomTypeRouter from '~/routes/roomType.routes'
 import usersRouter from '~/routes/users.routes'
+import membershipRouter from '~/routes/membership.routes'
 
 import { finishSchedulerInADay } from '~/jobs/bookingScheduler'
 import { startShiftScheduler } from '~/jobs/shiftScheduler'
@@ -148,6 +149,7 @@ app.use('/print', printRouter)
 app.use('/fnb-menu-item', fnbMenuItemRouter)
 app.use('/employee-schedules', employeeScheduleRouter)
 app.use('/notifications', notificationRouter)
+app.use('/membership', membershipRouter)
 
 // Error handler
 app.use(defaultErrorHandler)

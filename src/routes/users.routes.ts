@@ -11,7 +11,9 @@ import {
   logoutController,
   registerController,
   resetPasswordController,
-  updateUserController
+  updateUserController,
+  getUserMembershipDetailController,
+  grantUserPointsController
 } from '~/controllers/users.controller'
 import {
   accessTokenValidator,
@@ -28,6 +30,8 @@ import {
 import { strictAuthLimiter } from '~/middlewares/rateLimiter.middleware'
 import { wrapRequestHandler } from '~/utils/handlers'
 import { upload } from '~/utils/common'
+import { protect } from '~/middlewares/auth.middleware'
+import { UserRole } from '~/constants/enum'
 
 const usersRouter = Router()
 
@@ -130,6 +134,20 @@ usersRouter.get('/get-user', accessTokenValidator, checkUserId, wrapRequestHandl
  * @author QuangDoo
  */
 usersRouter.get('/', wrapRequestHandler(getUsersController))
+
+/**
+ * @description Get membership detail for user (admin)
+ * @path /users/:id/membership
+ * @method GET
+ */
+usersRouter.get('/:id/membership', protect([UserRole.Admin]), wrapRequestHandler(getUserMembershipDetailController))
+
+/**
+ * @description Grant points to user (admin)
+ * @path /users/:id/points
+ * @method POST
+ */
+usersRouter.post('/:id/points', protect([UserRole.Admin]), wrapRequestHandler(grantUserPointsController))
 
 /**
  * @description Get user by ID

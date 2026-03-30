@@ -102,3 +102,18 @@ export enum NotificationType {
   SCHEDULE_REJECTED = 'schedule_rejected',
   SCHEDULE_STATUS_UPDATED = 'schedule_status_updated'
 }
+
+export enum MembershipTier {
+  Member = 'Member',
+  Silver = 'Silver',
+  Gold = 'Gold',
+  Platinum = 'Platinum',
+  A = 'A',
+  B = 'B'
+}
+
+export enum RewardSource {
+  Point = 'point',
+  Tier = 'tier',
+  Streak = 'streak'
+}

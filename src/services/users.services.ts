@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { TokenType } from '~/constants/enum'
+import { MembershipTier, TokenType } from '~/constants/enum'
 import { USER_MESSAGES } from '~/constants/messages'
 import { RegisterRequestBody, UpdateUserRequestBody, GetUsersQuery } from '~/models/requests/User.requests'
 import { User } from '~/models/schemas/User.schema'
@@ -29,17 +29,22 @@ class UsersServices {
   }
 
   async register(payload: RegisterRequestBody) {
+    const normalizedEmail = payload.email?.trim() || undefined
     const result = await databaseService.users.insertOne(
       new User({
         ...payload,
         _id: new ObjectId(),
         username: payload.username,
-        email: payload.email || '',
+        email: normalizedEmail,
         date_of_birth: new Date(payload.date_of_birth),
         password: hashPassword(payload.password),
         phone_number: payload.phone_number,
         created_at: new Date(),
-        updated_at: new Date()
+        updated_at: new Date(),
+        totalPoint: 0,
+        availablePoint: 0,
+        lifetimePoint: 0,
+        tier: MembershipTier.Member
       })
     )
 
@@ -223,6 +228,10 @@ class UsersServices {
     // Tìm user theo email
     const user = await databaseService.users.findOne({ email })
     if (!user) {
+      throw new Error(USER_MESSAGES.EMAIL_NOT_FOUND)
+    }
+
+    if (!user.email) {
       throw new Error(USER_MESSAGES.EMAIL_NOT_FOUND)
     }
 

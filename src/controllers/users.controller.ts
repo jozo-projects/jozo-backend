@@ -2,7 +2,12 @@ import { NextFunction, Request, Response } from 'express'
 import { type ParamsDictionary } from 'express-serve-static-core'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { USER_MESSAGES } from '~/constants/messages'
-import { type RegisterRequestBody, UpdateUserRequestBody, GetUsersQuery, ChangePasswordRequestBody } from '~/models/requests/User.requests'
+import {
+  type RegisterRequestBody,
+  UpdateUserRequestBody,
+  GetUsersQuery,
+  ChangePasswordRequestBody
+} from '~/models/requests/User.requests'
 import { usersServices } from '~/services/users.services'
 import { hashPassword } from '~/utils/crypto'
 import { signToken } from '~/utils/jwt'
@@ -10,6 +15,7 @@ import databaseService from '~/services/database.service'
 import { IUser } from '~/models/schemas/User.schema'
 import { uploadImageToCloudinary } from '~/services/cloudinary.service'
 import CloudinaryResponse from '~/models/CloudinaryResponse'
+import membershipService from '~/services/membership.service'
 
 /**
  * Register a new user
@@ -27,6 +33,8 @@ export const registerController = async (
   try {
     const { name, username, email, password, confirm_password, date_of_birth, role, phone_number } = req.body
 
+    const normalizedEmail = email?.trim() || undefined
+
     // Basic check: Ensure passwords match
     if (password !== confirm_password) {
       return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
@@ -42,7 +50,7 @@ export const registerController = async (
     const userDocument = {
       name,
       username,
-      email: email || '', // Email có thể là empty string nếu không được cung cấp
+      ...(normalizedEmail ? { email: normalizedEmail } : {}),
       phone_number,
       date_of_birth: new Date(date_of_birth),
       password: hashedPassword,
@@ -280,6 +288,53 @@ export const deleteUserController = async (req: Request, res: Response, next: Ne
     return res.status(HTTP_STATUS_CODE.OK).json({
       message: 'User deleted successfully',
       result
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+export const getUserMembershipDetailController = async (req: Request, res: Response, next: NextFunction) => {
+  const { id } = req.params
+  if (!id) {
+    return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({ message: 'Thiếu user id' })
+  }
+
+  try {
+    const data = await membershipService.getMemberDetail(id)
+    return res.status(HTTP_STATUS_CODE.OK).json({
+      message: 'Thông tin membership',
+      result: data
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+export const grantUserPointsController = async (req: Request, res: Response, next: NextFunction) => {
+  const { id } = req.params
+  const numericPoints = Number(req.body.points)
+
+  if (!id || Number.isNaN(numericPoints)) {
+    return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
+      message: 'Thiếu id hoặc points không hợp lệ'
+    })
+  }
+
+  if (numericPoints <= 0) {
+    return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
+      message: 'points phải lớn hơn 0'
+    })
+  }
+
+  try {
+    const data = await membershipService.adminAddPoints(id, numericPoints, {
+      method: 'admin',
+      reason: req.body.reason
+    })
+    return res.status(HTTP_STATUS_CODE.OK).json({
+      message: 'Cộng điểm thành công',
+      result: data
     })
   } catch (error) {
     next(error)

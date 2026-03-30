@@ -8,6 +8,8 @@ import { ObjectId } from 'mongodb'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import billService from '~/services/bill.service'
 import databaseService from '~/services/database.service'
+import membershipService from '~/services/membership.service'
+import { RewardSource } from '~/constants/enum'
 
 // Extend dayjs with the required plugins
 dayjs.extend(weekOfYear)
@@ -825,8 +827,6 @@ export const getAllBills = async (req: Request, res: Response) => {
 export const saveBill = async (req: Request, res: Response) => {
   const bill = req.body
 
-  console.log('bill', bill)
-
   // Kiểm tra các trường bắt buộc
   if (!bill || !bill.scheduleId || !bill.roomId) {
     return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
@@ -868,23 +868,25 @@ export const saveBill = async (req: Request, res: Response) => {
       }
     }
 
-    const now = new Date()
-    const billToSave = {
-      ...bill,
-      _id: bill._id ? (bill._id instanceof ObjectId ? bill._id : new ObjectId(bill._id)) : new ObjectId(),
-      scheduleId: bill.scheduleId,
-      roomId: bill.roomId,
-      createdAt: bill.createdAt ? new Date(bill.createdAt) : now,
-      startTime: bill.startTime ? new Date(bill.startTime) : new Date(),
-      endTime: bill.endTime ? new Date(bill.endTime) : new Date(),
-      invoiceCode:
-        bill.invoiceCode ||
-        `#${now.getDate().toString().padStart(2, '0')}${(now.getMonth() + 1).toString().padStart(2, '0')}${now.getHours().toString().padStart(2, '0')}${now.getMinutes().toString().padStart(2, '0')}`
+    // Sử dụng service method mới để lưu bill và tích điểm
+    const result = await billService.saveBillWithMembership(bill)
+
+    // Tạo response message dựa trên kết quả membership
+    let message = 'Bill saved successfully'
+    if (result.membership.success) {
+      message += ' and membership points added'
+    } else if (result.membership.skipped) {
+      message += ` (membership skipped: ${result.membership.reason})`
+    } else if (result.membership.error) {
+      message += ` (membership error: ${result.membership.error})`
     }
-    await databaseService.bills.insertOne(billToSave)
+
     return res.status(HTTP_STATUS_CODE.OK).json({
-      message: 'Bill saved successfully',
-      result: billToSave
+      message,
+      result: {
+        bill: result.bill,
+        membership: result.membership
+      }
     })
   } catch (error: any) {
     return res.status(HTTP_STATUS_CODE.INTERNAL_SERVER_ERROR).json({

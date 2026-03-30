@@ -2079,6 +2079,130 @@ export class BillService {
     const time2Minutes = time2.getHours() * 60 + time2.getMinutes()
     return time1Minutes >= time2Minutes
   }
+
+  /**
+   * Lưu bill vào database và tự động tích điểm membership
+   * @param billData Bill data cần lưu
+   * @returns Bill đã lưu và kết quả tích điểm
+   */
+  async saveBillWithMembership(billData: IBill): Promise<{
+    bill: IBill
+    membership: {
+      success: boolean
+      user?: any
+      error?: string
+      skipped?: boolean
+      reason?: string
+    }
+  }> {
+    try {
+      // Import membershipService ở đây để tránh circular dependency
+      const membershipService = require('./membership.service').default
+
+      // 1. Validate dữ liệu bill
+      if (!billData.scheduleId || !billData.roomId) {
+        throw new ErrorWithStatus({
+          message: 'Missing required fields: scheduleId, roomId',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      }
+
+      // 2. Tạo invoiceCode nếu chưa có
+      if (!billData.invoiceCode) {
+        const now = dayjs().tz('Asia/Ho_Chi_Minh')
+        billData.invoiceCode = `#${now.date().toString().padStart(2, '0')}${(now.month() + 1).toString().padStart(2, '0')}${now.hour().toString().padStart(2, '0')}${now.minute().toString().padStart(2, '0')}`
+      }
+
+      // 3. Kiểm tra xem invoiceCode đã được sử dụng để tích điểm chưa (tránh tích điểm trùng)
+      const existingRewardHistory = await databaseService.rewardHistories.findOne({
+        'meta.invoiceCode': billData.invoiceCode
+      })
+
+      if (existingRewardHistory) {
+        console.warn(`Invoice ${billData.invoiceCode} đã được tích điểm rồi, bỏ qua tích điểm`)
+      }
+
+      // 4. Lấy phone_number từ bill hoặc schedule
+      let customerPhone = billData.customerPhone
+
+      if (!customerPhone) {
+        const schedule = await databaseService.roomSchedule.findOne({
+          _id: new ObjectId(billData.scheduleId)
+        })
+
+        if (schedule?.customerPhone) {
+          customerPhone = schedule.customerPhone
+        }
+      }
+
+      // 5. Chuẩn bị bill để lưu
+      const now = new Date()
+      const billToSave: IBill = {
+        ...billData,
+        _id: billData._id ? new ObjectId(billData._id) : new ObjectId(),
+        scheduleId: new ObjectId(billData.scheduleId),
+        roomId: new ObjectId(billData.roomId),
+        createdAt: billData.createdAt ? new Date(billData.createdAt) : now,
+        startTime: billData.startTime ? new Date(billData.startTime) : now,
+        endTime: billData.endTime ? new Date(billData.endTime) : now,
+        customerPhone: customerPhone || undefined
+      }
+
+      // 6. Lưu bill vào database
+      await databaseService.bills.insertOne(billToSave)
+
+      // 7. Tự động tích điểm membership (nếu có customerPhone và chưa tích điểm trước đó)
+      const membershipResult: {
+        success: boolean
+        user?: any
+        error?: string
+        skipped?: boolean
+        reason?: string
+      } = {
+        success: false
+      }
+
+      if (!customerPhone) {
+        membershipResult.skipped = true
+        membershipResult.reason = 'Không có phone_number trong bill hoặc schedule'
+      } else if (existingRewardHistory) {
+        membershipResult.skipped = true
+        membershipResult.reason = 'Invoice đã được tích điểm rồi'
+      } else if (billToSave.totalAmount <= 0) {
+        membershipResult.skipped = true
+        membershipResult.reason = 'Tổng tiền = 0, không tích điểm'
+      } else {
+        // Thực hiện tích điểm bằng phone_number
+        try {
+          const updatedUser = await membershipService.earnPointsByPhone({
+            phone_number: customerPhone,
+            totalAmount: billToSave.totalAmount,
+            source: require('~/constants/enum').RewardSource.Point,
+            meta: {
+              invoiceCode: billToSave.invoiceCode,
+              method: 'auto'
+            },
+            visitAt: billToSave.endTime || new Date()
+          })
+
+          membershipResult.success = true
+          membershipResult.user = updatedUser
+        } catch (error: any) {
+          console.error('Lỗi khi tích điểm tự động:', error)
+          membershipResult.success = false
+          membershipResult.error = error.message || 'Unknown error'
+        }
+      }
+
+      return {
+        bill: billToSave,
+        membership: membershipResult
+      }
+    } catch (error) {
+      console.error('Lỗi khi lưu bill:', error)
+      throw error
+    }
+  }
 }
 
 const billService = new BillService()

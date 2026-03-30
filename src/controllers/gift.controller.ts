@@ -4,6 +4,7 @@ import { ParamsDictionary } from 'express-serve-static-core'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { GIFT_MESSAGES } from '~/constants/messages'
 import { GiftCreateRequest, GiftUpdateRequest } from '~/models/requests/Gift.request'
+import { FnBCategory } from '~/constants/enum'
 import { GiftBundleItem } from '~/models/schemas/Gift.schema'
 import giftService from '~/services/gift.service'
 import { uploadImageToCloudinary } from '~/services/cloudinary.service'
@@ -62,6 +63,9 @@ const normalizeGiftPayload = (body: Record<string, unknown>): GiftCreateRequest 
     price: parseNumber(body.price),
     discountPercentage: parseNumber(body.discountPercentage),
     discountAmount: parseNumber(body.discountAmount),
+    categories: Array.isArray(body.categories)
+      ? (body.categories as (FnBCategory | string)[]).map((c) => c as FnBCategory)
+      : undefined,
     items: normalizedItems,
     totalQuantity: (parseNumber(body.totalQuantity) as number) || 0,
     remainingQuantity: parseNumber(body.remainingQuantity),

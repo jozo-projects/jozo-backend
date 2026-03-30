@@ -90,14 +90,26 @@ class RoomScheduleService {
   }
 
   /**
+   * Parse time slot (HH:mm-HH:mm) với booking date, cho phép slot qua đêm (vd: 23:00-01:00).
+   */
+  private parseTimeSlotWithOvernight(
+    bookingDate: string,
+    timeSlot: string,
+    timeZone: string
+  ): { startTime: Date; endTime: Date } {
+    const [startTimeStr, endTimeStr] = timeSlot.split('-')
+    const startTime = dayjs.tz(`${bookingDate} ${startTimeStr}`, 'YYYY-MM-DD HH:mm', timeZone).toDate()
+    let endTime = dayjs.tz(`${bookingDate} ${endTimeStr}`, 'YYYY-MM-DD HH:mm', timeZone).toDate()
+    if (endTime.getTime() <= startTime.getTime()) {
+      endTime = dayjs.tz(`${bookingDate} ${endTimeStr}`, 'YYYY-MM-DD HH:mm', timeZone).add(1, 'day').toDate()
+    }
+    return { startTime, endTime }
+  }
+
+  /**
    * Kiểm tra trùng lịch cho một phòng, cho phép loại trừ một schedule cụ thể.
    */
-  private async ensureNoOverlap(
-    roomId: ObjectId,
-    startTime: Date,
-    endTime: Date | null,
-    excludeScheduleId?: ObjectId
-  ) {
+  private async ensureNoOverlap(roomId: ObjectId, startTime: Date, endTime: Date | null, excludeScheduleId?: ObjectId) {
     const effectiveEndTime = endTime || new Date('9999-12-31T23:59:59.999Z')
 
     const overlapQuery: Record<string, unknown> = {
@@ -151,18 +163,21 @@ class RoomScheduleService {
         })
       }
 
-      // So sánh thời gian chỉ tính đến giờ và phút
-      if (!this.compareTimeIgnoreSeconds(endTime, startTime)) {
+      const minDurationMs = 0 // Cho phép duration = 0 (startTime = endTime)
+      const maxDurationMs = 8 * 60 * 60 * 1000 // 8 hours in milliseconds
+
+      // FE sẽ gửi full datetime chính xác (cả ngày và giờ),
+      // BE chỉ kiểm tra endTime > startTime và trong giới hạn thời lượng, dùng dayjs để nhất quán
+      const start = dayjs(startTime)
+      const end = dayjs(endTime)
+      const diffMs = end.diff(start, 'millisecond')
+
+      if (diffMs <= 0) {
         throw new ErrorWithStatus({
-          message: 'endTime must be greater than or equal to startTime (comparing only hours and minutes).',
+          message: 'endTime must be after startTime.',
           status: HTTP_STATUS_CODE.UNPROCESSABLE_ENTITY
         })
       }
-
-      // Calculate duration in milliseconds
-      const diffMs = endTime.getTime() - startTime.getTime()
-      const minDurationMs = 0 // Cho phép duration = 0 (startTime = endTime)
-      const maxDurationMs = 8 * 60 * 60 * 1000 // 8 hours in milliseconds
 
       // Validate minimum duration (cho phép = 0)
       if (diffMs < minDurationMs) {
@@ -317,7 +332,11 @@ class RoomScheduleService {
     const previousGiftEnabled = !!currentSchedule.giftEnabled
     const targetStartTime = schedule.startTime ? new Date(schedule.startTime) : currentSchedule.startTime
     const targetEndTime =
-      schedule.endTime !== undefined ? (schedule.endTime ? new Date(schedule.endTime) : null) : currentSchedule.endTime || null
+      schedule.endTime !== undefined
+        ? schedule.endTime
+          ? new Date(schedule.endTime)
+          : null
+        : currentSchedule.endTime || null
 
     // Đổi room nếu có yêu cầu newRoomId
     if (schedule.newRoomId) {
@@ -571,15 +590,9 @@ class RoomScheduleService {
 
       const timeZone = 'Asia/Ho_Chi_Minh'
 
-      // Tạo room schedules cho từng time slot
+      // Tạo room schedules cho từng time slot (hỗ trợ qua đêm, vd: 23:00-01:00)
       for (const timeSlot of booking.time_slots) {
-        const [startTimeStr, endTimeStr] = timeSlot.split('-')
-
-        // Tạo đối tượng ngày-giờ cho startTime và endTime
-        const bookingDate = booking.booking_date // YYYY-MM-DD
-
-        const startTime = dayjs.tz(`${bookingDate} ${startTimeStr}`, 'YYYY-MM-DD HH:mm', timeZone).toDate()
-        const endTime = dayjs.tz(`${bookingDate} ${endTimeStr}`, 'YYYY-MM-DD HH:mm', timeZone).toDate()
+        const { startTime, endTime } = this.parseTimeSlotWithOvernight(booking.booking_date, timeSlot, timeZone)
 
         // Sinh bookingCode cho booking từ web customer
         const bookingCode = await generateUniqueBookingCode(async (code) => {
@@ -687,15 +700,9 @@ class RoomScheduleService {
 
       const timeZone = 'Asia/Ho_Chi_Minh'
 
-      // Tạo room schedules cho từng time slot
+      // Tạo room schedules cho từng time slot (hỗ trợ qua đêm, vd: 23:00-01:00)
       for (const timeSlot of booking.time_slots) {
-        const [startTimeStr, endTimeStr] = timeSlot.split('-')
-
-        // Tạo đối tượng ngày-giờ cho startTime và endTime
-        const bookingDate = booking.booking_date // YYYY-MM-DD
-
-        const startTime = dayjs.tz(`${bookingDate} ${startTimeStr}`, 'YYYY-MM-DD HH:mm', timeZone).toDate()
-        const endTime = dayjs.tz(`${bookingDate} ${endTimeStr}`, 'YYYY-MM-DD HH:mm', timeZone).toDate()
+        const { startTime, endTime } = this.parseTimeSlotWithOvernight(booking.booking_date, timeSlot, timeZone)
 
         // Kiểm tra xem time slot đã được đặt chưa
         const existingSchedule = await databaseService.roomSchedule.findOne({

@@ -1,3 +1,4 @@
+import { FnBCategory } from '~/constants/enum'
 import { GiftBundleItem, GiftType } from '~/models/schemas/Gift.schema'
 
 export interface GiftCreateRequest {
@@ -7,6 +8,7 @@ export interface GiftCreateRequest {
   price?: number
   discountPercentage?: number
   discountAmount?: number
+  categories?: FnBCategory[]
   items?: GiftBundleItem[]
   totalQuantity: number
   isActive?: boolean
