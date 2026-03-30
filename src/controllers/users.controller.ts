@@ -1,6 +1,7 @@
 import { NextFunction, Request, Response } from 'express'
 import { type ParamsDictionary } from 'express-serve-static-core'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
+import { MembershipTier } from '~/constants/enum'
 import { USER_MESSAGES } from '~/constants/messages'
 import {
   type RegisterRequestBody,
@@ -64,7 +65,11 @@ export const registerController = async (
       location: '',
       website: '',
       cover_photo: '',
-      avatar: ''
+      avatar: '',
+      tier: MembershipTier.Member,
+      totalPoint: 0,
+      availablePoint: 0,
+      lifetimePoint: 0
     }
 
     // Insert the new user into the database using the native MongoDB driver

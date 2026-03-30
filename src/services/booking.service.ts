@@ -347,7 +347,7 @@ class BookingService {
             const { startTime, endTime } = this.parseTimeSlotWithOvernight(
               clientBooking.booking_date,
               timeSlot,
-              'Asia/Ho_Chi_Minh'
+              timeZone
             )
             console.log(`Converted time: ${startTime.toISOString()} to ${endTime.toISOString()}`)
 
@@ -391,7 +391,6 @@ class BookingService {
       const createdScheduleIds: ObjectId[] = []
 
       // 2. Tạo các room schedules cho từng time slot (hỗ trợ qua đêm)
-      const timeZone = 'Asia/Ho_Chi_Minh'
       for (const timeSlot of clientBooking.time_slots) {
         const { startTime, endTime } = this.parseTimeSlotWithOvernight(
           clientBooking.booking_date,
