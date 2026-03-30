@@ -1114,24 +1114,27 @@ class MembershipService {
       })
     }
 
-    // Add to schedule.streakGifts[]
-    await databaseService.roomSchedule.updateOne(
-      { _id: scheduleObjectId },
+    // Add to schedule.streakGifts[] — use aggregation pipeline to handle null field
+    const newStreakGiftEntry = {
+      rewardHistoryId: updatedReward._id,
+      giftId: updatedReward.meta?.giftId,
+      giftName: updatedReward.meta?.giftName,
+      giftType: updatedReward.meta?.giftType,
+      giftImage: updatedReward.meta?.giftImage,
+      streakCount: updatedReward.meta?.streakCount,
+      servedBy: staffObjectId,
+      servedAt: new Date()
+    }
+
+    await databaseService.roomSchedule.updateOne({ _id: scheduleObjectId }, [
       {
-        $push: {
+        $set: {
           streakGifts: {
-            rewardHistoryId: updatedReward._id,
-            giftId: updatedReward.meta?.giftId,
-            giftName: updatedReward.meta?.giftName,
-            giftType: updatedReward.meta?.giftType,
-            giftImage: updatedReward.meta?.giftImage,
-            streakCount: updatedReward.meta?.streakCount,
-            servedBy: staffObjectId,
-            servedAt: new Date()
+            $concatArrays: [{ $ifNull: ['$streakGifts', []] }, [newStreakGiftEntry]]
           }
         }
       }
-    )
+    ])
 
     return updatedReward
   }
