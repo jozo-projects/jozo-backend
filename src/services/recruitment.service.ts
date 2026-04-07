@@ -27,7 +27,8 @@ class RecruitmentService {
       position: data.position,
       workShifts: data.workShifts,
       submittedAt: new Date(),
-      status: RecruitmentStatus.Pending
+      status: RecruitmentStatus.Pending,
+      note: data.note ?? null
     })
 
     if (!recruitment.isValidAge()) {
@@ -75,6 +76,14 @@ class RecruitmentService {
       })
     }
 
+    const noteMaxLen = 5000
+    if (data.note != null && data.note.length > noteMaxLen) {
+      throw new ErrorWithStatus({
+        message: `Ghi chú không được vượt quá ${noteMaxLen} ký tự`,
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
+    }
+
     // Kiểm tra số điện thoại đã tồn tại chưa
     const existingRecruitment = await databaseService.getCollection(this.collection).findOne({
       phone: data.phone
@@ -99,7 +108,8 @@ class RecruitmentService {
       position: data.position,
       workShifts: data.workShifts,
       submittedAt: new Date(),
-      status: RecruitmentStatus.Pending
+      status: RecruitmentStatus.Pending,
+      note: data.note?.trim() || null
     }
 
     const result = await databaseService.getCollection(this.collection).insertOne(recruitmentData)
