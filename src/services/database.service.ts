@@ -21,6 +21,10 @@ import { Gift } from '~/models/schemas/Gift.schema'
 import { MembershipConfig } from '~/models/schemas/MembershipConfig.schema'
 import { RewardHistory } from '~/models/schemas/RewardHistory.schema'
 import { Streak } from '~/models/schemas/Streak.schema'
+import { CoffeeTable } from '~/models/schemas/CoffeeTable.schema'
+import { CoffeeSession } from '~/models/schemas/CoffeeSession.schema'
+import { CoffeePricingConfig } from '~/models/schemas/CoffeePricing.schema'
+import { CoffeeSessionFNBOrder } from '~/models/schemas/CoffeeSessionOrder.schema'
 dotenv.config()
 
 // Interface cho Client Booking
@@ -153,6 +157,22 @@ class DatabaseService {
 
   get streaks(): Collection<Streak> {
     return this.db.collection('streaks')
+  }
+
+  get coffeeTables(): Collection<CoffeeTable> {
+    return this.db.collection('coffee_tables')
+  }
+
+  get coffeeSessions(): Collection<CoffeeSession> {
+    return this.db.collection('coffee_sessions')
+  }
+
+  get coffeePricingConfigs(): Collection<CoffeePricingConfig> {
+    return this.db.collection('coffee_pricing_configs')
+  }
+
+  get coffeeSessionOrders(): Collection<CoffeeSessionFNBOrder> {
+    return this.db.collection('coffee_session_fnb_orders')
   }
 
   // Cho phép lấy collection bất kỳ

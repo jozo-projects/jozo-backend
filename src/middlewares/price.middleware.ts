@@ -1,7 +1,7 @@
 import { NextFunction, Request, Response } from 'express'
 import { checkSchema } from 'express-validator'
 import { ObjectId } from 'mongodb'
-import { DayType, RoomType } from '~/constants/enum'
+import { DayType } from '~/constants/enum'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { Price_MESSAGES } from '~/constants/messages'
 import { ErrorWithStatus } from '~/models/Error'

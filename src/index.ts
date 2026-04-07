@@ -9,7 +9,13 @@ import databaseService from '~/services/database.service'
 import serverService from '~/services/server.service'
 
 import billRouter from '~/routes/bill.routes'
+import clientCoffeeSessionOrderRouter from '~/routes/clientCoffeeSessionOrder.routes'
+import clientCoffeeSessionRouter from '~/routes/clientCoffeeSession.routes'
 import clientFnbRouter from '~/routes/clientFnb.routes'
+import coffeePricingRouter from '~/routes/coffeePricing.routes'
+import coffeeSessionOrderRouter from '~/routes/coffeeSessionOrder.routes'
+import coffeeSessionRouter from '~/routes/coffeeSession.routes'
+import coffeeTableRouter from '~/routes/coffeeTable.routes'
 import employeeScheduleRouter from '~/routes/employeeSchedule.routes'
 import fileRouter from '~/routes/file.routes'
 import fnbMenuRouter from '~/routes/fnbMenu.routes'
@@ -145,11 +151,17 @@ app.use('/bookings', onlineBookingRouter) // Online booking routes - phải đ�
 app.use('/holidays', holidayRouter)
 app.use('/recruitments', recruitmentRouter)
 app.use('/client/fnb', clientFnbRouter)
+app.use('/client/coffee-sessions', clientCoffeeSessionRouter)
+app.use('/client/coffee-session-orders', clientCoffeeSessionOrderRouter)
 app.use('/print', printRouter)
 app.use('/fnb-menu-item', fnbMenuItemRouter)
 app.use('/employee-schedules', employeeScheduleRouter)
 app.use('/notifications', notificationRouter)
 app.use('/membership', membershipRouter)
+app.use('/coffee-tables', coffeeTableRouter)
+app.use('/coffee-pricing', coffeePricingRouter)
+app.use('/coffee-sessions', coffeeSessionRouter)
+app.use('/coffee-session-orders', coffeeSessionOrderRouter)
 
 // Error handler
 app.use(defaultErrorHandler)

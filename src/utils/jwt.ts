@@ -21,13 +21,13 @@ export const signToken = ({
   })
 }
 
-export const verifyToken = (token: string): Promise<JwtPayload> => {
+export const verifyToken = <T extends object = JwtPayload>(token: string): Promise<T> => {
   return new Promise((resolve, reject) => {
     return jwt.verify(token, process.env.JWT_SECRET as string, (err, decoded) => {
       if (err) {
         reject(err)
       } else {
-        resolve(decoded as JwtPayload)
+        resolve(decoded as T)
       }
     })
   })
