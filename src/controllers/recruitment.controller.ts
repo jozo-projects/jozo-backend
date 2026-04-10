@@ -1,7 +1,7 @@
 import { Request, Response } from 'express'
-import { recruitmentService } from '~/services/recruitment.service'
-import { GetRecruitmentsRequest } from '~/models/requests/Recruitment.request'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
+import { GetRecruitmentsRequest } from '~/models/requests/Recruitment.request'
+import { recruitmentService } from '~/services/recruitment.service'
 
 export class RecruitmentController {
   // Lấy danh sách đơn ứng tuyển (admin only)
@@ -73,7 +73,7 @@ export class RecruitmentController {
       }
 
       // Kiểm tra status có hợp lệ không
-      const validStatuses = ['pending', 'reviewed', 'approved', 'rejected', 'hired']
+      const validStatuses = ['pending', 'reviewed', 'approved', 'rejected', 'hired', 'contacted']
       if (!validStatuses.includes(status)) {
         return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
           message: 'Trạng thái không hợp lệ'

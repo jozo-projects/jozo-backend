@@ -16,6 +16,8 @@ export interface IRecruitment {
   submittedAt: Date
   status: RecruitmentStatus
   workDays?: string[] | null // Optional - backward compatibility
+  /** Ghi chú / lời nhắn từ ứng viên (optional) */
+  note?: string | null
 }
 
 export class Recruitment {
@@ -33,6 +35,7 @@ export class Recruitment {
   submittedAt: Date
   status: RecruitmentStatus
   workDays?: string[] | null
+  note: string | null
 
   constructor(recruitment: IRecruitment) {
     const date = new Date()
@@ -51,6 +54,28 @@ export class Recruitment {
     this.submittedAt = recruitment.submittedAt || date
     this.status = recruitment.status || RecruitmentStatus.Pending
     this.workDays = recruitment.workDays
+    this.note = recruitment.note ?? null
+  }
+
+  /** Đảm bảo GET (danh sách / chi tiết) luôn có trường `note` trong JSON */
+  toJSON() {
+    return {
+      _id: this._id,
+      fullName: this.fullName,
+      birthDate: this.birthDate,
+      gender: this.gender,
+      phone: this.phone,
+      email: this.email,
+      socialMedia: this.socialMedia,
+      currentStatus: this.currentStatus,
+      otherStatus: this.otherStatus,
+      position: this.position,
+      workShifts: this.workShifts,
+      submittedAt: this.submittedAt,
+      status: this.status,
+      workDays: this.workDays ?? null,
+      note: this.note ?? null
+    }
   }
 
   // Tính tuổi từ ngày sinh

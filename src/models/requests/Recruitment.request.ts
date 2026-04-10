@@ -9,6 +9,8 @@ export interface CreateRecruitmentRequest {
   otherStatus?: string | null // Thông tin khác (nếu currentStatus = "other")
   position: string[] // ["cashier", "server", "parking"] - có thể chọn nhiều
   workShifts: string[] // ["morning", "evening"] - có thể chọn nhiều
+  /** Ghi chú từ ứng viên (optional) */
+  note?: string | null
 }
 
 export interface UpdateRecruitmentRequest {
