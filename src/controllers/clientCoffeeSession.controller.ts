@@ -2,6 +2,7 @@ import { Request, Response } from 'express'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { IActivateCoffeeSessionRequestBody } from '~/models/requests/ClientCoffeeSession.request'
 import clientCoffeeSessionService from '~/services/clientCoffeeSession.service'
+import coffeeSessionOrderService from '~/services/coffeeSessionOrder.service'
 
 export const activateCoffeeSessionController = async (
   req: Request<Record<string, never>, unknown, IActivateCoffeeSessionRequestBody>,
@@ -16,11 +17,18 @@ export const activateCoffeeSessionController = async (
 }
 
 export const getCurrentCoffeeSessionController = async (req: Request, res: Response) => {
-  const result =
-    req.coffee_session || (await clientCoffeeSessionService.getCurrentCoffeeSession(req.decoded_coffee_session_authorization!))
+  const session =
+    req.coffee_session ||
+    (await clientCoffeeSessionService.getCurrentCoffeeSession(req.decoded_coffee_session_authorization!))
+
+  const coffeeSessionId = req.decoded_coffee_session_authorization!.coffee_session_id
+  const order = await coffeeSessionOrderService.getCoffeeSessionOrderBySessionId(coffeeSessionId)
 
   return res.status(HTTP_STATUS_CODE.OK).json({
     message: 'Get current coffee session success',
-    result
+    result: {
+      ...session,
+      order: order ?? null
+    }
   })
 }

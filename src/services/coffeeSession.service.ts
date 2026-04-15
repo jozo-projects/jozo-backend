@@ -71,7 +71,7 @@ class CoffeeSessionService {
   }
 
   private sanitizeCoffeeSession(session: ICoffeeSession): SafeCoffeeSession {
-    const { pinHash, ...safeSession } = session
+    const { pinHash: _pinHash, ...safeSession } = session
     return safeSession
   }
 
@@ -121,6 +121,7 @@ class CoffeeSessionService {
       peopleCount: payload.peopleCount,
       note: payload.note,
       pinHash: hashCoffeeSessionPin(pinCode),
+      pinCode,
       createdAt: now,
       updatedAt: now,
       createdBy: userId,
@@ -242,6 +243,7 @@ class CoffeeSessionService {
 
     const updateUnset: {
       pinHash?: ''
+      pinCode?: ''
     } = {}
 
     if (currentSession.planSnapshot) {
@@ -263,6 +265,7 @@ class CoffeeSessionService {
       updateSet.usageDurationMinutes = this.calculateUsageDurationMinutes(currentSession.startTime, now)
       updateSet.completedBy = userId
       updateUnset.pinHash = ''
+      updateUnset.pinCode = ''
     }
 
     const result = await databaseService.coffeeSessions.findOneAndUpdate(

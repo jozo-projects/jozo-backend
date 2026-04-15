@@ -8,8 +8,6 @@ import { ObjectId } from 'mongodb'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import billService from '~/services/bill.service'
 import databaseService from '~/services/database.service'
-import membershipService from '~/services/membership.service'
-import { RewardSource } from '~/constants/enum'
 
 // Extend dayjs with the required plugins
 dayjs.extend(weekOfYear)

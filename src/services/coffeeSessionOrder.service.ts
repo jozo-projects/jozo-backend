@@ -2,8 +2,21 @@ import { MongoServerError, ObjectId } from 'mongodb'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { ErrorWithStatus } from '~/models/Error'
 import { FNBOrder } from '~/models/schemas/FNB.schema'
-import { CoffeeSessionFNBOrder } from '~/models/schemas/CoffeeSessionOrder.schema'
+import { ICoffeeSession } from '~/models/schemas/CoffeeSession.schema'
+import {
+  CoffeeSessionFNBOrder,
+  ICoffeeSessionFNBLineItem,
+  ICoffeeSessionOrderTotals
+} from '~/models/schemas/CoffeeSessionOrder.schema'
+import {
+  aggregateQuantitiesByItemId,
+  appendCartLines,
+  emptyFnbOrder,
+  normalizeFnbOrder,
+  orderHasPositiveLines
+} from '~/utils/fnbOrderLines'
 import databaseService from './database.service'
+import { assertOrderLinesMatchMenuCustomizations } from './fnbMenuCustomization.service'
 import fnbMenuItemService from './fnbMenuItem.service'
 
 class CoffeeSessionOrderService {
@@ -12,40 +25,24 @@ class CoffeeSessionOrderService {
   private async initialize() {
     if (this.initialized) return
 
-    await databaseService.coffeeSessionOrders.createIndex({ coffeeSessionId: 1 }, { unique: true, name: 'unique_coffee_session_order' })
+    await databaseService.coffeeSessionOrders.createIndex(
+      { coffeeSessionId: 1 },
+      { unique: true, name: 'unique_coffee_session_order' }
+    )
     this.initialized = true
   }
 
-  private buildNormalizedOrder(order?: Partial<FNBOrder>): FNBOrder {
-    return {
-      drinks: order?.drinks || {},
-      snacks: order?.snacks || {}
-    }
+  private buildNormalizedOrder(order?: unknown): FNBOrder {
+    return normalizeFnbOrder(order ?? emptyFnbOrder())
   }
 
-  private mergeOrders(currentOrder: FNBOrder, cart: FNBOrder): FNBOrder {
-    const mergedOrder = {
-      drinks: { ...currentOrder.drinks },
-      snacks: { ...currentOrder.snacks }
-    }
+  private isBoardGameTicketSession(session: ICoffeeSession | null | undefined): boolean {
+    return Boolean(session?.planSnapshot)
+  }
 
-    for (const [itemId, quantity] of Object.entries(cart.drinks || {})) {
-      const nextQuantity = (mergedOrder.drinks[itemId] || 0) + quantity
-
-      if (nextQuantity > 0) {
-        mergedOrder.drinks[itemId] = nextQuantity
-      }
-    }
-
-    for (const [itemId, quantity] of Object.entries(cart.snacks || {})) {
-      const nextQuantity = (mergedOrder.snacks[itemId] || 0) + quantity
-
-      if (nextQuantity > 0) {
-        mergedOrder.snacks[itemId] = nextQuantity
-      }
-    }
-
-    return mergedOrder
+  private parseListUnitPrice(item: { price?: unknown }): number {
+    const n = Number(item?.price)
+    return Number.isFinite(n) && n >= 0 ? n : 0
   }
 
   private async ensureEditableCoffeeSession(coffeeSessionId: string) {
@@ -90,9 +87,82 @@ class CoffeeSessionOrderService {
     return { item, isVariant }
   }
 
+  private formatLineDisplayName(
+    baseName: string,
+    line: { note?: string; selections?: { groupKey: string; optionKey: string }[] }
+  ) {
+    const parts: string[] = [baseName]
+    if (line.selections?.length) {
+      parts.push(line.selections.map((s) => `${s.groupKey}:${s.optionKey}`).join(', '))
+    }
+    if (line.note?.trim()) {
+      parts.push(`— ${line.note.trim()}`)
+    }
+    return parts.length > 1 ? parts.join(' · ') : baseName
+  }
+
+  private async buildLineItems(order: FNBOrder, session: ICoffeeSession): Promise<ICoffeeSessionFNBLineItem[]> {
+    const ticketMode = this.isBoardGameTicketSession(session)
+    const lines: ICoffeeSessionFNBLineItem[] = []
+
+    for (const row of order.lines) {
+      const quantity = Math.floor(Number(row.quantity))
+      if (!Number.isFinite(quantity) || quantity <= 0) continue
+
+      const { item } = await this.getMenuItem(row.itemId)
+      const baseName = typeof item.name === 'string' ? item.name : String(item.name ?? row.itemId)
+      const name = this.formatLineDisplayName(baseName, row)
+      const listUnitPrice = this.parseListUnitPrice(item)
+
+      let chargedUnitPrice = listUnitPrice
+      let revenueBucket: ICoffeeSessionFNBLineItem['revenueBucket'] = 'snack_addon'
+
+      if (row.category === 'drink') {
+        if (ticketMode) {
+          chargedUnitPrice = 0
+          revenueBucket = 'ticket_included_drink'
+        } else {
+          revenueBucket = 'menu_listed_drink'
+        }
+      }
+
+      lines.push({
+        lineId: row.lineId,
+        itemId: row.itemId,
+        name,
+        category: row.category,
+        quantity,
+        note: row.note,
+        selections: row.selections,
+        listUnitPrice,
+        chargedUnitPrice,
+        lineListTotal: quantity * listUnitPrice,
+        lineChargedTotal: quantity * chargedUnitPrice,
+        revenueBucket
+      })
+    }
+
+    lines.sort((a, b) => {
+      if (a.category !== b.category) return a.category === 'drink' ? -1 : 1
+      const idCmp = a.itemId.localeCompare(b.itemId)
+      if (idCmp !== 0) return idCmp
+      return a.lineId.localeCompare(b.lineId)
+    })
+
+    return lines
+  }
+
+  private buildOrderTotals(lineItems: ICoffeeSessionFNBLineItem[], session: ICoffeeSession): ICoffeeSessionOrderTotals {
+    const pricingMode = this.isBoardGameTicketSession(session) ? 'board_game_ticket' : 'menu_listed'
+    const fnbListTotal = lineItems.reduce((s, l) => s + l.lineListTotal, 0)
+    const fnbChargedTotal = lineItems.reduce((s, l) => s + l.lineChargedTotal, 0)
+
+    return { pricingMode, fnbListTotal, fnbChargedTotal }
+  }
+
   private async applyInventoryDelta(currentOrder: FNBOrder, nextOrder: FNBOrder) {
-    const currentItems = { ...currentOrder.drinks, ...currentOrder.snacks }
-    const nextItems = { ...nextOrder.drinks, ...nextOrder.snacks }
+    const currentItems = aggregateQuantitiesByItemId(currentOrder)
+    const nextItems = aggregateQuantitiesByItemId(nextOrder)
     const itemIds = new Set([...Object.keys(currentItems), ...Object.keys(nextItems)])
 
     for (const itemId of itemIds) {
@@ -142,18 +212,42 @@ class CoffeeSessionOrderService {
   async getCoffeeSessionOrderBySessionId(coffeeSessionId: string) {
     await this.initialize()
 
-    return await databaseService.coffeeSessionOrders.findOne({ coffeeSessionId: new ObjectId(coffeeSessionId) })
+    const doc = await databaseService.coffeeSessionOrders.findOne({ coffeeSessionId: new ObjectId(coffeeSessionId) })
+    if (!doc) return null
+
+    const session = await databaseService.coffeeSessions.findOne({ _id: new ObjectId(coffeeSessionId) })
+    const normalized = this.buildNormalizedOrder(doc.order)
+    const needsHeal = session && orderHasPositiveLines(normalized) && (!doc.lineItems || doc.lineItems.length === 0)
+
+    if (needsHeal) {
+      const lineItems = await this.buildLineItems(normalized, session)
+      const orderTotals = this.buildOrderTotals(lineItems, session)
+      const healed = await databaseService.coffeeSessionOrders.findOneAndUpdate(
+        { coffeeSessionId: new ObjectId(coffeeSessionId) },
+        { $set: { lineItems, orderTotals, updatedAt: new Date() } },
+        { returnDocument: 'after' }
+      )
+      return healed ?? { ...doc, lineItems, orderTotals }
+    }
+
+    return doc
   }
 
   async setCoffeeSessionOrder(coffeeSessionId: string, order: FNBOrder, userId?: string) {
     await this.initialize()
-    await this.ensureEditableCoffeeSession(coffeeSessionId)
+    const session = await this.ensureEditableCoffeeSession(coffeeSessionId)
 
     const normalizedOrder = this.buildNormalizedOrder(order)
-    const existingOrder = await this.getCoffeeSessionOrderBySessionId(coffeeSessionId)
-    const currentOrder = existingOrder?.order || this.buildNormalizedOrder()
+    const existingOrder = await databaseService.coffeeSessionOrders.findOne({
+      coffeeSessionId: new ObjectId(coffeeSessionId)
+    })
+    const currentOrder = existingOrder?.order ? this.buildNormalizedOrder(existingOrder.order) : emptyFnbOrder()
 
+    await assertOrderLinesMatchMenuCustomizations(normalizedOrder)
     await this.applyInventoryDelta(currentOrder, normalizedOrder)
+
+    const lineItems = await this.buildLineItems(normalizedOrder, session)
+    const orderTotals = this.buildOrderTotals(lineItems, session)
 
     if (existingOrder) {
       const updatedOrder = await databaseService.coffeeSessionOrders.findOneAndUpdate(
@@ -161,6 +255,8 @@ class CoffeeSessionOrderService {
         {
           $set: {
             order: normalizedOrder,
+            lineItems,
+            orderTotals,
             updatedAt: new Date(),
             updatedBy: userId
           },
@@ -168,7 +264,9 @@ class CoffeeSessionOrderService {
             history: {
               timestamp: new Date(),
               updatedBy: userId || 'system',
-              changes: normalizedOrder
+              changes: normalizedOrder,
+              lineItemsSnapshot: lineItems,
+              orderTotalsSnapshot: orderTotals
             }
           }
         },
@@ -185,7 +283,15 @@ class CoffeeSessionOrderService {
       return updatedOrder
     }
 
-    const newOrder = new CoffeeSessionFNBOrder(coffeeSessionId, normalizedOrder, userId, userId)
+    const newOrder = new CoffeeSessionFNBOrder(
+      coffeeSessionId,
+      normalizedOrder,
+      userId,
+      userId,
+      undefined,
+      lineItems,
+      orderTotals
+    )
 
     try {
       const result = await databaseService.coffeeSessionOrders.insertOne(newOrder)
@@ -205,12 +311,13 @@ class CoffeeSessionOrderService {
 
   async submitCoffeeSessionOrderCart(coffeeSessionId: string, cart: FNBOrder, actorId?: string) {
     await this.initialize()
-    await this.ensureEditableCoffeeSession(coffeeSessionId)
 
     const normalizedCart = this.buildNormalizedOrder(cart)
-    const existingOrder = await this.getCoffeeSessionOrderBySessionId(coffeeSessionId)
-    const currentOrder = existingOrder?.order || this.buildNormalizedOrder()
-    const mergedOrder = this.mergeOrders(currentOrder, normalizedCart)
+    const existingOrder = await databaseService.coffeeSessionOrders.findOne({
+      coffeeSessionId: new ObjectId(coffeeSessionId)
+    })
+    const currentOrder = existingOrder?.order ? this.buildNormalizedOrder(existingOrder.order) : emptyFnbOrder()
+    const mergedOrder = appendCartLines(currentOrder, normalizedCart)
 
     return this.setCoffeeSessionOrder(coffeeSessionId, mergedOrder, actorId)
   }
@@ -219,7 +326,9 @@ class CoffeeSessionOrderService {
     await this.initialize()
     await this.ensureEditableCoffeeSession(coffeeSessionId)
 
-    const existingOrder = await this.getCoffeeSessionOrderBySessionId(coffeeSessionId)
+    const existingOrder = await databaseService.coffeeSessionOrders.findOne({
+      coffeeSessionId: new ObjectId(coffeeSessionId)
+    })
 
     if (!existingOrder) {
       throw new ErrorWithStatus({
@@ -228,7 +337,7 @@ class CoffeeSessionOrderService {
       })
     }
 
-    await this.applyInventoryDelta(existingOrder.order, this.buildNormalizedOrder())
+    await this.applyInventoryDelta(this.buildNormalizedOrder(existingOrder.order), emptyFnbOrder())
     await databaseService.coffeeSessionOrders.deleteOne({ coffeeSessionId: new ObjectId(coffeeSessionId) })
 
     return existingOrder

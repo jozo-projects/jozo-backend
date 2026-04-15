@@ -16,6 +16,7 @@ import coffeePricingRouter from '~/routes/coffeePricing.routes'
 import coffeeSessionOrderRouter from '~/routes/coffeeSessionOrder.routes'
 import coffeeSessionRouter from '~/routes/coffeeSession.routes'
 import coffeeTableRouter from '~/routes/coffeeTable.routes'
+import customizationGroupTemplateRouter from '~/routes/customizationGroupTemplate.routes'
 import employeeScheduleRouter from '~/routes/employeeSchedule.routes'
 import fileRouter from '~/routes/file.routes'
 import fnbMenuRouter from '~/routes/fnbMenu.routes'
@@ -61,10 +62,12 @@ const corsOptions = {
     'https://video.jozo.com.vn',
     'https://control.jozo.com.vn',
     'https://jozo.com.vn',
+    'https://order.jozo.com.vn',
     'https://admin.jozo.com.vn',
     'http://video.jozo.com.vn',
     'http://control.jozo.com.vn',
     'http://jozo.com.vn',
+    'http://order.jozo.com.vn',
     'http://admin.jozo.com.vn'
   ], // Chỉ định các origin được phép
   credentials: true,
@@ -97,10 +100,12 @@ app.use((req, res, next) => {
     'https://video.jozo.com.vn',
     'https://control.jozo.com.vn',
     'https://jozo.com.vn',
+    'https://order.jozo.com.vn',
     'https://admin.jozo.com.vn',
     'http://video.jozo.com.vn',
     'http://control.jozo.com.vn',
     'http://jozo.com.vn',
+    'http://order.jozo.com.vn',
     'http://admin.jozo.com.vn'
   ]
 
@@ -162,6 +167,7 @@ app.use('/coffee-tables', coffeeTableRouter)
 app.use('/coffee-pricing', coffeePricingRouter)
 app.use('/coffee-sessions', coffeeSessionRouter)
 app.use('/coffee-session-orders', coffeeSessionOrderRouter)
+app.use('/customization-group-templates', customizationGroupTemplateRouter)
 
 // Error handler
 app.use(defaultErrorHandler)

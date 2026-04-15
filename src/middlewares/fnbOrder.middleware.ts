@@ -6,6 +6,7 @@ import { FNB_MESSAGES } from '~/constants/messages'
 import { ErrorWithStatus } from '~/models/Error'
 import databaseService from '~/services/database.service'
 import fnbMenuItemService from '~/services/fnbMenuItem.service'
+import { assertValidFnbOrderPayload } from '~/utils/validateFnbOrderPayload'
 import { validate } from '~/utils/validation'
 
 /**
@@ -30,27 +31,8 @@ export const createFNBOrderValidator = validate(
         errorMessage: 'Order is required'
       },
       custom: {
-        options: (order: any) => {
-          if (typeof order !== 'object' || order === null) {
-            throw new Error('Order must be an object')
-          }
-          if (!order.drinks || typeof order.drinks !== 'object') {
-            throw new Error('Order must have a drinks object')
-          }
-          if (!order.snacks || typeof order.snacks !== 'object') {
-            throw new Error('Order must have a snacks object')
-          }
-          // Kiểm tra mỗi value trong drinks và snacks phải là số
-          for (const key in order.drinks) {
-            if (typeof order.drinks[key] !== 'number') {
-              throw new Error(`Drink quantity for "${key}" must be a number`)
-            }
-          }
-          for (const key in order.snacks) {
-            if (typeof order.snacks[key] !== 'number') {
-              throw new Error(`Snack quantity for "${key}" must be a number`)
-            }
-          }
+        options: (order: unknown) => {
+          assertValidFnbOrderPayload(order, 'order')
           return true
         }
       }
@@ -335,27 +317,8 @@ export const upsertFnbOrderValidator = validate(
         errorMessage: 'Order is required'
       },
       custom: {
-        options: (order: any) => {
-          if (typeof order !== 'object' || order === null) {
-            throw new Error('Order must be an object')
-          }
-          if (!order.drinks || typeof order.drinks !== 'object') {
-            throw new Error('Order must have a drinks object')
-          }
-          if (!order.snacks || typeof order.snacks !== 'object') {
-            throw new Error('Order must have a snacks object')
-          }
-          // Kiểm tra mỗi value trong drinks và snacks phải là số
-          for (const key in order.drinks) {
-            if (typeof order.drinks[key] !== 'number') {
-              throw new Error(`Drink quantity for "${key}" must be a number`)
-            }
-          }
-          for (const key in order.snacks) {
-            if (typeof order.snacks[key] !== 'number') {
-              throw new Error(`Snack quantity for "${key}" must be a number`)
-            }
-          }
+        options: (order: unknown) => {
+          assertValidFnbOrderPayload(order, 'order')
           return true
         }
       }

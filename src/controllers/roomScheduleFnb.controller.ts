@@ -8,6 +8,16 @@ import fnbOrderService from '~/services/fnbOrder.service'
 import fnbMenuItemService from '~/services/fnbMenuItem.service'
 import databaseService from '~/services/database.service'
 import { roomMusicServices } from '~/services/roomMusic.service'
+import {
+  aggregateLinesToLegacyMaps,
+  aggregateQuantitiesByItemId,
+  appendCartLines,
+  emptyFnbOrder,
+  normalizeFnbOrder,
+  plainQuantityForItem,
+  setPlainLineQuantity
+} from '~/utils/fnbOrderLines'
+import { assertValidFnbOrderPayload } from '~/utils/validateFnbOrderPayload'
 
 /**
  * @description SUBMIT client cart - MERGE vào order hiện tại (cộng dồn)
@@ -32,10 +42,11 @@ export const submitClientCart = async (req: Request, res: Response, next: NextFu
       })
     }
 
-    // Validate cart
-    if (!cart || (!cart.drinks && !cart.snacks)) {
+    try {
+      assertValidFnbOrderPayload(cart, 'cart', { requireNonEmpty: true })
+    } catch (e: any) {
       throw new ErrorWithStatus({
-        message: 'Cart is empty',
+        message: e?.message || 'Cart is invalid',
         status: HTTP_STATUS_CODE.BAD_REQUEST
       })
     }
@@ -70,49 +81,18 @@ export const submitClientCart = async (req: Request, res: Response, next: NextFu
       })
     }
 
-    // Get current order from DB
     const currentOrder = await fnbOrderService.getFnbOrdersByRoomSchedule(currentSchedule._id.toString())
 
-    // MERGE cart vào order hiện tại (cộng dồn)
-    const mergedOrder = {
-      drinks: { ...(currentOrder?.order.drinks || {}) },
-      snacks: { ...(currentOrder?.order.snacks || {}) }
-    }
+    const cartNorm = normalizeFnbOrder(cart)
+    const currentNorm = currentOrder?.order ? normalizeFnbOrder(currentOrder.order) : emptyFnbOrder()
+    const mergedOrder = appendCartLines(currentNorm, cartNorm)
 
-    console.log('=== SUBMIT CLIENT CART ===')
-    console.log('Current order:', currentOrder?.order)
-    console.log('Client cart:', cart)
-
-    // Cộng dồn drinks từ cart
-    for (const [itemId, quantity] of Object.entries(cart.drinks || {})) {
-      const currentQty = mergedOrder.drinks[itemId] || 0
-      const newQty = currentQty + (quantity as number)
-      if (newQty > 0) {
-        mergedOrder.drinks[itemId] = newQty
-        console.log(`  Drink ${itemId}: ${currentQty} + ${quantity} = ${newQty}`)
-      }
-    }
-
-    // Cộng dồn snacks từ cart
-    for (const [itemId, quantity] of Object.entries(cart.snacks || {})) {
-      const currentQty = mergedOrder.snacks[itemId] || 0
-      const newQty = currentQty + (quantity as number)
-      if (newQty > 0) {
-        mergedOrder.snacks[itemId] = newQty
-        console.log(`  Snack ${itemId}: ${currentQty} + ${quantity} = ${newQty}`)
-      }
-    }
-
-    console.log('Merged order:', mergedOrder)
-
-    // Calculate inventory changes (chỉ lấy items từ cart vì đó là items mới thêm)
-    const cartItems = { ...cart.drinks, ...cart.snacks }
+    const cartByItem = aggregateQuantitiesByItemId(cartNorm)
     const inventoryUpdates: Array<{ itemId: string; delta: number; item: any; isVariant: boolean }> = []
     const itemsCache = new Map<string, { item: any; isVariant: boolean }>()
 
-    // Validate và update inventory cho items trong cart
-    for (const itemId of Object.keys(cartItems)) {
-      const delta = cartItems[itemId] || 0
+    for (const itemId of Object.keys(cartByItem)) {
+      const delta = cartByItem[itemId] || 0
 
       if (delta > 0) {
         // Find item
@@ -176,12 +156,11 @@ export const submitClientCart = async (req: Request, res: Response, next: NextFu
       }
     }
 
-    // Save merged order (dùng SET mode vì đã merge rồi)
     const result = await fnbOrderService.upsertFnbOrder(
       currentSchedule._id.toString(),
       mergedOrder,
       'client-app',
-      'set' // SET vì đã merge ở trên
+      'set'
     )
 
     if (!result) {
@@ -200,6 +179,7 @@ export const submitClientCart = async (req: Request, res: Response, next: NextFu
           name: string
           quantity: number
           price: number
+          note?: string
         }>,
         totalAmount: 0,
         customerInfo: {
@@ -208,45 +188,35 @@ export const submitClientCart = async (req: Request, res: Response, next: NextFu
         }
       }
 
-      // FIX: Chỉ gửi items trong CART (món khách vừa đặt), không phải toàn bộ order
-      const cartItems = { ...cart.drinks, ...cart.snacks }
+      for (const line of cartNorm.lines) {
+        const itemId = line.itemId
+        const qty = line.quantity
+        if (qty <= 0) continue
 
-      console.log('=== DEBUG NOTIFICATION ===')
-      console.log('Cart:', JSON.stringify(cart))
-      console.log('Cart items:', JSON.stringify(cartItems))
-      console.log('Items cache size:', itemsCache.size)
-
-      for (const [itemId, quantity] of Object.entries(cartItems)) {
-        const qty = quantity as number
-        if (qty > 0) {
-          let item: any
-          let isVariant = false
-
-          if (itemsCache.has(itemId)) {
-            const cached = itemsCache.get(itemId)!
-            item = cached.item
-            isVariant = cached.isVariant
-          } else {
-            item = await databaseService.fnbMenu.findOne({ _id: new ObjectId(itemId) })
-
-            if (!item) {
-              const menuItem = await fnbMenuItemService.getMenuItemById(itemId)
-              if (menuItem) {
-                item = menuItem
-                isVariant = true
-              }
-            }
+        let item: any
+        if (itemsCache.has(itemId)) {
+          item = itemsCache.get(itemId)!.item
+        } else {
+          item = await databaseService.fnbMenu.findOne({ _id: new ObjectId(itemId) })
+          if (!item) {
+            const menuItem = await fnbMenuItemService.getMenuItemById(itemId)
+            if (menuItem) item = menuItem
           }
+        }
 
-          if (item) {
-            orderNotificationData.items.push({
-              itemId,
-              name: item.name,
-              quantity: qty, // Quantity từ CART, không phải merged order
-              price: item.price || 0
-            })
-            orderNotificationData.totalAmount += (item.price || 0) * qty
-          }
+        if (item) {
+          const extra = [line.note?.trim(), line.selections?.map((s) => `${s.groupKey}:${s.optionKey}`).join(', ')]
+            .filter(Boolean)
+            .join(' · ')
+          const displayName = extra ? `${item.name} (${extra})` : item.name
+          orderNotificationData.items.push({
+            itemId,
+            name: displayName,
+            quantity: qty,
+            price: item.price || 0,
+            note: line.note
+          })
+          orderNotificationData.totalAmount += (item.price || 0) * qty
         }
       }
 
@@ -326,22 +296,18 @@ export const addClientFnbOrderItems = async (req: Request, res: Response, next: 
       })
     }
 
-    // Get current order to calculate delta
     const currentOrder = await fnbOrderService.getFnbOrdersByRoomSchedule(currentSchedule._id.toString())
 
-    // Calculate inventory changes - delta là số lượng thêm/bớt trong request
-    const allItems = { ...order.drinks, ...order.snacks }
+    const reqNorm = normalizeFnbOrder(order)
+    const allItems = aggregateQuantitiesByItemId(reqNorm)
     const inventoryUpdates: Array<{ itemId: string; delta: number; item: any; isVariant: boolean }> = []
 
-    // Cache để tránh query lại các items đã có thông tin
     const itemsCache = new Map<string, { item: any; isVariant: boolean }>()
 
-    // Calculate deltas for each item (delta = số lượng thêm/bớt trong request)
     for (const itemId of Object.keys(allItems)) {
       const delta = allItems[itemId] || 0
 
       if (delta !== 0) {
-        // Find item
         let item: any = await databaseService.fnbMenu.findOne({ _id: new ObjectId(itemId) })
         let isVariant = false
 
@@ -437,13 +403,11 @@ export const addClientFnbOrderItems = async (req: Request, res: Response, next: 
 
       // FIX: Lấy thông tin từ order đã SAVE thành công (result.order), không phải từ inventoryUpdates
       // Vì inventoryUpdates chỉ chứa items có thay đổi, dẫn đến notification thiếu món
-      const savedOrder = result.order
-      const allOrderItems = { ...savedOrder.drinks, ...savedOrder.snacks }
+      const savedMaps = aggregateLinesToLegacyMaps(normalizeFnbOrder(result.order))
+      const allOrderItems = { ...savedMaps.drinks, ...savedMaps.snacks }
 
-      // Lấy thông tin chi tiết cho TẤT CẢ các món trong order đã lưu
       for (const [itemId, quantity] of Object.entries(allOrderItems)) {
         if (quantity > 0) {
-          // Sử dụng cache nếu có, tránh query database lại
           let item: any
           let isVariant = false
 
@@ -452,7 +416,6 @@ export const addClientFnbOrderItems = async (req: Request, res: Response, next: 
             item = cached.item
             isVariant = cached.isVariant
           } else {
-            // Query nếu chưa có trong cache
             item = await databaseService.fnbMenu.findOne({ _id: new ObjectId(itemId) })
 
             if (!item) {
@@ -476,7 +439,6 @@ export const addClientFnbOrderItems = async (req: Request, res: Response, next: 
         }
       }
 
-      // Chỉ gửi notification nếu có món trong order
       if (orderNotificationData.items.length > 0) {
         await roomMusicServices.sendNewOrderNotificationToAdmin(roomId.toString(), orderNotificationData)
         console.log(
@@ -547,22 +509,18 @@ export const removeClientFnbOrderItems = async (req: Request, res: Response, nex
       })
     }
 
-    // Get current order
     const currentOrder = await fnbOrderService.getFnbOrdersByRoomSchedule(currentSchedule._id.toString())
 
-    // Calculate inventory changes - delta là số lượng GIẢM (số dương)
-    const allItems = { ...order.drinks, ...order.snacks }
+    const remNorm = normalizeFnbOrder(order)
+    const allItems = aggregateQuantitiesByItemId(remNorm)
     const inventoryUpdates: Array<{ itemId: string; delta: number; item: any; isVariant: boolean }> = []
 
-    // Cache để tránh query lại các items đã có thông tin
     const itemsCache = new Map<string, { item: any; isVariant: boolean }>()
 
-    // Calculate deltas for each item (delta = số lượng giảm)
     for (const itemId of Object.keys(allItems)) {
       const removeQuantity = allItems[itemId] || 0
 
       if (removeQuantity !== 0) {
-        // Find item
         let item: any = await databaseService.fnbMenu.findOne({ _id: new ObjectId(itemId) })
         let isVariant = false
 
@@ -643,8 +601,8 @@ export const removeClientFnbOrderItems = async (req: Request, res: Response, nex
         }
       }
 
-      const savedOrder = result.order
-      const allOrderItems = { ...savedOrder.drinks, ...savedOrder.snacks }
+      const savedMaps = aggregateLinesToLegacyMaps(normalizeFnbOrder(result.order))
+      const allOrderItems = { ...savedMaps.drinks, ...savedMaps.snacks }
 
       for (const [itemId, quantity] of Object.entries(allOrderItems)) {
         if (quantity > 0) {
@@ -744,20 +702,16 @@ export const setClientFnbOrder = async (req: Request, res: Response, next: NextF
       })
     }
 
-    // Get current order to calculate delta
     const currentOrder = await fnbOrderService.getFnbOrdersByRoomSchedule(currentSchedule._id.toString())
 
-    // Calculate inventory changes
-    const newItems = { ...order.drinks, ...order.snacks }
-    const currentItems = {
-      ...(currentOrder?.order.drinks || {}),
-      ...(currentOrder?.order.snacks || {})
-    }
+    const newNorm = normalizeFnbOrder(order)
+    const currentNorm = normalizeFnbOrder(currentOrder?.order)
+    const newItems = aggregateQuantitiesByItemId(newNorm)
+    const currentItems = aggregateQuantitiesByItemId(currentNorm)
 
     const inventoryUpdates: Array<{ itemId: string; delta: number; item: any; isVariant: boolean }> = []
     const itemsCache = new Map<string, { item: any; isVariant: boolean }>()
 
-    // Calculate delta for all items (new and old)
     const allItemIds = new Set([...Object.keys(currentItems), ...Object.keys(newItems)])
 
     for (const itemId of allItemIds) {
@@ -766,7 +720,6 @@ export const setClientFnbOrder = async (req: Request, res: Response, next: NextF
       const delta = newQuantity - currentQuantity
 
       if (delta !== 0) {
-        // Find item
         let item: any = await databaseService.fnbMenu.findOne({ _id: new ObjectId(itemId) })
         let isVariant = false
 
@@ -858,8 +811,8 @@ export const setClientFnbOrder = async (req: Request, res: Response, next: NextF
         }
       }
 
-      const savedOrder = result.order
-      const allOrderItems = { ...savedOrder.drinks, ...savedOrder.snacks }
+      const savedMaps = aggregateLinesToLegacyMaps(normalizeFnbOrder(result.order))
+      const allOrderItems = { ...savedMaps.drinks, ...savedMaps.snacks }
 
       for (const [itemId, quantity] of Object.entries(allOrderItems)) {
         if (quantity > 0) {
@@ -988,17 +941,10 @@ export const upsertClientFnbOrderItem = async (req: Request, res: Response, next
     // Get current order
     const currentOrder = await fnbOrderService.getFnbOrdersByRoomSchedule(currentSchedule._id.toString())
 
-    // Calculate current quantity in order
-    let currentQuantity = 0
-    if (currentOrder) {
-      if (category === 'drink' && currentOrder.order.drinks[itemId]) {
-        currentQuantity = currentOrder.order.drinks[itemId]
-      } else if (category === 'snack' && currentOrder.order.snacks[itemId]) {
-        currentQuantity = currentOrder.order.snacks[itemId]
-      }
-    }
+    const curNorm = currentOrder?.order ? normalizeFnbOrder(currentOrder.order) : emptyFnbOrder()
+    const cat = category === 'drink' ? 'drink' : 'snack'
+    const currentQuantity = plainQuantityForItem(curNorm, itemId, cat)
 
-    // Calculate quantity delta
     const delta = quantity - currentQuantity
 
     // Find item and check inventory
@@ -1057,28 +1003,8 @@ export const upsertClientFnbOrderItem = async (req: Request, res: Response, next
       }
     }
 
-    // Update order
-    const updatedOrder = {
-      drinks: { ...(currentOrder?.order.drinks || {}) },
-      snacks: { ...(currentOrder?.order.snacks || {}) }
-    }
-
-    if (category === 'drink') {
-      if (quantity > 0) {
-        updatedOrder.drinks[itemId] = quantity
-      } else {
-        delete updatedOrder.drinks[itemId]
-      }
-    } else {
-      if (quantity > 0) {
-        updatedOrder.snacks[itemId] = quantity
-      } else {
-        delete updatedOrder.snacks[itemId]
-      }
-    }
-
-    // Upsert order
-    const result = await fnbOrderService.upsertFnbOrder(currentSchedule._id.toString(), updatedOrder, createdBy)
+    const nextOrder = setPlainLineQuantity(curNorm, itemId, cat, quantity)
+    const result = await fnbOrderService.upsertFnbOrder(currentSchedule._id.toString(), nextOrder, createdBy, 'set')
 
     // Validate that order was saved successfully
     if (!result) {
@@ -1110,9 +1036,8 @@ export const upsertClientFnbOrderItem = async (req: Request, res: Response, next
         }
       }
 
-      // Lấy thông tin TẤT CẢ các món trong order đã lưu
-      const savedOrder = result.order
-      const allOrderItems = { ...savedOrder.drinks, ...savedOrder.snacks }
+      const savedMaps = aggregateLinesToLegacyMaps(normalizeFnbOrder(result.order))
+      const allOrderItems = { ...savedMaps.drinks, ...savedMaps.snacks }
 
       for (const [orderItemId, orderQuantity] of Object.entries(allOrderItems)) {
         if (orderQuantity > 0) {

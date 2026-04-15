@@ -1,6 +1,7 @@
 // src/models/Bill.ts
 import { ObjectId } from 'mongodb'
 import { GiftBundleItem, GiftType } from '~/models/schemas/Gift.schema'
+import type { FNBOrderLine } from '~/models/schemas/FNB.schema'
 
 export interface IBill {
   _id?: ObjectId
@@ -44,6 +45,7 @@ export interface IBill {
   actualStartTime?: Date
   invoiceCode?: string // Mã hóa đơn với format #DDMMHHMM
   fnbOrder?: {
+    lines?: FNBOrderLine[]
     drinks: Record<string, number>
     snacks: Record<string, number>
     completedAt?: Date

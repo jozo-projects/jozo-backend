@@ -25,6 +25,7 @@ import { CoffeeTable } from '~/models/schemas/CoffeeTable.schema'
 import { CoffeeSession } from '~/models/schemas/CoffeeSession.schema'
 import { CoffeePricingConfig } from '~/models/schemas/CoffeePricing.schema'
 import { CoffeeSessionFNBOrder } from '~/models/schemas/CoffeeSessionOrder.schema'
+import { ICustomizationGroupTemplate } from '~/models/schemas/CustomizationGroupTemplate.schema'
 dotenv.config()
 
 // Interface cho Client Booking
@@ -173,6 +174,10 @@ class DatabaseService {
 
   get coffeeSessionOrders(): Collection<CoffeeSessionFNBOrder> {
     return this.db.collection('coffee_session_fnb_orders')
+  }
+
+  get customizationGroupTemplates(): Collection<ICustomizationGroupTemplate> {
+    return this.db.collection('customization_group_templates')
   }
 
   // Cho phép lấy collection bất kỳ

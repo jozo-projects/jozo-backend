@@ -340,11 +340,7 @@ class OnlineBookingService {
 
       // Tự động tạo FNB order trống cho booking online
       try {
-        const emptyOrder = {
-          drinks: {},
-          snacks: {}
-        }
-        await fnbOrderService.upsertFnbOrder(result.insertedId.toString(), emptyOrder, 'online_customer')
+        await fnbOrderService.upsertFnbOrder(result.insertedId.toString(), { lines: [] }, 'online_customer', 'set')
       } catch (fnbOrderError) {
         console.error('Lỗi khi tạo FNB order tự động:', fnbOrderError)
       }

@@ -9,11 +9,11 @@ import databaseService from './database.service'
 import { signToken } from '~/utils/jwt'
 import { verifyCoffeeSessionPin } from '~/utils/crypto'
 
-type SafeCoffeeSession = Omit<ICoffeeSession, 'pinHash'>
+type SafeCoffeeSession = Omit<ICoffeeSession, 'pinHash' | 'pinCode'>
 
 class ClientCoffeeSessionService {
   private sanitizeCoffeeSession(session: ICoffeeSession): SafeCoffeeSession {
-    const { pinHash, ...safeSession } = session
+    const { pinHash: _pinHash, pinCode: _pinCode, ...safeSession } = session
     return safeSession
   }
 

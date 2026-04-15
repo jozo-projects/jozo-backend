@@ -4,6 +4,38 @@ import { FnBMenuItem } from '~/models/schemas/FnBMenuItem.schema'
 import { HttpStatusCode } from 'axios'
 import { uploadImageToCloudinary } from '~/services/cloudinary.service'
 import { FnBCategory } from '~/constants/enum'
+import {
+  parseCustomizationGroups,
+  parseCustomizationOverrides,
+  parseCustomizationTemplateRefs
+} from '~/services/fnbMenuCustomization.service'
+
+function resolveCustomizationGroupsInput(raw: unknown): FnBMenuItem['customizationGroups'] | undefined {
+  if (raw === undefined) return undefined
+  if (raw === null || raw === '') return []
+  return parseCustomizationGroups(raw) ?? []
+}
+
+function resolveCustomizationTemplateRefsInput(raw: unknown): FnBMenuItem['customizationTemplateRefs'] | undefined {
+  if (raw === undefined) return undefined
+  if (raw === null || raw === '') return []
+  return parseCustomizationTemplateRefs(raw) ?? []
+}
+
+function resolveCustomizationOverridesInput(raw: unknown): FnBMenuItem['customizationOverrides'] | undefined {
+  if (raw === undefined) return undefined
+  if (raw === null || raw === '') return []
+  return parseCustomizationOverrides(raw) ?? []
+}
+
+function applyCustomizationConfig(target: Partial<FnBMenuItem>, source: Record<string, unknown>) {
+  const groups = resolveCustomizationGroupsInput(source.customizationGroups)
+  if (groups !== undefined) target.customizationGroups = groups
+  const refs = resolveCustomizationTemplateRefsInput(source.customizationTemplateRefs)
+  if (refs !== undefined) target.customizationTemplateRefs = refs
+  const overrides = resolveCustomizationOverridesInput(source.customizationOverrides)
+  if (overrides !== undefined) target.customizationOverrides = overrides
+}
 
 // Tạo mới menu item
 export const createMenuItem = async (req: Request, res: Response, next: NextFunction) => {
@@ -55,6 +87,7 @@ export const createMenuItem = async (req: Request, res: Response, next: NextFunc
         createdAt: new Date(),
         updatedAt: new Date()
       }
+      applyCustomizationConfig(parentItem, body as Record<string, unknown>)
 
       const parentResult = await fnBMenuItemService.createMenuItem(parentItem)
 
@@ -96,6 +129,7 @@ export const createMenuItem = async (req: Request, res: Response, next: NextFunc
           createdAt: new Date(),
           updatedAt: new Date()
         }
+        applyCustomizationConfig(variantItem, variant as Record<string, unknown>)
 
         const variantResult = await fnBMenuItemService.createMenuItem(variantItem)
         variants.push(variantResult)
@@ -136,6 +170,7 @@ export const createMenuItem = async (req: Request, res: Response, next: NextFunc
       createdAt: new Date(),
       updatedAt: new Date()
     }
+    applyCustomizationConfig(item, body as Record<string, unknown>)
     const result = await fnBMenuItemService.createMenuItem(item)
     return res.status(HttpStatusCode.Created).json({ message: 'Tạo menu item thành công', result })
   } catch (error) {
@@ -173,6 +208,7 @@ export const createMenuItemWithVariants = async (req: Request, res: Response, ne
       createdAt: new Date(),
       updatedAt: new Date()
     }
+    applyCustomizationConfig(parentItem, body as Record<string, unknown>)
 
     const parentResult = await fnBMenuItemService.createMenuItem(parentItem)
 
@@ -211,6 +247,7 @@ export const createMenuItemWithVariants = async (req: Request, res: Response, ne
           createdAt: new Date(),
           updatedAt: new Date()
         }
+        applyCustomizationConfig(variantItem, variant as Record<string, unknown>)
 
         const variantResult = await fnBMenuItemService.createMenuItem(variantItem)
         variants.push(variantResult)
@@ -378,6 +415,11 @@ export const updateMenuItem = async (req: Request, res: Response, next: NextFunc
       }
     }
 
+    delete (updateData as Record<string, unknown>).customizationGroups
+    delete (updateData as Record<string, unknown>).customizationTemplateRefs
+    delete (updateData as Record<string, unknown>).customizationOverrides
+    applyCustomizationConfig(updateData, body as Record<string, unknown>)
+
     // Upload ảnh mới lên Cloudinary nếu có file, hoặc giữ ảnh cũ nếu có existingImage
     if (files && files.length > 0) {
       const uploadResult = (await uploadImageToCloudinary(files[0].buffer, 'menu-items')) as {
@@ -486,6 +528,7 @@ export const updateMenuItem = async (req: Request, res: Response, next: NextFunc
           },
           updatedAt: new Date()
         }
+        applyCustomizationConfig(variantData, variant as Record<string, unknown>)
 
         console.log(`Variant data to update:`, JSON.stringify(variantData, null, 2))
 

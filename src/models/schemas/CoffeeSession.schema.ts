@@ -22,6 +22,8 @@ export interface ICoffeeSession {
   note?: string
   planSnapshot?: CoffeeBoardGamePricingSnapshot
   pinHash?: string
+  /** Plaintext PIN for staff-only APIs; cleared when session is completed */
+  pinCode?: string
   createdAt: Date
   updatedAt?: Date
   createdBy?: string
@@ -42,6 +44,7 @@ export class CoffeeSession implements ICoffeeSession {
   note?: string
   planSnapshot?: CoffeeBoardGamePricingSnapshot
   pinHash?: string
+  pinCode?: string
   createdAt: Date
   updatedAt?: Date
   createdBy?: string
@@ -61,6 +64,7 @@ export class CoffeeSession implements ICoffeeSession {
     this.note = session.note
     this.planSnapshot = session.planSnapshot
     this.pinHash = session.pinHash
+    this.pinCode = session.pinCode
     this.createdAt = session.createdAt
     this.updatedAt = session.updatedAt
     this.createdBy = session.createdBy

@@ -264,11 +264,7 @@ class RoomScheduleService {
 
     // Tự động tạo FNB order trống cho room schedule từ admin/staff
     try {
-      const emptyOrder = {
-        drinks: {},
-        snacks: {}
-      }
-      await fnbOrderService.createFnbOrder(result.insertedId.toString(), emptyOrder, schedule.createdBy || 'system')
+      await fnbOrderService.createFnbOrder(result.insertedId.toString(), { lines: [] }, schedule.createdBy || 'system')
       console.log(`Đã tạo FNB order tự động cho room schedule: ${result.insertedId}`)
     } catch (fnbOrderError) {
       console.error('Lỗi khi tạo FNB order tự động:', fnbOrderError)
@@ -620,11 +616,7 @@ class RoomScheduleService {
 
         // Tự động tạo FNB order trống cho mỗi room schedule từ booking
         try {
-          const emptyOrder = {
-            drinks: {},
-            snacks: {}
-          }
-          await fnbOrderService.upsertFnbOrder(result.insertedId.toString(), emptyOrder, 'web_customer')
+          await fnbOrderService.upsertFnbOrder(result.insertedId.toString(), { lines: [] }, 'web_customer', 'set')
           console.log(`Đã tạo FNB order tự động cho booking schedule: ${result.insertedId}`)
         } catch (fnbOrderError) {
           console.error('Lỗi khi tạo FNB order tự động:', fnbOrderError)
@@ -753,11 +745,7 @@ class RoomScheduleService {
 
         // Tự động tạo FNB order trống cho mỗi room schedule từ auto booking
         try {
-          const emptyOrder = {
-            drinks: {},
-            snacks: {}
-          }
-          await fnbOrderService.upsertFnbOrder(result.insertedId.toString(), emptyOrder, 'web_customer')
+          await fnbOrderService.upsertFnbOrder(result.insertedId.toString(), { lines: [] }, 'web_customer', 'set')
           console.log(`Đã tạo FNB order tự động cho auto booking schedule: ${result.insertedId}`)
         } catch (fnbOrderError) {
           console.error('Lỗi khi tạo FNB order tự động:', fnbOrderError)
