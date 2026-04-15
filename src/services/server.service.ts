@@ -5,6 +5,7 @@ import { Server as SocketIOServer } from 'socket.io'
 import roomRoutes from '~/routes/room.routes'
 import { EmployeeScheduleSocket } from '~/sockets/employeeSchedule.socket'
 import { NotificationSocket } from '~/sockets/notification.socket'
+import { OrderSocket } from '~/sockets/order.socket'
 import { PrintSocket } from '~/sockets/print.socket'
 import { RoomSocket } from '~/sockets/room.socket'
 
@@ -17,10 +18,12 @@ const corsOptions = {
     'https://video.jozo.com.vn',
     'https://control.jozo.com.vn',
     'https://jozo.com.vn',
+    'https://order.jozo.com.vn',
     'https://admin.jozo.com.vn',
     'http://video.jozo.com.vn',
     'http://control.jozo.com.vn',
     'http://jozo.com.vn',
+    'http://order.jozo.com.vn',
     'http://admin.jozo.com.vn'
   ],
   credentials: true,
@@ -77,10 +80,12 @@ class Server {
         'https://video.jozo.com.vn',
         'https://control.jozo.com.vn',
         'https://jozo.com.vn',
+        'https://order.jozo.com.vn',
         'https://admin.jozo.com.vn',
         'http://video.jozo.com.vn',
         'http://control.jozo.com.vn',
         'http://jozo.com.vn',
+        'http://order.jozo.com.vn',
         'http://admin.jozo.com.vn'
       ]
 
@@ -133,6 +138,7 @@ class Server {
     PrintSocket(this.io)
     EmployeeScheduleSocket(this.io)
     NotificationSocket(this.io)
+    OrderSocket(this.io)
   }
 
   // Chạy server

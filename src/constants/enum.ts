@@ -8,7 +8,8 @@ export enum TokenType {
   AccessToken,
   RefreshToken,
   ForgotPasswordToken,
-  EmailVerificationToken
+  EmailVerificationToken,
+  CoffeeSessionToken
 }
 
 export enum UserRole {

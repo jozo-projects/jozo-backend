@@ -3,7 +3,15 @@ import dayjs from 'dayjs'
 import timezone from 'dayjs/plugin/timezone'
 import utc from 'dayjs/plugin/utc'
 import { RoomScheduleFNBOrder, FNBOrder, FNBOrderHistoryRecord } from '~/models/schemas/FNB.schema'
+import {
+  appendCartLines,
+  applyLegacyMapDelta,
+  emptyFnbOrder,
+  normalizeFnbOrder,
+  orderFromSetPayload
+} from '~/utils/fnbOrderLines'
 import databaseService from './database.service'
+import { assertOrderLinesMatchMenuCustomizations } from './fnbMenuCustomization.service'
 import fnbMenuItemService from './fnbMenuItem.service'
 
 dayjs.extend(utc)
@@ -113,7 +121,8 @@ class FnbOrderService {
   }
 
   async createFnbOrder(roomScheduleId: string, order: FNBOrder, createdBy?: string): Promise<RoomScheduleFNBOrder> {
-    const newOrder = new RoomScheduleFNBOrder(roomScheduleId, order, createdBy, createdBy)
+    const normalized = normalizeFnbOrder(order)
+    const newOrder = new RoomScheduleFNBOrder(roomScheduleId, normalized, createdBy, createdBy)
     const result = await databaseService.fnbOrder.insertOne(newOrder)
     newOrder._id = result.insertedId
     return newOrder
@@ -122,7 +131,12 @@ class FnbOrderService {
   async getFnbOrderById(id: string): Promise<RoomScheduleFNBOrder | null> {
     const order = await databaseService.fnbOrder.findOne({ roomScheduleId: new ObjectId(id) })
     return order
-      ? new RoomScheduleFNBOrder(order.roomScheduleId.toString(), order.order, order.createdBy, order.updatedBy)
+      ? new RoomScheduleFNBOrder(
+          order.roomScheduleId.toString(),
+          normalizeFnbOrder(order.order),
+          order.createdBy,
+          order.updatedBy
+        )
       : null
   }
 
@@ -139,7 +153,12 @@ class FnbOrderService {
 
     if (!order) return null
 
-    return new RoomScheduleFNBOrder(order.roomScheduleId.toString(), order.order, order.createdBy, order.updatedBy)
+    return new RoomScheduleFNBOrder(
+      order.roomScheduleId.toString(),
+      normalizeFnbOrder(order.order),
+      order.createdBy,
+      order.updatedBy
+    )
   }
 
   // Method mới: Lưu order history khi complete
@@ -235,26 +254,48 @@ class FnbOrderService {
         { $replaceRoot: { newRoot: '$doc' } },
         {
           $addFields: {
-            drinksArr: { $objectToArray: { $ifNull: ['$order.drinks', {}] } },
-            snacksArr: { $objectToArray: { $ifNull: ['$order.snacks', {}] } }
-          }
-        },
-        {
-          $addFields: {
-            allItems: {
-              $concatArrays: [
-                { $map: { input: '$drinksArr', as: 'd', in: { k: '$$d.k', v: '$$d.v', cat: 'drink' } } },
-                { $map: { input: '$snacksArr', as: 's', in: { k: '$$s.k', v: '$$s.v', cat: 'snack' } } }
+            fnbItemsForStats: {
+              $cond: [
+                { $gt: [{ $size: { $ifNull: ['$order.lines', []] } }, 0] },
+                {
+                  $map: {
+                    input: { $ifNull: ['$order.lines', []] },
+                    as: 'ln',
+                    in: {
+                      k: '$$ln.itemId',
+                      v: { $toInt: { $ifNull: ['$$ln.quantity', 0] } },
+                      cat: '$$ln.category'
+                    }
+                  }
+                },
+                {
+                  $concatArrays: [
+                    {
+                      $map: {
+                        input: { $objectToArray: { $ifNull: ['$order.drinks', {}] } },
+                        as: 'd',
+                        in: { k: '$$d.k', v: '$$d.v', cat: 'drink' }
+                      }
+                    },
+                    {
+                      $map: {
+                        input: { $objectToArray: { $ifNull: ['$order.snacks', {}] } },
+                        as: 's',
+                        in: { k: '$$s.k', v: '$$s.v', cat: 'snack' }
+                      }
+                    }
+                  ]
+                }
               ]
             }
           }
         },
-        { $match: { $expr: { $gt: [ { $size: '$allItems' }, 0 ] } } },
-        { $unwind: '$allItems' },
+        { $match: { $expr: { $gt: [{ $size: '$fnbItemsForStats' }, 0] } } },
+        { $unwind: '$fnbItemsForStats' },
         {
           $group: {
-            _id: { itemId: '$allItems.k', category: '$allItems.cat' },
-            quantity: { $sum: '$allItems.v' }
+            _id: { itemId: '$fnbItemsForStats.k', category: '$fnbItemsForStats.cat' },
+            quantity: { $sum: '$fnbItemsForStats.v' }
           }
         },
         {
@@ -432,107 +473,60 @@ class FnbOrderService {
 
   async upsertFnbOrder(
     roomScheduleId: string,
-    order: Partial<FNBOrder>,
+    order: Partial<FNBOrder> & { drinks?: Record<string, number>; snacks?: Record<string, number>; lines?: unknown[] },
     user?: string,
-    mode: 'add' | 'remove' | 'set' = 'add' // add = cộng dồn, remove = giảm đi, set = ghi đè
+    mode: 'add' | 'remove' | 'set' = 'add'
   ): Promise<RoomScheduleFNBOrder | null> {
-    // Đảm bảo service đã được khởi tạo
     await this.initialize()
 
     const filter = { roomScheduleId: new ObjectId(roomScheduleId) }
-
-    // Kiểm tra xem đã có order nào tồn tại chưa
     const existingOrder = await databaseService.fnbOrder.findOne(filter)
+    const currentNorm = existingOrder?.order ? normalizeFnbOrder(existingOrder.order) : emptyFnbOrder()
+
+    let merged: FNBOrder
+
+    if (mode === 'set') {
+      merged = orderFromSetPayload(order)
+    } else if (mode === 'add') {
+      const p = order as {
+        lines?: unknown[]
+        drinks?: Record<string, number>
+        snacks?: Record<string, number>
+      }
+      let next = currentNorm
+      if (Array.isArray(p.lines) && p.lines.length > 0) {
+        next = appendCartLines(next, normalizeFnbOrder({ lines: p.lines }))
+      }
+      if (p.drinks && typeof p.drinks === 'object' && Object.keys(p.drinks).length > 0) {
+        next = applyLegacyMapDelta(next, p.drinks, undefined)
+      }
+      if (p.snacks && typeof p.snacks === 'object' && Object.keys(p.snacks).length > 0) {
+        next = applyLegacyMapDelta(next, undefined, p.snacks)
+      }
+      merged = next
+    } else {
+      const p = order as { drinks?: Record<string, number>; snacks?: Record<string, number> }
+      const negDrinks =
+        p.drinks && typeof p.drinks === 'object'
+          ? Object.fromEntries(
+              Object.entries(p.drinks).map(([k, v]) => [k, -Math.abs(Math.floor(Number(v)))])
+            )
+          : undefined
+      const negSnacks =
+        p.snacks && typeof p.snacks === 'object'
+          ? Object.fromEntries(
+              Object.entries(p.snacks).map(([k, v]) => [k, -Math.abs(Math.floor(Number(v)))])
+            )
+          : undefined
+      merged = applyLegacyMapDelta(currentNorm, negDrinks, negSnacks)
+    }
+
+    await assertOrderLinesMatchMenuCustomizations(merged)
 
     if (existingOrder) {
-      // Nếu đã có order, chỉ update
-      const currentDrinks = existingOrder.order?.drinks || {}
-      const currentSnacks = existingOrder.order?.snacks || {}
-
-      let mergedDrinks = { ...currentDrinks }
-      let mergedSnacks = { ...currentSnacks }
-
-      if (mode === 'set') {
-        mergedDrinks = order.drinks || {}
-        mergedSnacks = order.snacks || {}
-      } else if (mode === 'add') {
-        // ADD MODE: Cộng dồn số lượng
-        if (order.drinks) {
-          for (const [itemId, addQuantity] of Object.entries(order.drinks)) {
-            const currentQuantity = mergedDrinks[itemId] || 0
-            const newQuantity = currentQuantity + (addQuantity as number)
-
-            if (newQuantity > 0) {
-              mergedDrinks[itemId] = newQuantity
-              console.log(`  ✅ ${itemId}: ${currentQuantity} + ${addQuantity} = ${newQuantity}`)
-            } else {
-              delete mergedDrinks[itemId]
-              console.log(`  🗑️ ${itemId}: deleted (quantity <= 0)`)
-            }
-          }
-        }
-
-        if (order.snacks) {
-          for (const [itemId, addQuantity] of Object.entries(order.snacks)) {
-            const currentQuantity = mergedSnacks[itemId] || 0
-            const newQuantity = currentQuantity + (addQuantity as number)
-
-            if (newQuantity > 0) {
-              mergedSnacks[itemId] = newQuantity
-              console.log(`  ✅ ${itemId}: ${currentQuantity} + ${addQuantity} = ${newQuantity}`)
-            } else {
-              delete mergedSnacks[itemId]
-              console.log(`  🗑️ ${itemId}: deleted (quantity <= 0)`)
-            }
-          }
-
-          console.log('Result snacks:', mergedSnacks)
-        }
-      } else if (mode === 'remove') {
-        // REMOVE MODE: Giảm số lượng
-        if (order.drinks) {
-          for (const [itemId, removeQuantity] of Object.entries(order.drinks)) {
-            const currentQuantity = mergedDrinks[itemId] || 0
-            const newQuantity = currentQuantity - (removeQuantity as number)
-
-            if (newQuantity > 0) {
-              mergedDrinks[itemId] = newQuantity
-              console.log(`  ✅ ${itemId}: ${currentQuantity} - ${removeQuantity} = ${newQuantity}`)
-            } else {
-              delete mergedDrinks[itemId]
-              console.log(`  🗑️ ${itemId}: deleted (quantity <= 0)`)
-            }
-          }
-
-          console.log('Result drinks:', mergedDrinks)
-        }
-
-        if (order.snacks) {
-          console.log('=== REMOVE MODE - SNACKS ===')
-          console.log('Current snacks:', currentSnacks)
-          console.log('Removing snacks:', order.snacks)
-
-          for (const [itemId, removeQuantity] of Object.entries(order.snacks)) {
-            const currentQuantity = mergedSnacks[itemId] || 0
-            const newQuantity = currentQuantity - (removeQuantity as number)
-
-            if (newQuantity > 0) {
-              mergedSnacks[itemId] = newQuantity
-              console.log(`  ✅ ${itemId}: ${currentQuantity} - ${removeQuantity} = ${newQuantity}`)
-            } else {
-              delete mergedSnacks[itemId]
-              console.log(`  🗑️ ${itemId}: deleted (quantity <= 0)`)
-            }
-          }
-
-          console.log('Result snacks:', mergedSnacks)
-        }
-      }
-
       const validUpdate = {
         $set: {
-          'order.drinks': mergedDrinks,
-          'order.snacks': mergedSnacks,
+          order: merged,
           updatedAt: new Date(),
           updatedBy: user || 'system'
         },
@@ -545,23 +539,15 @@ class FnbOrderService {
         }
       }
 
-      console.log('Update operation:', JSON.stringify(validUpdate, null, 2))
-
       const updatedOrder = await databaseService.fnbOrder.findOneAndUpdate(filter, validUpdate, {
         returnDocument: 'after' as const
       })
-
-      console.log('Updated order result:', updatedOrder ? 'SUCCESS' : 'FAILED')
-      if (updatedOrder) {
-        console.log('Updated order ID:', updatedOrder._id)
-        console.log('Updated order data:', JSON.stringify(updatedOrder, null, 2))
-      }
 
       if (!updatedOrder) return null
 
       const result = new RoomScheduleFNBOrder(
         updatedOrder.roomScheduleId.toString(),
-        updatedOrder.order,
+        normalizeFnbOrder(updatedOrder.order),
         updatedOrder.createdBy,
         updatedOrder.updatedBy,
         updatedOrder.history || []
@@ -569,19 +555,12 @@ class FnbOrderService {
       result._id = updatedOrder._id
 
       return result
-    } else {
-      // Nếu chưa có order, tạo mới
-      console.log('Creating new order...')
-      const fullOrder: FNBOrder = {
-        drinks: order.drinks || {},
-        snacks: order.snacks || {}
-      }
-      const newOrder = new RoomScheduleFNBOrder(roomScheduleId, fullOrder, user, user)
-
-      const result = await databaseService.fnbOrder.insertOne(newOrder)
-      newOrder._id = result.insertedId
-      return newOrder
     }
+
+    const newOrder = new RoomScheduleFNBOrder(roomScheduleId, merged, user, user)
+    const ins = await databaseService.fnbOrder.insertOne(newOrder)
+    newOrder._id = ins.insertedId
+    return newOrder
   }
 }
 

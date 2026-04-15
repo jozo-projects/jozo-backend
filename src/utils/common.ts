@@ -76,7 +76,9 @@ export async function fetchVideoInfo(videoId: string) {
  * Lọc các item có quantity = 0 khỏi order detail
  */
 export function cleanOrderDetail(orderDetail: any) {
-  // Lọc drinks/snacks object
+  if (orderDetail.order && Array.isArray(orderDetail.order.lines)) {
+    orderDetail.order.lines = orderDetail.order.lines.filter((l: any) => Number(l?.quantity) > 0)
+  }
   if (orderDetail.order && orderDetail.order.drinks) {
     orderDetail.order.drinks = Object.fromEntries(
       Object.entries(orderDetail.order.drinks).filter(([_, quantity]) => (quantity as number) > 0)

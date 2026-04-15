@@ -1,8 +1,21 @@
 import { ObjectId } from 'mongodb'
 
+export interface FNBOrderSelection {
+  groupKey: string
+  optionKey: string
+}
+
+export interface FNBOrderLine {
+  lineId: string
+  itemId: string
+  category: 'drink' | 'snack'
+  quantity: number
+  note?: string
+  selections?: FNBOrderSelection[]
+}
+
 export interface FNBOrder {
-  drinks: Record<string, number>
-  snacks: Record<string, number>
+  lines: FNBOrderLine[]
 }
 
 // Interface cho một entry trong history (tùy chọn, để tái sử dụng)

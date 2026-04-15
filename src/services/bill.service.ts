@@ -11,6 +11,7 @@ import { DayType, RoomScheduleStatus } from '~/constants/enum'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { ErrorWithStatus } from '~/models/Error'
 import { IBill } from '~/models/schemas/Bill.schema'
+import { aggregateLinesToLegacyMaps, normalizeFnbOrder } from '~/utils/fnbOrderLines'
 import databaseService from './database.service'
 import fnbMenuItemService from './fnbMenuItem.service'
 import fnbOrderService from './fnbOrder.service'
@@ -378,24 +379,12 @@ export class BillService {
     // Chỉ cần tổng snacks + drinks >= 35000 là đủ điều kiện
     let totalSnacksAndDrinks = 0
     if (order && order.order) {
-      // Tính tổng đồ uống
-      if (order.order.drinks && typeof order.order.drinks === 'object' && Object.keys(order.order.drinks).length > 0) {
-        for (const [menuId, quantity] of Object.entries(order.order.drinks)) {
-          const menuItem = await this.findMenuItemById(menuId, menu)
-          if (menuItem) {
-            const price = this.parsePrice(menuItem.price)
-            totalSnacksAndDrinks += quantity * price
-          }
-        }
-      }
-      // Tính tổng đồ ăn
-      if (order.order.snacks && typeof order.order.snacks === 'object' && Object.keys(order.order.snacks).length > 0) {
-        for (const [menuId, quantity] of Object.entries(order.order.snacks)) {
-          const menuItem = await this.findMenuItemById(menuId, menu)
-          if (menuItem) {
-            const price = this.parsePrice(menuItem.price)
-            totalSnacksAndDrinks += quantity * price
-          }
+      const fnbNorm = normalizeFnbOrder(order.order)
+      for (const line of fnbNorm.lines) {
+        const menuItem = await this.findMenuItemById(line.itemId, menu)
+        if (menuItem) {
+          const price = this.parsePrice(menuItem.price)
+          totalSnacksAndDrinks += line.quantity * price
         }
       }
     }
@@ -696,53 +685,30 @@ export class BillService {
       })
     }
 
-    // Thêm các mục F&B từ order vào items nếu có
+    // Thêm các mục F&B từ order vào items nếu có (từng dòng — có thể trùng món khác note/option)
     if (order && order.order) {
-      // Xử lý đồ uống
-      if (order.order.drinks && typeof order.order.drinks === 'object' && Object.keys(order.order.drinks).length > 0) {
-        for (const [menuId, quantity] of Object.entries(order.order.drinks)) {
-          // Sử dụng hàm helper để tìm menu item
-          const menuItem = await this.findMenuItemById(menuId, menu)
+      const fnbNorm = normalizeFnbOrder(order.order)
+      for (const line of fnbNorm.lines) {
+        const menuItem = await this.findMenuItemById(line.itemId, menu)
 
-          if (menuItem) {
-            // Đảm bảo price là number và được xử lý đúng định dạng
-            const price = this.parsePrice(menuItem.price)
-            if (price === 0) {
-              console.error(`Invalid price for menu item ${menuItem.name}: ${menuItem.price}`)
-              continue
-            }
-            const totalPrice = quantity * price
-            timeSlotItems.push({
-              description: menuItem.name,
-              quantity: quantity,
-              price: price,
-              totalPrice: totalPrice
-            })
+        if (menuItem) {
+          const price = this.parsePrice(menuItem.price)
+          if (price === 0) {
+            console.error(`Invalid price for menu item ${menuItem.name}: ${menuItem.price}`)
+            continue
           }
-        }
-      }
-
-      // Xử lý đồ ăn
-      if (order.order.snacks && typeof order.order.snacks === 'object' && Object.keys(order.order.snacks).length > 0) {
-        for (const [menuId, quantity] of Object.entries(order.order.snacks)) {
-          // Sử dụng hàm helper để tìm menu item
-          const menuItem = await this.findMenuItemById(menuId, menu)
-
-          if (menuItem) {
-            // Đảm bảo price là number và được xử lý đúng định dạng
-            const price = this.parsePrice(menuItem.price)
-            if (price === 0) {
-              console.error(`Invalid price for menu item ${menuItem.name}: ${menuItem.price}`)
-              continue
-            }
-            const totalPrice = quantity * price
-            timeSlotItems.push({
-              description: menuItem.name,
-              quantity: quantity,
-              price: price,
-              totalPrice: totalPrice
-            })
-          }
+          const quantity = line.quantity
+          const totalPrice = quantity * price
+          const extra = [line.note?.trim(), line.selections?.map((s) => `${s.groupKey}:${s.optionKey}`).join(', ')]
+            .filter(Boolean)
+            .join(' · ')
+          const description = extra ? `${menuItem.name} (${extra})` : menuItem.name
+          timeSlotItems.push({
+            description,
+            quantity,
+            price,
+            totalPrice
+          })
         }
       }
     }
@@ -885,12 +851,17 @@ export class BillService {
       actualStartTime: actualStartTime ? new Date(actualStartTime) : undefined,
       // Thêm thông tin FNB order vào bill
       fnbOrder: order
-        ? {
-            drinks: order.order.drinks || {},
-            snacks: order.order.snacks || {},
-            completedAt: (order as any).completedAt,
-            completedBy: (order as any).completedBy
-          }
+        ? (() => {
+            const fnbNorm = normalizeFnbOrder(order.order)
+            const maps = aggregateLinesToLegacyMaps(fnbNorm)
+            return {
+              lines: fnbNorm.lines,
+              drinks: maps.drinks,
+              snacks: maps.snacks,
+              completedAt: (order as any).completedAt,
+              completedBy: (order as any).completedBy
+            }
+          })()
         : undefined
     }
 

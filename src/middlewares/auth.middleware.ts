@@ -39,7 +39,7 @@ export const protect = (roles: UserRole[]) => async (req: Request, res: Response
     }
 
     next()
-  } catch (error) {
+  } catch {
     next(
       new ErrorWithStatus({
         message: AUTH_MESSAGES.INSUFFICIENT_PRIVILEGES,
