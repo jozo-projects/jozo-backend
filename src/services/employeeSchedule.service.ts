@@ -848,8 +848,6 @@ class EmployeeScheduleService {
   /**
    * Kiểm tra conflict - không cho đăng ký trùng ca trong cùng ngày
    * (trừ khi status = Rejected, Cancelled, Completed, Absent)
-   * Nếu đăng ký Shift 3, check conflict với cả Shift 1 và Shift 2
-   * Nếu đăng ký Shift 1/Shift 2, check conflict với Shift 3
    */
   async checkConflict(userId: string, date: Date, shiftType: ShiftType, excludeId?: string) {
     const baseQuery: any = {
@@ -864,16 +862,9 @@ class EmployeeScheduleService {
       baseQuery._id = { $ne: new ObjectId(excludeId) }
     }
 
-    // Nếu đăng ký Shift 3, check conflict với cả Shift 1, Shift 2 và Shift 3
-    // Nếu đăng ký Shift 1/Shift 2, check conflict với cả shiftType đó và Shift 3
-    const conflictShiftTypes =
-      shiftType === ShiftType.Shift3
-        ? [ShiftType.Shift1, ShiftType.Shift2, ShiftType.Shift3]
-        : [shiftType, ShiftType.Shift3]
-
     const query = {
       ...baseQuery,
-      shiftType: { $in: conflictShiftTypes }
+      shiftType
     }
 
     const existingSchedule = await databaseService.employeeSchedules.findOne(query)
@@ -914,14 +905,11 @@ class EmployeeScheduleService {
       })
     }
 
-    // Nếu có ShiftType.Shift3, phải là array 1 phần tử
-    if (shifts.includes(ShiftType.Shift3)) {
-      if (shifts.length > 1) {
-        throw new ErrorWithStatus({
-          message: 'Không thể đăng ký Shift 3 cùng với các ca khác',
-          status: HTTP_STATUS_CODE.BAD_REQUEST
-        })
-      }
+    if (shifts.length > 3) {
+      throw new ErrorWithStatus({
+        message: 'Chỉ có thể đăng ký tối đa 3 ca',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
     }
   }
 }

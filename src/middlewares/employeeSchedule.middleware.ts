@@ -54,16 +54,9 @@ export const createEmployeeScheduleValidator = validate(
           if (new Set(shifts).size !== shifts.length) {
             throw new Error('Không thể đăng ký cùng một ca 2 lần')
           }
-          // Nếu có ShiftType.Shift3, phải là array 1 phần tử
-          if (shifts.includes(ShiftType.Shift3)) {
-            if (shifts.length > 1) {
-              throw new Error('Không thể đăng ký Shift 3 cùng với các ca khác')
-            }
-          } else {
-            // Nếu không có Shift 3, tối đa 2 ca
-            if (shifts.length > 2) {
-              throw new Error('Chỉ có thể đăng ký tối đa 2 ca')
-            }
+          // Tối đa 3 ca trong một ngày
+          if (shifts.length > 3) {
+            throw new Error('Chỉ có thể đăng ký tối đa 3 ca')
           }
           return true
         }
@@ -132,16 +125,9 @@ export const adminCreateScheduleValidator = validate(
           if (new Set(shifts).size !== shifts.length) {
             throw new Error('Không thể đăng ký cùng một ca 2 lần')
           }
-          // Nếu có ShiftType.Shift3, phải là array 1 phần tử
-          if (shifts.includes(ShiftType.Shift3)) {
-            if (shifts.length > 1) {
-              throw new Error('Không thể đăng ký Shift 3 cùng với các ca khác')
-            }
-          } else {
-            // Nếu không có Shift 3, tối đa 2 ca
-            if (shifts.length > 2) {
-              throw new Error('Chỉ có thể đăng ký tối đa 2 ca')
-            }
+          // Tối đa 3 ca trong một ngày
+          if (shifts.length > 3) {
+            throw new Error('Chỉ có thể đăng ký tối đa 3 ca')
           }
           return true
         }
