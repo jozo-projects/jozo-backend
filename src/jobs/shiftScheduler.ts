@@ -11,13 +11,13 @@ export function startShiftScheduler() {
   cron.schedule('0,30 * * * *', async () => {
     try {
       console.log('⏰ [Shift Scheduler] Running...')
-      
+
       // Auto start shifts
       const startedCount = await employeeScheduleService.autoStartShifts()
-      
+
       // Auto complete shifts
       const completedCount = await employeeScheduleService.autoCompleteShifts()
-      
+
       if (startedCount > 0 || completedCount > 0) {
         console.log(`✅ [Shift Scheduler] Started: ${startedCount}, Completed: ${completedCount}`)
       } else {
@@ -30,4 +30,3 @@ export function startShiftScheduler() {
 
   console.log('✅ Shift Scheduler initialized (runs every 30 minutes)')
 }
-

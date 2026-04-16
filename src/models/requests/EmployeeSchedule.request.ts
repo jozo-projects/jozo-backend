@@ -3,7 +3,7 @@ import { EmployeeScheduleStatus, ShiftType } from '~/constants/enum'
 // Request body khi nhân viên tự đăng ký
 export interface ICreateEmployeeScheduleBody {
   date: string // ISO date string
-  shifts: ShiftType[] // ["morning"] hoặc ["afternoon"] hoặc ["morning", "afternoon"]
+  shifts: ShiftType[] // ["shift1"] hoặc ["shift2"] hoặc ["shift3"]
   customStartTime?: string // HH:mm - Override default start time
   customEndTime?: string // HH:mm - Override default end time
   note?: string
@@ -13,7 +13,7 @@ export interface ICreateEmployeeScheduleBody {
 export interface IAdminCreateScheduleBody {
   userId: string
   date: string // ISO date string
-  shifts: ShiftType[] // ["morning"] hoặc ["afternoon"] hoặc ["morning", "afternoon"]
+  shifts: ShiftType[] // ["shift1"] hoặc ["shift2"] hoặc ["shift3"]
   customStartTime?: string // HH:mm - Override default start time
   customEndTime?: string // HH:mm - Override default end time
   note?: string

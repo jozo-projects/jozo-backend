@@ -38,11 +38,6 @@ class EmployeeScheduleService {
     // Validate shifts array
     this.validateShifts(shifts)
 
-    // Validate custom time nếu có
-    if (customStartTime || customEndTime) {
-      this.validateCustomTime(customStartTime, customEndTime)
-    }
-
     // Lấy thông tin user
     const user = await databaseService.users.findOne({ _id: new ObjectId(userId) })
     if (!user) {
@@ -93,7 +88,7 @@ class EmployeeScheduleService {
 
     if (adminIds.length > 0) {
       const dateStr = dayjs(dateObj).format('DD/MM/YYYY')
-      const shiftStr = shifts.join(', ')
+      const shiftStr = shifts.map((shift) => getShiftInfo(shift).name).join(', ')
       const title = notificationService.formatMessage(NOTIFICATION_MESSAGES.SCHEDULE_CREATED_BY_EMPLOYEE_TITLE, {})
       const body = notificationService.formatMessage(NOTIFICATION_MESSAGES.SCHEDULE_CREATED_BY_EMPLOYEE_BODY, {
         employeeName: user.name,
@@ -126,11 +121,6 @@ class EmployeeScheduleService {
 
     // Validate shifts array
     this.validateShifts(shifts)
-
-    // Validate custom time nếu có
-    if (customStartTime || customEndTime) {
-      this.validateCustomTime(customStartTime, customEndTime)
-    }
 
     // Lấy thông tin user và admin
     const [user, admin] = await Promise.all([
@@ -185,7 +175,7 @@ class EmployeeScheduleService {
 
     // Tạo notification cho nhân viên
     const dateStr = dayjs(dateObj).format('DD/MM/YYYY')
-    const shiftStr = shifts.join(', ')
+    const shiftStr = shifts.map((shift) => getShiftInfo(shift).name).join(', ')
     const title = notificationService.formatMessage(NOTIFICATION_MESSAGES.SCHEDULE_CREATED_BY_ADMIN_TITLE, {})
     const body = notificationService.formatMessage(NOTIFICATION_MESSAGES.SCHEDULE_CREATED_BY_ADMIN_BODY, {
       shiftType: shiftStr,
@@ -637,8 +627,6 @@ class EmployeeScheduleService {
       })
     }
 
-    const admin = await databaseService.users.findOne({ _id: new ObjectId(adminId) })
-
     const result = await databaseService.employeeSchedules.updateOne(
       { _id: new ObjectId(id) },
       {
@@ -657,7 +645,7 @@ class EmployeeScheduleService {
   /**
    * Admin mark completed (manual)
    */
-  async markCompleted(id: string, adminId: string) {
+  async markCompleted(id: string) {
     if (!ObjectId.isValid(id)) {
       throw new ErrorWithStatus({
         message: EMPLOYEE_SCHEDULE_MESSAGES.SCHEDULE_NOT_FOUND,
@@ -748,12 +736,12 @@ class EmployeeScheduleService {
     for (const schedule of schedules) {
       const startTime = this.calculateStartDateTime(schedule.date, schedule.shiftType, schedule.customStartTime)
       const shouldStart = now >= startTime
-      
+
       console.log(
         `[Auto Start Shifts] Schedule ${schedule._id}: ${schedule.shiftType} on ${dayjs(schedule.date).format('YYYY-MM-DD')}, ` +
-        `startTime: ${dayjs(startTime).format('YYYY-MM-DD HH:mm:ss')}, shouldStart: ${shouldStart}`
+          `startTime: ${dayjs(startTime).format('YYYY-MM-DD HH:mm:ss')}, shouldStart: ${shouldStart}`
       )
-      
+
       if (shouldStart) {
         toStart.push(schedule._id)
       }
@@ -803,12 +791,12 @@ class EmployeeScheduleService {
     for (const schedule of schedules) {
       const endTime = this.calculateEndDateTime(schedule.date, schedule.shiftType, schedule.customEndTime)
       const shouldComplete = now >= endTime
-      
+
       console.log(
         `[Auto Complete Shifts] Schedule ${schedule._id}: ${schedule.shiftType} on ${dayjs(schedule.date).format('YYYY-MM-DD')}, ` +
-        `endTime: ${dayjs(endTime).format('YYYY-MM-DD HH:mm:ss')}, shouldComplete: ${shouldComplete}`
+          `endTime: ${dayjs(endTime).format('YYYY-MM-DD HH:mm:ss')}, shouldComplete: ${shouldComplete}`
       )
-      
+
       if (shouldComplete) {
         toComplete.push(schedule._id)
       }
@@ -846,16 +834,22 @@ class EmployeeScheduleService {
    */
   private calculateEndDateTime(date: Date, shiftType: ShiftType, customEndTime?: string): Date {
     const shiftInfo = getShiftInfo(shiftType, undefined, customEndTime)
+    const [startHours, startMinutes] = shiftInfo.startTime.split(':').map(Number)
     const [hours, minutes] = shiftInfo.endTime.split(':').map(Number)
+    let endDateTime = dayjs(date).hour(hours).minute(minutes).second(0).millisecond(0)
 
-    return dayjs(date).hour(hours).minute(minutes).second(0).millisecond(0).toDate()
+    if (hours < startHours || (hours === startHours && minutes <= startMinutes)) {
+      endDateTime = endDateTime.add(1, 'day')
+    }
+
+    return endDateTime.toDate()
   }
 
   /**
    * Kiểm tra conflict - không cho đăng ký trùng ca trong cùng ngày
    * (trừ khi status = Rejected, Cancelled, Completed, Absent)
-   * Nếu đăng ký All, check conflict với cả Morning và Afternoon
-   * Nếu đăng ký Morning/Afternoon, check conflict với All
+   * Nếu đăng ký Shift 3, check conflict với cả Shift 1 và Shift 2
+   * Nếu đăng ký Shift 1/Shift 2, check conflict với Shift 3
    */
   async checkConflict(userId: string, date: Date, shiftType: ShiftType, excludeId?: string) {
     const baseQuery: any = {
@@ -870,10 +864,12 @@ class EmployeeScheduleService {
       baseQuery._id = { $ne: new ObjectId(excludeId) }
     }
 
-    // Nếu đăng ký All, check conflict với cả Morning, Afternoon và All
-    // Nếu đăng ký Morning/Afternoon, check conflict với cả shiftType đó và All
+    // Nếu đăng ký Shift 3, check conflict với cả Shift 1, Shift 2 và Shift 3
+    // Nếu đăng ký Shift 1/Shift 2, check conflict với cả shiftType đó và Shift 3
     const conflictShiftTypes =
-      shiftType === ShiftType.All ? [ShiftType.Morning, ShiftType.Afternoon, ShiftType.All] : [shiftType, ShiftType.All]
+      shiftType === ShiftType.Shift3
+        ? [ShiftType.Shift1, ShiftType.Shift2, ShiftType.Shift3]
+        : [shiftType, ShiftType.Shift3]
 
     const query = {
       ...baseQuery,
@@ -883,7 +879,7 @@ class EmployeeScheduleService {
     const existingSchedule = await databaseService.employeeSchedules.findOne(query)
 
     if (existingSchedule) {
-      const shiftName = existingSchedule.shiftType === ShiftType.All ? 'Cả ngày' : existingSchedule.shiftType
+      const shiftName = getShiftInfo(existingSchedule.shiftType).name
       throw new ErrorWithStatus({
         message: `Nhân viên đã có ca ${shiftName} cho ngày ${dayjs(date).format('DD/MM/YYYY')}. Vui lòng xóa ca cũ trước khi đăng ký ca mới.`,
         status: HTTP_STATUS_CODE.BAD_REQUEST
@@ -918,46 +914,11 @@ class EmployeeScheduleService {
       })
     }
 
-    // Nếu có ShiftType.All, phải là array 1 phần tử
-    if (shifts.includes(ShiftType.All)) {
+    // Nếu có ShiftType.Shift3, phải là array 1 phần tử
+    if (shifts.includes(ShiftType.Shift3)) {
       if (shifts.length > 1) {
         throw new ErrorWithStatus({
-          message: 'Không thể đăng ký ca "Cả ngày" cùng với các ca khác',
-          status: HTTP_STATUS_CODE.BAD_REQUEST
-        })
-      }
-    }
-  }
-
-  /**
-   * Validate custom time format and range
-   */
-  private validateCustomTime(customStartTime?: string, customEndTime?: string) {
-    const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/
-
-    if (customStartTime && !timeRegex.test(customStartTime)) {
-      throw new ErrorWithStatus({
-        message: EMPLOYEE_SCHEDULE_MESSAGES.INVALID_TIME_FORMAT,
-        status: HTTP_STATUS_CODE.BAD_REQUEST
-      })
-    }
-
-    if (customEndTime && !timeRegex.test(customEndTime)) {
-      throw new ErrorWithStatus({
-        message: EMPLOYEE_SCHEDULE_MESSAGES.INVALID_TIME_FORMAT,
-        status: HTTP_STATUS_CODE.BAD_REQUEST
-      })
-    }
-
-    if (customStartTime && customEndTime) {
-      const [startHour, startMin] = customStartTime.split(':').map(Number)
-      const [endHour, endMin] = customEndTime.split(':').map(Number)
-      const startMinutes = startHour * 60 + startMin
-      const endMinutes = endHour * 60 + endMin
-
-      if (startMinutes >= endMinutes) {
-        throw new ErrorWithStatus({
-          message: EMPLOYEE_SCHEDULE_MESSAGES.INVALID_TIME_RANGE,
+          message: 'Không thể đăng ký Shift 3 cùng với các ca khác',
           status: HTTP_STATUS_CODE.BAD_REQUEST
         })
       }

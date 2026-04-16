@@ -54,13 +54,13 @@ export const createEmployeeScheduleValidator = validate(
           if (new Set(shifts).size !== shifts.length) {
             throw new Error('Không thể đăng ký cùng một ca 2 lần')
           }
-          // Nếu có ShiftType.All, phải là array 1 phần tử
-          if (shifts.includes(ShiftType.All)) {
+          // Nếu có ShiftType.Shift3, phải là array 1 phần tử
+          if (shifts.includes(ShiftType.Shift3)) {
             if (shifts.length > 1) {
-              throw new Error('Không thể đăng ký ca "Cả ngày" cùng với các ca khác')
+              throw new Error('Không thể đăng ký Shift 3 cùng với các ca khác')
             }
           } else {
-            // Nếu không có All, tối đa 2 ca (morning, afternoon)
+            // Nếu không có Shift 3, tối đa 2 ca
             if (shifts.length > 2) {
               throw new Error('Chỉ có thể đăng ký tối đa 2 ca')
             }
@@ -132,13 +132,13 @@ export const adminCreateScheduleValidator = validate(
           if (new Set(shifts).size !== shifts.length) {
             throw new Error('Không thể đăng ký cùng một ca 2 lần')
           }
-          // Nếu có ShiftType.All, phải là array 1 phần tử
-          if (shifts.includes(ShiftType.All)) {
+          // Nếu có ShiftType.Shift3, phải là array 1 phần tử
+          if (shifts.includes(ShiftType.Shift3)) {
             if (shifts.length > 1) {
-              throw new Error('Không thể đăng ký ca "Cả ngày" cùng với các ca khác')
+              throw new Error('Không thể đăng ký Shift 3 cùng với các ca khác')
             }
           } else {
-            // Nếu không có All, tối đa 2 ca (morning, afternoon)
+            // Nếu không có Shift 3, tối đa 2 ca
             if (shifts.length > 2) {
               throw new Error('Chỉ có thể đăng ký tối đa 2 ca')
             }
@@ -173,44 +173,12 @@ export const updateScheduleValidator = validate(
       optional: true,
       isString: {
         errorMessage: 'Custom start time phải là chuỗi'
-      },
-      custom: {
-        options: (value: string | undefined) => {
-          if (value) {
-            const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/
-            if (!timeRegex.test(value)) {
-              throw new Error('Custom start time phải có định dạng HH:mm')
-            }
-          }
-          return true
-        }
       }
     },
     customEndTime: {
       optional: true,
       isString: {
         errorMessage: 'Custom end time phải là chuỗi'
-      },
-      custom: {
-        options: (value: string | undefined, { req }) => {
-          if (value) {
-            const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/
-            if (!timeRegex.test(value)) {
-              throw new Error('Custom end time phải có định dạng HH:mm')
-            }
-            // Kiểm tra endTime phải sau startTime
-            if (req.body.customStartTime) {
-              const [startHour, startMin] = req.body.customStartTime.split(':').map(Number)
-              const [endHour, endMin] = value.split(':').map(Number)
-              const startMinutes = startHour * 60 + startMin
-              const endMinutes = endHour * 60 + endMin
-              if (endMinutes <= startMinutes) {
-                throw new Error('Thời gian kết thúc phải sau thời gian bắt đầu')
-              }
-            }
-          }
-          return true
-        }
       }
     }
   })
