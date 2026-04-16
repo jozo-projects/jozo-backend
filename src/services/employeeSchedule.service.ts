@@ -645,7 +645,7 @@ class EmployeeScheduleService {
   /**
    * Admin mark completed (manual)
    */
-  async markCompleted(id: string) {
+  async markCompleted(id: string, adminId: string) {
     if (!ObjectId.isValid(id)) {
       throw new ErrorWithStatus({
         message: EMPLOYEE_SCHEDULE_MESSAGES.SCHEDULE_NOT_FOUND,
