@@ -41,28 +41,61 @@ export const createPriceValidator = validate(
             return time1Minutes >= time2Minutes
           }
 
-          // Kiểm tra từng time slot
+          const timeToMinutes = (time: string): number => {
+            const [hours, minutes] = time.split(':').map(Number)
+            return hours * 60 + minutes
+          }
+
+          /** Khoảng [lo, hi) theo phút từ 0h, khung qua đêm được kéo dài sang ngày hôm sau (tối đa < 2880) */
+          const slotToInterval = (slot: TimeSlot): { lo: number; hi: number } => {
+            const s = timeToMinutes(slot.start)
+            const e = timeToMinutes(slot.end)
+            if (e >= s) {
+              return { lo: s, hi: e }
+            }
+            return { lo: s, hi: 24 * 60 + e }
+          }
+
+          const intervalsOverlap = (a: { lo: number; hi: number }, b: { lo: number; hi: number }): boolean => {
+            return a.lo < b.hi && a.hi > b.lo
+          }
+
+          const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/
+
           for (let i = 0; i < timeSlots.length; i++) {
             const slot = timeSlots[i]
-
             if (!slot.start || !slot.end) {
               throw new ErrorWithStatus({
                 message: 'Start and end time are required for each time slot',
                 status: HTTP_STATUS_CODE.BAD_REQUEST
               })
             }
-
-            // Kiểm tra format thời gian (HH:mm)
-            const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/
             if (!timeRegex.test(slot.start) || !timeRegex.test(slot.end)) {
               throw new ErrorWithStatus({
                 message: 'Time format must be HH:mm (e.g., 10:30, 23:45)',
                 status: HTTP_STATUS_CODE.BAD_REQUEST
               })
             }
+          }
 
-            // Kiểm tra thời gian hợp lệ (chỉ tính giờ và phút)
-            if (!compareTimeIgnoreSeconds(slot.end, slot.start)) {
+          const minDayStartMinutes = Math.min(...timeSlots.map((s) => timeToMinutes(s.start)))
+
+          // Kiểm tra từng time slot
+          for (let i = 0; i < timeSlots.length; i++) {
+            const slot = timeSlots[i]
+
+            const startM = timeToMinutes(slot.start)
+            const endM = timeToMinutes(slot.end)
+
+            // Cùng ngày: end >= start. Qua đêm: end < start và end phải trước giờ mở cửa sớm nhất (vd 03:00 < 09:00)
+            if (endM < startM) {
+              if (!(endM < minDayStartMinutes)) {
+                throw new ErrorWithStatus({
+                  message: `Overnight slot ${i + 1}: end time must be earlier than the earliest start time among all slots (end is interpreted as next day)`,
+                  status: HTTP_STATUS_CODE.BAD_REQUEST
+                })
+              }
+            } else if (!compareTimeIgnoreSeconds(slot.end, slot.start)) {
               throw new ErrorWithStatus({
                 message: `End time must be greater than or equal to start time (comparing only hours and minutes) in time slot ${i + 1}`,
                 status: HTTP_STATUS_CODE.BAD_REQUEST
@@ -77,16 +110,13 @@ export const createPriceValidator = validate(
               })
             }
 
-            // Kiểm tra overlap với các time slots khác
+            // Kiểm tra overlap với các time slots khác (hỗ trợ khung qua đêm)
             for (let j = i + 1; j < timeSlots.length; j++) {
               const otherSlot = timeSlots[j]
-              const start = new Date(`2024-01-01T${slot.start}`)
-              const end = new Date(`2024-01-01T${slot.end}`)
-              const otherStart = new Date(`2024-01-01T${otherSlot.start}`)
-              const otherEnd = new Date(`2024-01-01T${otherSlot.end}`)
+              const intervalA = slotToInterval(slot)
+              const intervalB = slotToInterval(otherSlot)
 
-              // Kiểm tra overlap
-              if ((start < otherEnd && end > otherStart) || (otherStart < end && otherEnd > start)) {
+              if (intervalsOverlap(intervalA, intervalB)) {
                 throw new ErrorWithStatus({
                   message: `Time slot ${i + 1} overlaps with time slot ${j + 1}`,
                   status: HTTP_STATUS_CODE.BAD_REQUEST

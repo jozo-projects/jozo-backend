@@ -50,7 +50,8 @@ export const getVirtualRoomDashboard = async (req: Request, res: Response, next:
         virtualRoomsBySize: {
           S: virtualRooms.filter((r) => r.virtualSize === RoomType.Small).length,
           M: virtualRooms.filter((r) => r.virtualSize === RoomType.Medium).length,
-          L: virtualRooms.filter((r) => r.virtualSize === RoomType.Large).length
+          L: virtualRooms.filter((r) => r.virtualSize === RoomType.Large).length,
+          D: virtualRooms.filter((r) => r.virtualSize === RoomType.Dorm).length
         },
         availableRooms: virtualRooms.filter((r) => r.isActive).length
       }

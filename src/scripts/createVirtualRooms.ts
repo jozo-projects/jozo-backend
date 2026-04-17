@@ -2,6 +2,7 @@ import { ObjectId } from 'mongodb'
 import { RoomType } from '~/constants/enum'
 import { VirtualRoom } from '~/models/schemas/VirtualRoom.schema'
 import databaseService from '../services/database.service'
+import { roomTypeFieldToEnum } from '../utils/roomType'
 
 async function createVirtualRooms() {
   try {
@@ -31,8 +32,11 @@ async function createVirtualRooms() {
       let virtualSize: RoomType
       let priority: number
 
-      // Hardcode: Phòng 1-3 = Small, Phòng 4-6 = Medium, Phòng 7+ = Large
-      if (roomNumber <= 3) {
+      const sizeFromDb = roomTypeFieldToEnum(physicalRoom.roomType)
+      if (sizeFromDb) {
+        virtualSize = sizeFromDb
+        priority = roomNumber
+      } else if (roomNumber <= 3) {
         virtualSize = RoomType.Small
         priority = roomNumber
       } else if (roomNumber <= 6) {
@@ -74,6 +78,7 @@ async function createVirtualRooms() {
     console.log(`  Phòng 1-3: ${virtualRooms.filter((vr) => vr.virtualSize === RoomType.Small).length} phòng Small`)
     console.log(`  Phòng 4-6: ${virtualRooms.filter((vr) => vr.virtualSize === RoomType.Medium).length} phòng Medium`)
     console.log(`  Phòng 7+: ${virtualRooms.filter((vr) => vr.virtualSize === RoomType.Large).length} phòng Large`)
+    console.log(`  Dorm (theo roomType DB): ${virtualRooms.filter((vr) => vr.virtualSize === RoomType.Dorm).length} phòng Dorm`)
   } catch (error) {
     console.error('❌ Lỗi khi tạo Virtual Rooms:', error)
     throw error

@@ -176,6 +176,8 @@ function mapRoomType(clientRoomType: string) {
       return RoomType.Medium
     case 'large':
       return RoomType.Large
+    case 'dorm':
+      return RoomType.Dorm
     default:
       throw new Error(`Invalid room type: ${clientRoomType}`)
   }

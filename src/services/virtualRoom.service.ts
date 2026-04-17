@@ -2,6 +2,7 @@ import { ObjectId } from 'mongodb'
 import { RoomSize, RoomType, RoomScheduleStatus } from '~/constants/enum'
 import { VirtualRoom } from '~/models/schemas/VirtualRoom.schema'
 import databaseService from './database.service'
+import { roomTypeFieldToEnum } from '~/utils/roomType'
 
 interface VirtualRoomAssignment {
   virtualRoom: VirtualRoom
@@ -26,8 +27,11 @@ class VirtualRoomService {
       let virtualSize: RoomType
       let priority: number
 
-      // Hardcode: Phòng 1-3 = Small, Phòng 4-6 = Medium, Phòng 7+ = Large
-      if (roomNumber <= 3) {
+      const sizeFromDb = roomTypeFieldToEnum(physicalRoom.roomType)
+      if (sizeFromDb) {
+        virtualSize = sizeFromDb
+        priority = roomNumber
+      } else if (roomNumber <= 3) {
         virtualSize = RoomType.Small
         priority = roomNumber
       } else if (roomNumber <= 6) {
@@ -117,10 +121,11 @@ class VirtualRoomService {
     startTime: Date,
     endTime: Date
   ): Promise<VirtualRoomAssignment | null> {
-    const upgradeMap = {
+    const upgradeMap: Record<RoomType, RoomType[]> = {
       [RoomType.Small]: [RoomType.Medium, RoomType.Large],
       [RoomType.Medium]: [RoomType.Large],
-      [RoomType.Large]: []
+      [RoomType.Large]: [],
+      [RoomType.Dorm]: []
     }
 
     const upgradeOptions = upgradeMap[requestedSize]

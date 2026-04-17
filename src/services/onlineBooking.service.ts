@@ -8,6 +8,7 @@ import { ErrorWithStatus } from '~/models/Error'
 import { RoomSchedule, BookingSource } from '~/models/schemas/RoomSchdedule.schema'
 import { AddSongRequestBody } from '~/models/requests/Song.request'
 import { generateUniqueBookingCode } from '~/utils/common'
+import { parseClientRoomTypeString, roomTypeFieldToEnum } from '~/utils/roomType'
 import databaseService from './database.service'
 import { emitBookingNotification } from './room.service'
 import fnbOrderService from './fnbOrder.service'
@@ -184,11 +185,12 @@ class OnlineBookingService {
     const allRooms = await databaseService.rooms.find().sort({ roomId: 1 }).toArray()
     console.log(`📋 Tìm thấy ${allRooms.length} phòng trong database`)
 
-    // Hardcode: Phòng 1-3 = Small, Phòng 4-6 = Medium, Phòng 7+ = Large
-    const roomMapping = {
+    // Karaoke box: hardcode theo thứ tự roomId. Dorm: chỉ các phòng có roomType dorm trên DB.
+    const roomMapping: Record<RoomType, typeof allRooms> = {
       [RoomType.Small]: allRooms.slice(0, 3), // Phòng 1, 2, 3
       [RoomType.Medium]: allRooms.slice(3, 6), // Phòng 4, 5, 6
-      [RoomType.Large]: allRooms.slice(6) // Phòng 7+
+      [RoomType.Large]: allRooms.slice(6), // Phòng 7+
+      [RoomType.Dorm]: allRooms.filter((r) => roomTypeFieldToEnum(r.roomType) === RoomType.Dorm)
     }
 
     // 1. Tìm phòng có size đúng yêu cầu
@@ -213,10 +215,11 @@ class OnlineBookingService {
     // 2. Nếu không có phòng size đúng, tìm upgrade
     console.log(`❌ Không có phòng ${requestedSize} trống, tìm upgrade...`)
 
-    const upgradeMap = {
+    const upgradeMap: Record<RoomType, RoomType[]> = {
       [RoomType.Small]: [RoomType.Medium, RoomType.Large],
       [RoomType.Medium]: [RoomType.Large],
-      [RoomType.Large]: []
+      [RoomType.Large]: [],
+      [RoomType.Dorm]: []
     }
 
     const upgradeOptions = upgradeMap[requestedSize]
@@ -270,25 +273,37 @@ class OnlineBookingService {
    */
   async createOnlineBooking(request: OnlineBookingRequest): Promise<any> {
     try {
+      let normalizedRoomType: RoomType
+      try {
+        normalizedRoomType = parseClientRoomTypeString(String(request.roomType))
+      } catch {
+        throw new ErrorWithStatus({
+          message: `Loại phòng không hợp lệ. Chấp nhận: ${Object.values(RoomType).join(', ')} (hoặc dạng API: small, medium, large, dorm)`,
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      }
+
+      const requestWithType: OnlineBookingRequest = { ...request, roomType: normalizedRoomType }
+
       // Validate request
-      this.validateBookingRequest(request)
+      this.validateBookingRequest(requestWithType)
 
       // Parse dates từ request với timezone Việt Nam
-      const startTime = this.parseDateTimeWithTimezone(request.startTime)
-      const endTime = this.parseDateTimeWithTimezone(request.endTime)
+      const startTime = this.parseDateTimeWithTimezone(requestWithType.startTime)
+      const endTime = this.parseDateTimeWithTimezone(requestWithType.endTime)
 
       // Tìm phòng trống với hardcode logic
-      const roomResult = await this.findAvailableRoomWithHardcode(request.roomType, startTime, endTime)
+      const roomResult = await this.findAvailableRoomWithHardcode(normalizedRoomType, startTime, endTime)
 
       if (!roomResult) {
         throw new ErrorWithStatus({
-          message: `Xin lỗi, không còn box ${request.roomType} trống trong khung giờ này`,
+          message: `Xin lỗi, không còn box ${normalizedRoomType} trống trong khung giờ này`,
           status: HTTP_STATUS_CODE.CONFLICT
         })
       }
 
       // Tạo booking note đơn giản
-      const autoNote = `Booking by ${request.customerName} (${request.customerPhone})${roomResult.upgraded ? ` - UPGRADE to ${roomResult.assignedRoomType}` : ''}`
+      const autoNote = `Booking by ${requestWithType.customerName} (${requestWithType.customerPhone})${roomResult.upgraded ? ` - UPGRADE to ${roomResult.assignedRoomType}` : ''}`
 
       // Sinh mã booking 4 chữ số và dateOfUse
       const dateOfUse = dayjs.tz(startTime, 'Asia/Ho_Chi_Minh').format('YYYY-MM-DD')
@@ -313,10 +328,10 @@ class OnlineBookingService {
         BookingSource.Customer,
         true, // Đã fix: truyền 'true' để đáp ứng kiểu boolean (tham số isOnlineBooking)
         bookingCode, // Mã 4 chữ số
-        request.customerName,
-        request.customerPhone,
-        request.customerEmail,
-        request.roomType,
+        requestWithType.customerName,
+        requestWithType.customerPhone,
+        requestWithType.customerEmail,
+        normalizedRoomType,
         roomResult.assignedRoomType,
         roomResult.upgraded,
         undefined, // virtualRoomInfo
@@ -326,10 +341,10 @@ class OnlineBookingService {
       )
 
       // Gán thêm thông tin cho booking online
-      newSchedule.customerName = request.customerName
-      newSchedule.customerPhone = request.customerPhone
-      newSchedule.customerEmail = request.customerEmail
-      newSchedule.originalRoomType = request.roomType
+      newSchedule.customerName = requestWithType.customerName
+      newSchedule.customerPhone = requestWithType.customerPhone
+      newSchedule.customerEmail = requestWithType.customerEmail
+      newSchedule.originalRoomType = normalizedRoomType
       newSchedule.actualRoomType = roomResult.assignedRoomType
       newSchedule.upgraded = roomResult.upgraded
       newSchedule.queueSongs = []
@@ -353,9 +368,9 @@ class OnlineBookingService {
         dateOfUse: dateOfUse, // Ngày sử dụng
         roomId: roomResult.room._id.toString(),
         roomName: roomResult.room.roomName,
-        customerName: request.customerName,
-        customerPhone: request.customerPhone,
-        customerEmail: request.customerEmail,
+        customerName: requestWithType.customerName,
+        customerPhone: requestWithType.customerPhone,
+        customerEmail: requestWithType.customerEmail,
         startTime: startTime.toISOString(),
         endTime: endTime.toISOString(),
         note: autoNote,

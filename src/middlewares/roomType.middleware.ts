@@ -102,7 +102,7 @@ export const addRoomTypeValidator = (req: Request, res: Response, next: NextFunc
     const errors: Record<string, ValidationError> = {}
 
     // Kiểm tra name (bắt buộc và phải là 1 trong 3 loại)
-    const validRoomTypes = ['Small', 'Medium', 'Large']
+    const validRoomTypes = ['Small', 'Medium', 'Large', 'Dorm']
     if (!name) {
       errors.name = {
         type: 'field',
@@ -115,7 +115,7 @@ export const addRoomTypeValidator = (req: Request, res: Response, next: NextFunc
       errors.name = {
         type: 'field',
         value: name,
-        msg: 'Loại phòng phải là một trong: Small, Medium, hoặc Large',
+        msg: 'Loại phòng phải là một trong: Small, Medium, Large hoặc Dorm',
         path: 'name',
         location: 'formData'
       }

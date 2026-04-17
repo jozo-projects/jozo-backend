@@ -572,7 +572,7 @@ class RoomScheduleService {
 
       // Tìm room phù hợp với room_type
       const roomType = this.mapClientRoomTypeToEnum(booking.room_type)
-      const room = await databaseService.rooms.findOne({ roomType })
+      const room = await databaseService.rooms.findOne(this.physicalRoomQueryByEnum(roomType))
 
       if (!room) {
         throw new ErrorWithStatus({
@@ -653,6 +653,8 @@ class RoomScheduleService {
         return RoomType.Medium
       case 'large':
         return RoomType.Large
+      case 'dorm':
+        return RoomType.Dorm
       default:
         throw new ErrorWithStatus({
           message: `Invalid room type: ${clientRoomType}`,
@@ -678,7 +680,7 @@ class RoomScheduleService {
 
       // Tìm room phù hợp với room_type
       const roomType = this.mapClientRoomTypeToEnum(booking.room_type)
-      const room = await databaseService.rooms.findOne({ roomType })
+      const room = await databaseService.rooms.findOne(this.physicalRoomQueryByEnum(roomType))
 
       if (!room) {
         throw new ErrorWithStatus({
@@ -771,6 +773,11 @@ class RoomScheduleService {
       console.error('Error auto-creating schedules from new booking:', error)
       throw error
     }
+  }
+
+  /** Khớp field roomType trên physical room không phân biệt hoa thường (vd. dorm vs Dorm) */
+  private physicalRoomQueryByEnum(roomType: RoomType) {
+    return { roomType: { $regex: new RegExp(`^${roomType}$`, 'i') } }
   }
 }
 

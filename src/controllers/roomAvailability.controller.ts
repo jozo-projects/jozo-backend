@@ -14,7 +14,7 @@ dayjs.extend(timezone)
  * @description Kiểm tra phòng trống theo ngày và loại phòng
  * @path /api/rooms/availability
  * @method GET
- * @query date: YYYY-MM-DD, roomType?: Small|Medium|Large
+ * @query date: YYYY-MM-DD, roomType?: Small|Medium|Large|Dorm
  */
 export const checkRoomAvailability = async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -38,7 +38,7 @@ export const checkRoomAvailability = async (req: Request, res: Response, next: N
     // Validate roomType if provided
     if (roomType && !Object.values(RoomType).includes(roomType as RoomType)) {
       return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
-        message: 'Invalid room type. Use Small, Medium, or Large'
+        message: 'Invalid room type. Use Small, Medium, Large, or Dorm'
       })
     }
 

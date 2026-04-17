@@ -483,6 +483,8 @@ class BookingService {
       case 'lớn':
       case 'lon':
         return RoomType.Large
+      case 'dorm':
+        return RoomType.Dorm
       default:
         // If unknown, log it and throw error
         console.log('Unknown room type:', roomType)
