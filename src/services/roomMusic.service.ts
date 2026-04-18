@@ -535,7 +535,7 @@ class RoomMusicServices {
     }
   }
 
-  async getBillByRoom(roomIndex: number, actualEndTime?: string) {
+  async getBillByRoom(roomIndex: number, actualEndTime?: string, usePreciseEndTime?: boolean) {
     const room = await databaseService.rooms.findOne({ roomId: roomIndex })
     if (!room?._id) {
       throw new ErrorWithStatus({
@@ -589,7 +589,15 @@ class RoomMusicServices {
       return null
     }
 
-    return billService.getBill(activeSchedule._id?.toString(), actualEndTime)
+    return billService.getBill(
+      activeSchedule._id?.toString(),
+      actualEndTime,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      usePreciseEndTime
+    )
   }
 
   /**
@@ -611,7 +619,7 @@ class RoomMusicServices {
     }
 
     try {
-      const billPreview = await this.getBillByRoom(roomIndex, new Date().toISOString())
+      const billPreview = await this.getBillByRoom(roomIndex, new Date().toISOString(), true)
       if (!billPreview) {
         throw new ErrorWithStatus({
           message: 'Không có phiên sử dụng phòng đang hoạt động hoặc đã tính bill',

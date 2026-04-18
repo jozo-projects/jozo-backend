@@ -331,7 +331,9 @@ export class BillService {
     paymentMethod?: string,
     promotionId?: string,
     actualStartTime?: string,
-    applyFreeHourPromotion?: boolean
+    applyFreeHourPromotion?: boolean,
+    /** Chỉ bật cho luồng khách bấm kết thúc — giữ giây từ ISO; các API khác giữ làm tròn phút như cũ */
+    usePreciseEndTime?: boolean
   ): Promise<IBill> {
     // Validate ObjectId format for scheduleId
     if (!ObjectId.isValid(scheduleId)) {
@@ -452,7 +454,9 @@ export class BillService {
         })
       }
       const usePreciseInstant =
-        typeof actualEndTime === 'string' && /\d{4}-\d{2}-\d{2}T/i.test(actualEndTime.trim())
+        usePreciseEndTime === true &&
+        typeof actualEndTime === 'string' &&
+        /\d{4}-\d{2}-\d{2}T/i.test(actualEndTime.trim())
       validatedEndTime = usePreciseInstant
         ? parsedEnd.toDate()
         : parsedEnd.second(0).millisecond(0).toDate()
@@ -471,6 +475,11 @@ export class BillService {
         // Nếu không có endTime, mặc định là startTime + 1 giờ
         validatedEndTime = dayjs(startTime).add(1, 'hour').second(0).millisecond(0).toDate()
       }
+    }
+
+    // Tránh end <= start (dễ làm applicableTimeSlots rỗng → mất dòng phí thu âm)
+    if (dayjs(validatedEndTime).isSameOrBefore(dayjs(startTime))) {
+      validatedEndTime = dayjs(startTime).add(1, 'minute').toDate()
     }
 
     const sessionDurationSeconds = dayjs(validatedEndTime).diff(dayjs(startTime), 'second')
