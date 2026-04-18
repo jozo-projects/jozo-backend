@@ -15,6 +15,7 @@ import {
   removeAllSongsInQueue,
   removeSong,
   normalizeSongsLibrary,
+  requestEndSessionPrintBill,
   saveSong,
   searchSongs,
   searchLocalSongs,
@@ -196,6 +197,14 @@ roomMusicRouter.put('/:roomId/queue', wrapRequestHandler(updateQueue))
  * @author QuangDoo
  */
 roomMusicRouter.post('/:roomId/send-notification', wrapRequestHandler(sendNotification))
+
+/**
+ * @description Khách yêu cầu kết thúc — in bill ngay
+ * @path /song-queue/rooms/:roomId/request-end
+ * @method POST
+ * @author QuangDoo
+ */
+roomMusicRouter.post('/:roomId/request-end', wrapRequestHandler(requestEndSessionPrintBill))
 
 /**
  * @description Stream video

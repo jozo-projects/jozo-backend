@@ -65,6 +65,8 @@ export const RoomSocket = (io: Server) => {
     // Kiểm tra loại thông báo để xử lý khác nhau
     if (notification.type === 'new_order') {
       io.to('management').emit('new_order_notification', notification)
+    } else if (notification.type === 'request_end') {
+      io.to('management').emit('request_end_notification', notification)
     } else {
       io.to('management').emit('notification', notification)
     }

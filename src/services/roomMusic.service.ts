@@ -592,6 +592,48 @@ class RoomMusicServices {
     return billService.getBill(activeSchedule._id?.toString())
   }
 
+  /**
+   * Khách bấm kết thúc: lấy bill phiên InUse hiện tại (cùng logic GET bill) và in ngay; báo quản lý qua socket.
+   * Giới hạn 30 giây một lần / phòng (FE nên disable nút tương ứng); nếu không có phiên hoặc in lỗi thì bỏ lock để gọi lại được.
+   */
+  async requestEndSessionPrintBill(roomIndex: number) {
+    const REQUEST_END_COOLDOWN_SEC = 30
+    const cooldownKey = `room_${roomIndex}_request_end_cooldown`
+
+    const acquired = await redis.set(cooldownKey, '1', 'EX', REQUEST_END_COOLDOWN_SEC, 'NX')
+    if (acquired !== 'OK') {
+      const ttl = await redis.ttl(cooldownKey)
+      const waitSec = ttl > 0 ? ttl : REQUEST_END_COOLDOWN_SEC
+      throw new ErrorWithStatus({
+        message: `Chỉ có thể yêu cầu kết thúc mỗi ${REQUEST_END_COOLDOWN_SEC} giây một lần. Thử lại sau ${waitSec} giây.`,
+        status: HTTP_STATUS_CODE.TOO_MANY_REQUEST
+      })
+    }
+
+    try {
+      const billPreview = await this.getBillByRoom(roomIndex)
+      if (!billPreview) {
+        throw new ErrorWithStatus({
+          message: 'Không có phiên sử dụng phòng đang hoạt động hoặc đã tính bill',
+          status: HTTP_STATUS_CODE.UNPROCESSABLE_ENTITY
+        })
+      }
+
+      const printed = await billService.printBill(billPreview)
+      roomMusicEventEmitter.emit('admin_notification', {
+        type: 'request_end',
+        roomId: String(roomIndex),
+        message: 'Khách yêu cầu kết thúc — đã gửi lệnh in bill',
+        timestamp: Date.now()
+      })
+
+      return printed
+    } catch (error) {
+      await redis.del(cooldownKey)
+      throw error
+    }
+  }
+
   async getSongsInCollection(options?: { page?: number; limit?: number; keyword?: string }) {
     const page = options?.page ?? 1
     const limit = options?.limit ?? 50

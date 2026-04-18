@@ -10,6 +10,11 @@ import { hashPassword } from '~/utils/crypto'
 import { verifyToken } from '~/utils/jwt'
 import { validate } from '~/utils/validation'
 
+/** So khớp chính xác chuỗi, không phân biệt hoa thường (dùng cho login username/email). */
+const caseInsensitiveExact = (value: string) => ({
+  $regex: new RegExp(`^${value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i')
+})
+
 export const checkRegisterUserExists = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { username, email } = req.body
@@ -43,18 +48,24 @@ export const checkRegisterUserExists = async (req: Request, res: Response, next:
 export const checkLoginUserExists = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { username, password } = req.body
+    const rawLogin = typeof username === 'string' ? username.trim() : ''
+
+    // Chuẩn hóa: staff/admin (và mọi role) login không phân biệt hoa thường; coi identifier là lowercase
+    if (typeof req.body?.username === 'string') {
+      req.body.username = rawLogin.toLowerCase()
+    }
 
     // Tìm người dùng dựa vào username (có thể là email hoặc phone_number)
-    let user = await databaseService.users.findOne({ username })
+    let user = await databaseService.users.findOne({ username: caseInsensitiveExact(rawLogin) })
 
     // Nếu không tìm thấy bằng username, thử tìm bằng email
     if (!user) {
-      user = await databaseService.users.findOne({ email: username })
+      user = await databaseService.users.findOne({ email: caseInsensitiveExact(rawLogin) })
     }
 
     // Nếu vẫn không tìm thấy, thử tìm bằng phone_number
     if (!user) {
-      user = await databaseService.users.findOne({ phone_number: username })
+      user = await databaseService.users.findOne({ phone_number: rawLogin })
     }
 
     if (!user) {

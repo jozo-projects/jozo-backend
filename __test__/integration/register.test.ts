@@ -136,6 +136,29 @@ describe('Integration Test for Register API', () => {
     expect(loginRes.body.result).toHaveProperty('refresh_token')
   })
 
+  it('should login successfully with username ignoring letter case', async () => {
+    const hashedPassword = hashPassword('ValidPass123!')
+    await db.collection('users').insertOne({
+      name: 'Staff User',
+      username: 'vkimoanh',
+      email: 'vkimoanh@example.com',
+      phone_number: '0987654321',
+      password: hashedPassword,
+      date_of_birth: '2000-01-01',
+      role: UserRole.Staff,
+      created_at: new Date(),
+      updated_at: new Date()
+    })
+
+    const loginRes = await request(app).post('/users/login').send({
+      username: 'Vkimoanh',
+      password: 'ValidPass123!'
+    })
+
+    expect(loginRes.statusCode).toBe(HTTP_STATUS_CODE.CREATED)
+    expect(loginRes.body).toHaveProperty('message', USER_MESSAGES.LOGIN_SUCCESS)
+  })
+
   it('should login successfully with email', async () => {
     // Tạo user trước
     const hashedPassword = hashPassword('ValidPass123!')

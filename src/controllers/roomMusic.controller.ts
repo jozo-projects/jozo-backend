@@ -525,6 +525,26 @@ export const sendNotification = async (req: Request, res: Response, next: NextFu
 }
 
 /**
+ * @description Khách yêu cầu kết thúc — in bill ngay (phiên InUse hiện tại, cùng logic GET /:roomId/bill)
+ * @path /song-queue/rooms/:roomId/request-end
+ * @method POST
+ * @author QuangDoo
+ */
+export const requestEndSessionPrintBill = async (req: Request, res: Response, next: NextFunction) => {
+  const { roomId } = req.params
+
+  try {
+    const printed = await roomMusicServices.requestEndSessionPrintBill(Number(roomId))
+    return res.status(HTTP_STATUS_CODE.OK).json({
+      message: 'Đã gửi in bill và thông báo kết thúc tới quản lý',
+      result: printed
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+/**
  * @description Stream video
  * @path /song-queue/rooms/:roomId/stream-video
  * @method GET
