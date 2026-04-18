@@ -443,15 +443,19 @@ export class BillService {
         validatedEndTime = dayjs(validatedEndTime).tz('Asia/Ho_Chi_Minh').add(1, 'day').toDate()
       }
     } else if (actualEndTime) {
-      // Nếu là định dạng datetime đầy đủ - reset giây và millisecond về 0
-      validatedEndTime = dayjs(actualEndTime).tz('Asia/Ho_Chi_Minh').second(0).millisecond(0).toDate()
-
-      if (!dayjs(validatedEndTime).isValid()) {
+      // Datetime đầy đủ (ISO...): có thể giữ giây cho khớp thời điểm kết thúc thực (VD khách bấm kết thúc).
+      const parsedEnd = dayjs(actualEndTime).tz('Asia/Ho_Chi_Minh')
+      if (!parsedEnd.isValid()) {
         throw new ErrorWithStatus({
           message: 'Thời gian kết thúc không hợp lệ',
           status: HTTP_STATUS_CODE.BAD_REQUEST
         })
       }
+      const usePreciseInstant =
+        typeof actualEndTime === 'string' && /\d{4}-\d{2}-\d{2}T/i.test(actualEndTime.trim())
+      validatedEndTime = usePreciseInstant
+        ? parsedEnd.toDate()
+        : parsedEnd.second(0).millisecond(0).toDate()
     } else {
       // Nếu không có actualEndTime, sử dụng schedule.endTime và reset giây/millisecond
       if (schedule.endTime) {
