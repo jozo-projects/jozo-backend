@@ -185,6 +185,15 @@ class TextPrinter {
   }
 }
 
+/** Express query/body đôi khi là string | string[]; chuỗi rỗng coi như không gửi — tránh rơi nhánh schedule.endTime khi admin đã truyền ISO. */
+function pickBillTimeParam(v: unknown): string | undefined {
+  if (v === undefined || v === null) return undefined
+  const raw = Array.isArray(v) ? v[0] : v
+  if (typeof raw !== 'string') return undefined
+  const t = raw.trim()
+  return t === '' ? undefined : t
+}
+
 export class BillService {
   private deviceData: any // Lưu thông tin thiết bị USB được tìm thấy
   private transactionHistory: Array<IBill> = [] // Lưu lịch sử giao dịch
@@ -235,30 +244,22 @@ export class BillService {
   }
 
   /**
-   * Calculate hours between two dates based only on hours and minutes, ignoring seconds and milliseconds
+   * Calculate hours between two dates based only on clock hours and minutes (mốc đầu phút VN), bỏ giây/ms.
    * @param start Start date
    * @param end End date
    * @returns Number of hours
    */
   calculateHours(start: Date | string, end: Date | string): number {
-    // Chuyển đổi thời gian về múi giờ Việt Nam và reset seconds/milliseconds
-    const startDate = dayjs(start).tz('Asia/Ho_Chi_Minh').second(0).millisecond(0)
-    const endDate = dayjs(end).tz('Asia/Ho_Chi_Minh').second(0).millisecond(0)
+    const startDate = dayjs(start).tz('Asia/Ho_Chi_Minh').startOf('minute')
+    const endDate = dayjs(end).tz('Asia/Ho_Chi_Minh').startOf('minute')
 
-    // Check if end date is before start date, which would produce negative values
-    if (endDate.isBefore(startDate)) {
-      console.warn(`Warning: End date (${endDate.format()}) is before start date (${startDate.format()})`)
-      // Return a small positive value to avoid negative calculations
-      return 0.5
+    if (!endDate.isAfter(startDate)) {
+      return 0
     }
 
-    // Tính chênh lệch theo giây để tránh mất 59 giây cuối cùng (ví dụ 18:00-19:00)
-    const diffSeconds = endDate.diff(startDate, 'second')
-    // Chuyển sang giờ và làm tròn 2 chữ số thập phân
-    const diffHours = diffSeconds / 3600
-    const result = Math.round(diffHours * 100) / 100
-
-    return result
+    const diffMinutes = endDate.diff(startDate, 'minute')
+    const diffHours = diffMinutes / 60
+    return Math.round(diffHours * 100) / 100
   }
 
   private async getServiceUnitPrice(startTime: Date, dayType: DayType, roomType: string): Promise<number> {
@@ -327,18 +328,32 @@ export class BillService {
 
   async getBill(
     scheduleId: string,
-    actualEndTime?: string,
+    actualEndTime?: string | string[],
     paymentMethod?: string,
     promotionId?: string,
-    actualStartTime?: string,
-    applyFreeHourPromotion?: boolean,
-    /** Chỉ bật cho luồng khách bấm kết thúc — giữ giây từ ISO; các API khác giữ làm tròn phút như cũ */
-    usePreciseEndTime?: boolean
+    actualStartTime?: string | string[],
+    applyFreeHourPromotion?: boolean
   ): Promise<IBill> {
     // Validate ObjectId format for scheduleId
     if (!ObjectId.isValid(scheduleId)) {
       throw new ErrorWithStatus({
         message: 'Invalid scheduleId format - must be a valid 24 character hex string',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
+    }
+
+    const rawActualEndTime = pickBillTimeParam(actualEndTime)
+    const rawActualStartTime = pickBillTimeParam(actualStartTime)
+
+    if (!rawActualStartTime) {
+      throw new ErrorWithStatus({
+        message: 'Vui lòng truyền actualStartTime (thời gian bắt đầu thực tế)',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
+    }
+    if (!rawActualEndTime) {
+      throw new ErrorWithStatus({
+        message: 'Vui lòng truyền actualEndTime (thời gian kết thúc thực tế)',
         status: HTTP_STATUS_CODE.BAD_REQUEST
       })
     }
@@ -391,99 +406,71 @@ export class BillService {
       }
     }
 
-    // Xử lý actualStartTime nếu được cung cấp
+    // Parse actualStartTime (bắt buộc — HH:mm neo theo ngày của schedule.startTime, hoặc ISO datetime)
     let validatedStartTime: Date
-    if (actualStartTime) {
-      if (/^\d{2}:\d{2}$/.test(actualStartTime)) {
-        // Nếu là định dạng HH:mm
-        const [hours, minutes] = actualStartTime.split(':')
-        // Sử dụng schedule.startTime đã được xử lý múi giờ đúng
-        const baseDate = dayjs.utc(schedule.startTime).tz('Asia/Ho_Chi_Minh')
-        validatedStartTime = baseDate.hour(parseInt(hours)).minute(parseInt(minutes)).second(0).millisecond(0).toDate()
-      } else {
-        // Nếu là định dạng datetime đầy đủ - reset giây và millisecond về 0
-        validatedStartTime = dayjs(actualStartTime).tz('Asia/Ho_Chi_Minh').second(0).millisecond(0).toDate()
-
-        if (!dayjs(validatedStartTime).isValid()) {
-          throw new ErrorWithStatus({
-            message: 'Thời gian bắt đầu không hợp lệ',
-            status: HTTP_STATUS_CODE.BAD_REQUEST
-          })
-        }
-      }
+    if (/^\d{2}:\d{2}$/.test(rawActualStartTime)) {
+      const [hours, minutes] = rawActualStartTime.split(':')
+      const baseDate = dayjs.utc(schedule.startTime).tz('Asia/Ho_Chi_Minh')
+      validatedStartTime = baseDate.hour(parseInt(hours)).minute(parseInt(minutes)).second(0).millisecond(0).toDate()
     } else {
-      // Nếu không có actualStartTime, sử dụng schedule.startTime và reset giây/millisecond
-      // FIX: Luôn xử lý thời gian từ DB như UTC và chuyển về VN time
-      const rawStartTime = schedule.startTime
+      validatedStartTime = dayjs(rawActualStartTime).tz('Asia/Ho_Chi_Minh').second(0).millisecond(0).toDate()
 
-      // Luôn xử lý như UTC vì thời gian từ DB luôn là UTC
-      // FIXED: Trước đây có thể xử lý sai múi giờ trong production
-      const processedStartTime = dayjs.utc(rawStartTime).tz('Asia/Ho_Chi_Minh').toDate()
-
-      validatedStartTime = dayjs(processedStartTime).second(0).millisecond(0).toDate()
+      if (!dayjs(validatedStartTime).isValid()) {
+        throw new ErrorWithStatus({
+          message: 'Thời gian bắt đầu không hợp lệ',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      }
     }
 
-    // Convert times to Vietnam timezone
-    const startTime = validatedStartTime
-
-    // Kiểm tra và xử lý actualEndTime
+    // Parse actualEndTime (bắt buộc)
     let validatedEndTime: Date
 
-    if (actualEndTime && /^\d{2}:\d{2}$/.test(actualEndTime)) {
-      // Nếu là định dạng HH:mm
-      const [hours, minutes] = actualEndTime.split(':')
-      validatedEndTime = dayjs(startTime)
-        .hour(parseInt(hours))
-        .minute(parseInt(minutes))
-        .second(0)
-        .millisecond(0)
-        .toDate()
+    if (/^\d{2}:\d{2}$/.test(rawActualEndTime)) {
+      // Nếu là định dạng HH:mm — bắt buộc làm việc trong Asia/Ho_Chi_Minh (dayjs(...).hour() không có .tz() sẽ theo TZ máy chủ → lệch phút / +1 phút)
+      const [hours, minutes] = rawActualEndTime.split(':')
+      const h = parseInt(hours, 10)
+      const m = parseInt(minutes, 10)
+      const startVn = dayjs(validatedStartTime).tz('Asia/Ho_Chi_Minh')
+      validatedEndTime = startVn.hour(h).minute(m).second(0).millisecond(0).toDate()
 
       // Khi end (HH:mm) trước start (HH:mm) trên cùng ngày => session qua đêm, coi end là ngày hôm sau
       // VD: start 23:00, end "01:00" => end = ngày tiếp theo 01:00 (không còn bị ép về 00:00 hay 23:59)
-      if (!this.compareTimeIgnoreSeconds(validatedEndTime, startTime)) {
+      if (!this.compareTimeIgnoreSeconds(validatedEndTime, validatedStartTime)) {
         validatedEndTime = dayjs(validatedEndTime).tz('Asia/Ho_Chi_Minh').add(1, 'day').toDate()
       }
-    } else if (actualEndTime) {
-      // Datetime đầy đủ (ISO...): có thể giữ giây cho khớp thời điểm kết thúc thực (VD khách bấm kết thúc).
-      const parsedEnd = dayjs(actualEndTime).tz('Asia/Ho_Chi_Minh')
+    } else {
+      const parsedEnd = dayjs(rawActualEndTime).tz('Asia/Ho_Chi_Minh')
       if (!parsedEnd.isValid()) {
         throw new ErrorWithStatus({
           message: 'Thời gian kết thúc không hợp lệ',
           status: HTTP_STATUS_CODE.BAD_REQUEST
         })
       }
-      const usePreciseInstant =
-        usePreciseEndTime === true &&
-        typeof actualEndTime === 'string' &&
-        /\d{4}-\d{2}-\d{2}T/i.test(actualEndTime.trim())
-      validatedEndTime = usePreciseInstant
-        ? parsedEnd.toDate()
-        : parsedEnd.second(0).millisecond(0).toDate()
-    } else {
-      // Nếu không có actualEndTime, sử dụng schedule.endTime và reset giây/millisecond
-      if (schedule.endTime) {
-        // FIX: Luôn xử lý thời gian từ DB như UTC và chuyển về VN time
-        const rawEndTime = schedule.endTime
-
-        // Luôn xử lý như UTC vì thời gian từ DB luôn là UTC
-        // FIXED: Trước đây có thể xử lý sai múi giờ trong production
-        const processedEndTime = dayjs.utc(rawEndTime).tz('Asia/Ho_Chi_Minh').toDate()
-
-        validatedEndTime = dayjs(processedEndTime).second(0).millisecond(0).toDate()
-      } else {
-        // Nếu không có endTime, mặc định là startTime + 1 giờ
-        validatedEndTime = dayjs(startTime).add(1, 'hour').second(0).millisecond(0).toDate()
-      }
+      validatedEndTime = parsedEnd.second(0).millisecond(0).toDate()
     }
 
-    // Tránh end <= start (dễ làm applicableTimeSlots rỗng → mất dòng phí thu âm)
-    if (dayjs(validatedEndTime).isSameOrBefore(dayjs(startTime))) {
-      validatedEndTime = dayjs(startTime).add(1, 'minute').toDate()
+    // Phí phòng chỉ theo chênh lệch phút (giờ:phút), bỏ giây: căn về đầu phút VN
+    const startTime = dayjs(validatedStartTime).tz('Asia/Ho_Chi_Minh').startOf('minute').toDate()
+    validatedEndTime = dayjs(validatedEndTime).tz('Asia/Ho_Chi_Minh').startOf('minute').toDate()
+
+    if (dayjs(validatedEndTime).isBefore(dayjs(startTime))) {
+      throw new ErrorWithStatus({
+        message:
+          'actualEndTime phải không trước actualStartTime (so sánh theo phút, giờ VN). Payload hiện kết thúc trước khi bắt đầu — thường do nhầm giờ/phút trong ISO (ví dụ 04:44 thay vì 05:44 hoặc 04:54).',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
     }
 
-    const sessionDurationSeconds = dayjs(validatedEndTime).diff(dayjs(startTime), 'second')
-    const sessionDurationMinutes = Math.ceil(sessionDurationSeconds / 60)
+    const sessionDurationMinutes = Math.max(
+      0,
+      dayjs(validatedEndTime).tz('Asia/Ho_Chi_Minh').diff(dayjs(startTime).tz('Asia/Ho_Chi_Minh'), 'minute')
+    )
+
+    // Cùng phút (giờ:phút) → không tính phòng; đồng thời neo end = start để bill không lệch với overlap khung giá
+    if (sessionDurationMinutes === 0) {
+      validatedEndTime = startTime
+    }
 
     // Kiểm tra điều kiện áp dụng freeHourPromotion:
     // 1. FE phải gửi flag applyFreeHourPromotion = true
@@ -648,8 +635,11 @@ export class BillService {
     // Sắp xếp các khung giờ theo thời gian bắt đầu
     applicableTimeSlots.sort((a, b) => a.overlapStart.getTime() - b.overlapStart.getTime())
 
+    // Không tính line phòng khi chênh phút session = 0 (tránh overlap khung giá sinh sai ~1 phút / 0.02 giờ)
+    const roomSlotsToCharge = sessionDurationMinutes > 0 ? applicableTimeSlots : []
+
     // Tính toán phí dịch vụ cho từng khung giờ riêng biệt (có thể áp dụng free 60 phút đầu trong khung 10-19)
-    for (const timeSlotInfo of applicableTimeSlots) {
+    for (const timeSlotInfo of roomSlotsToCharge) {
       const { slot, overlapStart, overlapEnd } = timeSlotInfo
 
       const priceEntry = slot.prices.find((p: any) => p.room_type === room?.roomType)
@@ -657,8 +647,10 @@ export class BillService {
 
       const localOverlapStart = dayjs(overlapStart).tz('Asia/Ho_Chi_Minh')
       const localOverlapEnd = dayjs(overlapEnd).tz('Asia/Ho_Chi_Minh')
-      const overlapSeconds = localOverlapEnd.diff(localOverlapStart, 'second')
-      if (overlapSeconds <= 0) continue
+      const overlapStartTrunc = localOverlapStart.startOf('minute')
+      const overlapEndTrunc = localOverlapEnd.startOf('minute')
+      const billableMinutes = Math.max(0, overlapEndTrunc.diff(overlapStartTrunc, 'minute'))
+      if (billableMinutes <= 0) continue
 
       let slotFreeMinutes = 0
       if (eligibleForFreeHour && freeMinutesLeft > 0) {
@@ -668,8 +660,9 @@ export class BillService {
         const promoOverlapEnd = promoEnd.isBefore(localOverlapEnd) ? promoEnd : localOverlapEnd
 
         if (promoOverlapEnd.isAfter(promoOverlapStart)) {
-          const promoSeconds = promoOverlapEnd.diff(promoOverlapStart, 'second')
-          const promoMinutes = Math.ceil(promoSeconds / 60)
+          const promoStartTrunc = promoOverlapStart.tz('Asia/Ho_Chi_Minh').startOf('minute')
+          const promoEndTrunc = promoOverlapEnd.tz('Asia/Ho_Chi_Minh').startOf('minute')
+          const promoMinutes = Math.max(0, promoEndTrunc.diff(promoStartTrunc, 'minute'))
           slotFreeMinutes = Math.min(freeMinutesLeft, promoMinutes)
           freeMinutesLeft -= slotFreeMinutes
           freeMinutesApplied += slotFreeMinutes
@@ -678,15 +671,15 @@ export class BillService {
         }
       }
 
-      const overlapHoursRounded = Math.round((overlapSeconds / 3600) * 100) / 100
+      const overlapHoursRounded = Math.round((billableMinutes / 60) * 100) / 100
 
-      const slotServiceFee = (overlapSeconds / 3600) * priceEntry.price
+      const slotServiceFee = (billableMinutes / 60) * priceEntry.price
 
       totalServiceFee += slotServiceFee
       totalHoursUsed += overlapHoursRounded
 
-      const startTimeStr = localOverlapStart.format('HH:mm')
-      const endTimeStr = localOverlapEnd.format('HH:mm')
+      const startTimeStr = overlapStartTrunc.format('HH:mm')
+      const endTimeStr = overlapEndTrunc.format('HH:mm')
 
       const description = `Phi dich vu thu am\n(${startTimeStr}-${endTimeStr})`
 
@@ -860,8 +853,8 @@ export class BillService {
               freeAmount: freeAmountTotal
             }
           : undefined,
-      actualEndTime: actualEndTime ? new Date(actualEndTime) : undefined,
-      actualStartTime: actualStartTime ? new Date(actualStartTime) : undefined,
+      actualEndTime: rawActualEndTime ? validatedEndTime : undefined,
+      actualStartTime: rawActualStartTime ? startTime : undefined,
       // Thêm thông tin FNB order vào bill
       fnbOrder: order
         ? (() => {
@@ -1767,8 +1760,9 @@ export class BillService {
       )
     }
 
-    const totalDurationSeconds = dayjs(bill.endTime).diff(dayjs(bill.startTime), 'second')
-    const totalDurationMinutes = Math.ceil(totalDurationSeconds / 60)
+    const billStartTrunc = dayjs(bill.startTime).tz('Asia/Ho_Chi_Minh').startOf('minute')
+    const billEndTrunc = dayjs(bill.endTime).tz('Asia/Ho_Chi_Minh').startOf('minute')
+    const totalDurationMinutes = Math.max(0, billEndTrunc.diff(billStartTrunc, 'minute'))
     const displayHours = Math.floor(totalDurationMinutes / 60)
     const displayMinutes = totalDurationMinutes % 60
 
@@ -2059,8 +2053,10 @@ export class BillService {
    * @returns true nếu time1 >= time2 (chỉ tính giờ và phút)
    */
   private compareTimeIgnoreSeconds(time1: Date, time2: Date): boolean {
-    const time1Minutes = time1.getHours() * 60 + time1.getMinutes()
-    const time2Minutes = time2.getHours() * 60 + time2.getMinutes()
+    const t1 = dayjs(time1).tz('Asia/Ho_Chi_Minh')
+    const t2 = dayjs(time2).tz('Asia/Ho_Chi_Minh')
+    const time1Minutes = t1.hour() * 60 + t1.minute()
+    const time2Minutes = t2.hour() * 60 + t2.minute()
     return time1Minutes >= time2Minutes
   }
 

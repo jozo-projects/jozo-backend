@@ -21,6 +21,24 @@ import {
 import type { FNBOrder, FNBOrderLine } from '~/models/schemas/FNB.schema'
 import { cleanOrderDetail } from '../utils/common'
 
+/** getBill bắt buộc actual start/end — hàm này lấy từ lịch (và now nếu lịch chưa có end) để gọi nội bộ */
+async function resolveActualTimesForBill(roomScheduleId: string): Promise<{ actualStartTime: string; actualEndTime: string }> {
+  const schedule = await databaseService.roomSchedule.findOne({ _id: new ObjectId(roomScheduleId) })
+  if (!schedule) {
+    throw new ErrorWithStatus({
+      message: 'Không tìm thấy lịch đặt phòng',
+      status: HTTP_STATUS_CODE.NOT_FOUND
+    })
+  }
+  const toIso = (d: Date | string | undefined | null) =>
+    !d ? new Date().toISOString() : d instanceof Date ? d.toISOString() : new Date(d).toISOString()
+
+  return {
+    actualStartTime: toIso(schedule.startTime as Date),
+    actualEndTime: schedule.endTime ? toIso(schedule.endTime as Date) : new Date().toISOString()
+  }
+}
+
 /**
  * @description Create FNB Order
  * @path /fnb-orders
@@ -204,7 +222,8 @@ export const getUpdatedBill = async (req: Request, res: Response, next: NextFunc
     const { roomScheduleId } = req.params
 
     const billService = new BillService()
-    const bill = await billService.getBill(roomScheduleId)
+    const { actualStartTime, actualEndTime } = await resolveActualTimesForBill(roomScheduleId)
+    const bill = await billService.getBill(roomScheduleId, actualEndTime, undefined, undefined, actualStartTime)
 
     return res.status(HTTP_STATUS_CODE.OK).json({
       message: 'Lấy bill thành công',
@@ -281,7 +300,8 @@ export const addItemsToOrder = async (req: Request, res: Response, next: NextFun
     const billService = new BillService()
     let updatedBill
     try {
-      updatedBill = await billService.getBill(roomScheduleId)
+      const { actualStartTime, actualEndTime } = await resolveActualTimesForBill(roomScheduleId)
+      updatedBill = await billService.getBill(roomScheduleId, actualEndTime, undefined, undefined, actualStartTime)
       console.log('Bill đã được cập nhật với items mới')
     } catch (billError) {
       console.error('Lỗi khi tạo bill:', billError)
@@ -312,7 +332,8 @@ export const getBillDetails = async (req: Request, res: Response, next: NextFunc
 
     // Get bill
     const billService = new BillService()
-    const bill = await billService.getBill(roomScheduleId)
+    const { actualStartTime, actualEndTime } = await resolveActualTimesForBill(roomScheduleId)
+    const bill = await billService.getBill(roomScheduleId, actualEndTime, undefined, undefined, actualStartTime)
 
     // Get FNB order for this room schedule
     const order = await fnbOrderService.getFnbOrdersByRoomSchedule(roomScheduleId)
@@ -493,7 +514,8 @@ export const completeOrder = async (req: Request, res: Response, next: NextFunct
     const billService = new BillService()
     let updatedBill
     try {
-      updatedBill = await billService.getBill(roomScheduleId)
+      const { actualStartTime, actualEndTime } = await resolveActualTimesForBill(roomScheduleId)
+      updatedBill = await billService.getBill(roomScheduleId, actualEndTime, undefined, undefined, actualStartTime)
       console.log('Bill đã được cập nhật với items mới')
     } catch (billError) {
       console.error('Lỗi khi tạo bill:', billError)
