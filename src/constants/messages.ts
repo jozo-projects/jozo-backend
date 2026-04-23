@@ -225,3 +225,16 @@ export const GIFT_MESSAGES = {
   GET_ROOM_GIFT_SUCCESS: 'Lấy thông tin quà của phòng thành công',
   ACTIVE_SCHEDULE_NOT_FOUND: 'Không tìm thấy lịch đang hoạt động cho phòng'
 } as const
+
+export const GAME_MESSAGES = {
+  GET_GAME_TYPES_SUCCESS: 'Lấy danh sách game type thành công',
+  GET_GAME_TYPE_BY_ID_SUCCESS: 'Lấy game type thành công',
+  CREATE_GAME_TYPE_SUCCESS: 'Tạo game type thành công',
+  UPDATE_GAME_TYPE_SUCCESS: 'Cập nhật game type thành công',
+  DELETE_GAME_TYPE_SUCCESS: 'Xóa game type thành công',
+  GET_GAMES_SUCCESS: 'Lấy danh sách game thành công',
+  GET_GAME_BY_ID_SUCCESS: 'Lấy game thành công',
+  CREATE_GAME_SUCCESS: 'Tạo game thành công',
+  UPDATE_GAME_SUCCESS: 'Cập nhật game thành công',
+  DELETE_GAME_SUCCESS: 'Xóa game thành công'
+} as const

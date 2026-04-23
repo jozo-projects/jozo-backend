@@ -15,7 +15,7 @@ export interface ICoffeeSessionFNBLineItem {
   selections?: FNBOrderSelection[]
   /** Giá niêm yết tại thời điểm build line (snapshot) */
   listUnitPrice: number
-  /** Giá thực thu mỗi đơn vị (0đ với drink trong gói board game) */
+  /** Giá thực thu mỗi đơn vị (giá base + phụ phí selections; drink vé board game chỉ miễn giá base) */
   chargedUnitPrice: number
   lineListTotal: number
   lineChargedTotal: number

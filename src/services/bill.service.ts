@@ -516,7 +516,8 @@ export class BillService {
 
     // Tạo danh sách các ngày mà session đi qua
     const sessionDates = []
-    let currentDate = dayjs(sessionStartDate).tz('Asia/Ho_Chi_Minh')
+    // Lùi 1 ngày để không bỏ sót slot qua đêm của ngày trước (vd: 22:00-02:00) khi session bắt đầu sau 00:00.
+    let currentDate = dayjs(sessionStartDate).tz('Asia/Ho_Chi_Minh').subtract(1, 'day')
     const endDate = dayjs(sessionEndDate).tz('Asia/Ho_Chi_Minh')
 
     while (currentDate.isSameOrBefore(endDate, 'day')) {
@@ -591,50 +592,99 @@ export class BillService {
       }
     }
 
-    // Session qua đêm: đoạn 00:00 -> end (sáng sớm ngày hôm sau) không nằm trong khung nào (khung đầu ngày thường từ 09:00).
-    // Tính thêm đoạn này và áp giá theo khung cuối ngày trước (cùng mức với 18:00-23:59).
+    // Bù phần rạng sáng bị hở (00:00 -> trước khung đầu ngày), áp giá theo slot cuối ngày trước.
+    // Fix các case như 00:00-01:00 (cùng ngày) hoặc qua đêm kéo dài (tránh double-charge phần đã có slot cover).
     const sessionEndDateStr = sessionEndVN.format('YYYY-MM-DD')
-    const sessionStartDateStr = sessionStartVN.format('YYYY-MM-DD')
-    if (sessionEndDateStr > sessionStartDateStr) {
-      const midnightNextDay = sessionEndVN.startOf('day').toDate()
-      const sessionEndDate = sessionEndVN.toDate()
-      if (sessionEndDate.getTime() > midnightNextDay.getTime()) {
-        // Tránh duplicate: nếu đoạn 00:00 -> end đã được một slot qua đêm cover thì không bù thêm.
-        const earlyWindowAlreadyCovered = applicableTimeSlots.some((slotInfo) => {
-          return (
-            slotInfo.overlapStart.getTime() <= midnightNextDay.getTime() &&
-            slotInfo.overlapEnd.getTime() >= sessionEndDate.getTime()
-          )
-        })
-        if (!earlyWindowAlreadyCovered) {
-          const boundariesStartDate = timeSlotBoundaries.filter((b) => b.date === sessionStartDateStr)
-          const lastSlotOfPrevDay = boundariesStartDate.length
-            ? boundariesStartDate.reduce((latest, b) => (b.end.getTime() > latest.end.getTime() ? b : latest))
-            : null
-          if (lastSlotOfPrevDay) {
-            const earlyOverlapStart = midnightNextDay
-            const earlyOverlapEnd = sessionEndDate
-            const earlyOverlapHours = this.calculateHours(earlyOverlapStart, earlyOverlapEnd)
-            if (earlyOverlapHours > 0) {
+    const firstSlotStart = sortedTimeSlots[0]?.start
+    if (firstSlotStart) {
+      const startOfEndDay = dayjs.tz(`${sessionEndDateStr} 00:00`, 'YYYY-MM-DD HH:mm', 'Asia/Ho_Chi_Minh')
+      const firstSlotStartAtEndDay = dayjs.tz(
+        `${sessionEndDateStr} ${firstSlotStart}`,
+        'YYYY-MM-DD HH:mm',
+        'Asia/Ho_Chi_Minh'
+      )
+      const earlyMorningBillingCutoff = dayjs.tz(`${sessionEndDateStr} 03:00`, 'YYYY-MM-DD HH:mm', 'Asia/Ho_Chi_Minh')
+      const earlyWindowUpperBound = firstSlotStartAtEndDay.isBefore(earlyMorningBillingCutoff)
+        ? firstSlotStartAtEndDay
+        : earlyMorningBillingCutoff
+      const earlyWindowMaxEnd = sessionEndVN.isBefore(earlyWindowUpperBound) ? sessionEndVN : earlyWindowUpperBound
+
+      if (earlyWindowMaxEnd.isAfter(startOfEndDay)) {
+        const sessionStartDate = sessionStartVN.toDate()
+        const sessionEndDate = sessionEndVN.toDate()
+        const earlyWindowStart = new Date(Math.max(sessionStartDate.getTime(), startOfEndDay.toDate().getTime()))
+        const earlyWindowEnd = new Date(Math.min(sessionEndDate.getTime(), earlyWindowMaxEnd.toDate().getTime()))
+
+        if (earlyWindowStart.getTime() < earlyWindowEnd.getTime()) {
+          const clippedIntervals = applicableTimeSlots
+            .map((slotInfo) => {
+              const clippedStart = new Date(Math.max(slotInfo.overlapStart.getTime(), earlyWindowStart.getTime()))
+              const clippedEnd = new Date(Math.min(slotInfo.overlapEnd.getTime(), earlyWindowEnd.getTime()))
+              if (clippedStart.getTime() < clippedEnd.getTime()) {
+                return { start: clippedStart, end: clippedEnd }
+              }
+              return null
+            })
+            .filter(Boolean) as Array<{ start: Date; end: Date }>
+
+          clippedIntervals.sort((a, b) => a.start.getTime() - b.start.getTime())
+
+          const mergedIntervals: Array<{ start: Date; end: Date }> = []
+          for (const interval of clippedIntervals) {
+            const lastMerged = mergedIntervals[mergedIntervals.length - 1]
+            if (!lastMerged || interval.start.getTime() > lastMerged.end.getTime()) {
+              mergedIntervals.push({ ...interval })
+            } else if (interval.end.getTime() > lastMerged.end.getTime()) {
+              lastMerged.end = interval.end
+            }
+          }
+
+          const uncoveredIntervals: Array<{ start: Date; end: Date }> = []
+          let cursor = earlyWindowStart
+          for (const merged of mergedIntervals) {
+            if (cursor.getTime() < merged.start.getTime()) {
+              uncoveredIntervals.push({ start: cursor, end: merged.start })
+            }
+            if (merged.end.getTime() > cursor.getTime()) {
+              cursor = merged.end
+            }
+          }
+          if (cursor.getTime() < earlyWindowEnd.getTime()) {
+            uncoveredIntervals.push({ start: cursor, end: earlyWindowEnd })
+          }
+
+          if (uncoveredIntervals.length > 0) {
+            const previousDateStr = dayjs(sessionEndDateStr).subtract(1, 'day').format('YYYY-MM-DD')
+            const boundariesPreviousDate = timeSlotBoundaries.filter((b) => b.date === previousDateStr)
+            const lastSlotOfPrevDay = boundariesPreviousDate.length
+              ? boundariesPreviousDate.reduce((latest, b) => (b.end.getTime() > latest.end.getTime() ? b : latest))
+              : null
+
+            if (lastSlotOfPrevDay) {
               const originalSlot =
                 sortedTimeSlots.find(
                   (slot) =>
                     slot.start === dayjs(lastSlotOfPrevDay.start).format('HH:mm') &&
                     slot.end === dayjs(lastSlotOfPrevDay.end).format('HH:mm')
                 ) || sortedTimeSlots.find((slot) => slot.start === dayjs(lastSlotOfPrevDay.start).format('HH:mm'))
-              applicableTimeSlots.push({
-                slot: originalSlot || {
-                  start: dayjs(lastSlotOfPrevDay.start).format('HH:mm'),
-                  end: dayjs(lastSlotOfPrevDay.end).format('HH:mm'),
-                  prices: lastSlotOfPrevDay.prices
-                },
-                overlapStart: earlyOverlapStart,
-                overlapEnd: earlyOverlapEnd,
-                overlapHours: earlyOverlapHours,
-                slotStart: lastSlotOfPrevDay.start,
-                slotEnd: lastSlotOfPrevDay.end,
-                date: sessionEndDateStr
-              })
+
+              for (const uncovered of uncoveredIntervals) {
+                const uncoveredHours = this.calculateHours(uncovered.start, uncovered.end)
+                if (uncoveredHours <= 0) continue
+                applicableTimeSlots.push({
+                  slot: originalSlot || {
+                    start: dayjs(lastSlotOfPrevDay.start).format('HH:mm'),
+                    end: dayjs(lastSlotOfPrevDay.end).format('HH:mm'),
+                    prices: lastSlotOfPrevDay.prices
+                  },
+                  overlapStart: uncovered.start,
+                  overlapEnd: uncovered.end,
+                  overlapHours: uncoveredHours,
+                  slotStart: lastSlotOfPrevDay.start,
+                  slotEnd: lastSlotOfPrevDay.end,
+                  date: sessionEndDateStr
+                })
+              }
             }
           }
         }

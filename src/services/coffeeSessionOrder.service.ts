@@ -1,13 +1,14 @@
 import { MongoServerError, ObjectId } from 'mongodb'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { ErrorWithStatus } from '~/models/Error'
-import { FNBOrder } from '~/models/schemas/FNB.schema'
+import { FNBOrder, FNBOrderSelection } from '~/models/schemas/FNB.schema'
 import { ICoffeeSession } from '~/models/schemas/CoffeeSession.schema'
 import {
   CoffeeSessionFNBOrder,
   ICoffeeSessionFNBLineItem,
   ICoffeeSessionOrderTotals
 } from '~/models/schemas/CoffeeSessionOrder.schema'
+import { FnBMenuCustomizationGroup } from '~/models/schemas/FnBMenuItem.schema'
 import {
   aggregateQuantitiesByItemId,
   appendCartLines,
@@ -16,7 +17,10 @@ import {
   orderHasPositiveLines
 } from '~/utils/fnbOrderLines'
 import databaseService from './database.service'
-import { assertOrderLinesMatchMenuCustomizations } from './fnbMenuCustomization.service'
+import {
+  assertOrderLinesMatchMenuCustomizations,
+  resolveEffectiveCustomizationGroups
+} from './fnbMenuCustomization.service'
 import fnbMenuItemService from './fnbMenuItem.service'
 
 class CoffeeSessionOrderService {
@@ -40,9 +44,42 @@ class CoffeeSessionOrderService {
     return Boolean(session?.planSnapshot)
   }
 
+  private getDrinkBaseFreeQuota(session: ICoffeeSession): number {
+    if (!this.isBoardGameTicketSession(session)) return 0
+    const quota = Math.floor(Number(session.peopleCount))
+    return Number.isFinite(quota) && quota > 0 ? quota : 0
+  }
+
   private parseListUnitPrice(item: { price?: unknown }): number {
     const n = Number(item?.price)
     return Number.isFinite(n) && n >= 0 ? n : 0
+  }
+
+  private sumSelectionsUnitDelta(
+    groups: FnBMenuCustomizationGroup[],
+    selections: FNBOrderSelection[] | undefined
+  ): number {
+    if (!selections?.length) return 0
+
+    const groupMap = new Map(groups.map((g) => [g.groupKey, g]))
+    return selections.reduce((sum, selection) => {
+      const group = groupMap.get(selection.groupKey)
+      if (!group) return sum
+      const option = group.options.find((opt) => opt.optionKey === selection.optionKey)
+      if (!option) return sum
+      const delta = Number(option.priceDelta)
+      return sum + (Number.isFinite(delta) && delta > 0 ? delta : 0)
+    }, 0)
+  }
+
+  private async getSelectionsUnitDelta(itemId: string, selections: FNBOrderSelection[] | undefined): Promise<number> {
+    if (!selections?.length) return 0
+
+    const variantItem = await fnbMenuItemService.getMenuItemById(itemId)
+    if (!variantItem) return 0
+
+    const effectiveGroups = await resolveEffectiveCustomizationGroups(variantItem)
+    return this.sumSelectionsUnitDelta(effectiveGroups, selections)
   }
 
   private async ensureEditableCoffeeSession(coffeeSessionId: string) {
@@ -87,22 +124,9 @@ class CoffeeSessionOrderService {
     return { item, isVariant }
   }
 
-  private formatLineDisplayName(
-    baseName: string,
-    line: { note?: string; selections?: { groupKey: string; optionKey: string }[] }
-  ) {
-    const parts: string[] = [baseName]
-    if (line.selections?.length) {
-      parts.push(line.selections.map((s) => `${s.groupKey}:${s.optionKey}`).join(', '))
-    }
-    if (line.note?.trim()) {
-      parts.push(`— ${line.note.trim()}`)
-    }
-    return parts.length > 1 ? parts.join(' · ') : baseName
-  }
-
   private async buildLineItems(order: FNBOrder, session: ICoffeeSession): Promise<ICoffeeSessionFNBLineItem[]> {
     const ticketMode = this.isBoardGameTicketSession(session)
+    let remainingDrinkBaseFreeQuota = this.getDrinkBaseFreeQuota(session)
     const lines: ICoffeeSessionFNBLineItem[] = []
 
     for (const row of order.lines) {
@@ -111,16 +135,26 @@ class CoffeeSessionOrderService {
 
       const { item } = await this.getMenuItem(row.itemId)
       const baseName = typeof item.name === 'string' ? item.name : String(item.name ?? row.itemId)
-      const name = this.formatLineDisplayName(baseName, row)
+      const name = baseName
       const listUnitPrice = this.parseListUnitPrice(item)
+      const selectionsUnitDelta = await this.getSelectionsUnitDelta(row.itemId, row.selections)
 
-      let chargedUnitPrice = listUnitPrice
+      let chargedUnitPrice = listUnitPrice + selectionsUnitDelta
+      let lineChargedTotal = quantity * chargedUnitPrice
       let revenueBucket: ICoffeeSessionFNBLineItem['revenueBucket'] = 'snack_addon'
 
       if (row.category === 'drink') {
         if (ticketMode) {
-          chargedUnitPrice = 0
-          revenueBucket = 'ticket_included_drink'
+          const freeBaseUnits = Math.min(quantity, remainingDrinkBaseFreeQuota)
+          const paidBaseUnits = quantity - freeBaseUnits
+          remainingDrinkBaseFreeQuota -= freeBaseUnits
+
+          // Drink trong gói chỉ miễn giá base theo quota; topping vẫn tính đủ trên toàn bộ số lượng.
+          const lineBaseChargedTotal = paidBaseUnits * listUnitPrice
+          const lineSelectionsChargedTotal = quantity * selectionsUnitDelta
+          lineChargedTotal = lineBaseChargedTotal + lineSelectionsChargedTotal
+          chargedUnitPrice = lineChargedTotal / quantity
+          revenueBucket = paidBaseUnits > 0 ? 'menu_listed_drink' : 'ticket_included_drink'
         } else {
           revenueBucket = 'menu_listed_drink'
         }
@@ -137,17 +171,10 @@ class CoffeeSessionOrderService {
         listUnitPrice,
         chargedUnitPrice,
         lineListTotal: quantity * listUnitPrice,
-        lineChargedTotal: quantity * chargedUnitPrice,
+        lineChargedTotal,
         revenueBucket
       })
     }
-
-    lines.sort((a, b) => {
-      if (a.category !== b.category) return a.category === 'drink' ? -1 : 1
-      const idCmp = a.itemId.localeCompare(b.itemId)
-      if (idCmp !== 0) return idCmp
-      return a.lineId.localeCompare(b.lineId)
-    })
 
     return lines
   }
@@ -158,6 +185,35 @@ class CoffeeSessionOrderService {
     const fnbChargedTotal = lineItems.reduce((s, l) => s + l.lineChargedTotal, 0)
 
     return { pricingMode, fnbListTotal, fnbChargedTotal }
+  }
+
+  private shouldRefreshOrderSnapshots(
+    doc: any,
+    nextLineItems: ICoffeeSessionFNBLineItem[],
+    nextTotals: ICoffeeSessionOrderTotals
+  ): boolean {
+    const currentLineItems = Array.isArray(doc?.lineItems) ? doc.lineItems : []
+    const currentTotals = doc?.orderTotals
+
+    if (currentLineItems.length !== nextLineItems.length) return true
+    if (!currentTotals) return true
+    if (currentTotals.fnbListTotal !== nextTotals.fnbListTotal) return true
+    if (currentTotals.fnbChargedTotal !== nextTotals.fnbChargedTotal) return true
+    if (currentTotals.pricingMode !== nextTotals.pricingMode) return true
+
+    for (let i = 0; i < nextLineItems.length; i++) {
+      const current = currentLineItems[i]
+      const next = nextLineItems[i]
+      if (!current) return true
+      if (current.lineId !== next.lineId) return true
+      if (current.listUnitPrice !== next.listUnitPrice) return true
+      if (current.chargedUnitPrice !== next.chargedUnitPrice) return true
+      if (current.lineListTotal !== next.lineListTotal) return true
+      if (current.lineChargedTotal !== next.lineChargedTotal) return true
+      if (current.revenueBucket !== next.revenueBucket) return true
+    }
+
+    return false
   }
 
   private async applyInventoryDelta(currentOrder: FNBOrder, nextOrder: FNBOrder) {
@@ -216,12 +272,14 @@ class CoffeeSessionOrderService {
     if (!doc) return null
 
     const session = await databaseService.coffeeSessions.findOne({ _id: new ObjectId(coffeeSessionId) })
+    if (!session) return doc
     const normalized = this.buildNormalizedOrder(doc.order)
-    const needsHeal = session && orderHasPositiveLines(normalized) && (!doc.lineItems || doc.lineItems.length === 0)
-
-    if (needsHeal) {
+    if (orderHasPositiveLines(normalized)) {
       const lineItems = await this.buildLineItems(normalized, session)
       const orderTotals = this.buildOrderTotals(lineItems, session)
+      const shouldRefresh = this.shouldRefreshOrderSnapshots(doc, lineItems, orderTotals)
+      if (!shouldRefresh) return doc
+
       const healed = await databaseService.coffeeSessionOrders.findOneAndUpdate(
         { coffeeSessionId: new ObjectId(coffeeSessionId) },
         { $set: { lineItems, orderTotals, updatedAt: new Date() } },
