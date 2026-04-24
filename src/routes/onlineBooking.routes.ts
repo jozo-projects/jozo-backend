@@ -17,7 +17,7 @@ const onlineBookingRouter = express.Router()
  * @description Tạo booking online với tự động nâng cấp phòng
  * @path /api/bookings/online
  * @method POST
- * @rate_limit 10 requests per hour
+ * @rate_limit 25 requests per hour (theo phone, fallback IP)
  */
 onlineBookingRouter.post('/online', bookingLimiter(), wrapRequestHandler(createOnlineBooking))
 

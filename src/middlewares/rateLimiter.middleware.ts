@@ -170,8 +170,15 @@ export const strictAuthLimiter = (config?: Partial<RateLimitConfig>) =>
 export const bookingLimiter = (config?: Partial<RateLimitConfig>) =>
   rateLimiter.createMiddleware({
     windowMs: 60 * 60 * 1000, // 1 giờ
-    max: 10,
+    max: 25,
     message: RATE_LIMIT_MESSAGES.BOOKING_TOO_MANY_REQUESTS,
+    keyGenerator: (req) => {
+      // Ưu tiên định danh theo số điện thoại để tránh nhiều khách chung IP bị chặn nhầm
+      const rawPhone = req.body?.customerPhone || req.body?.phone
+      const normalizedPhone = typeof rawPhone === 'string' ? rawPhone.replace(/[\s\-\(\)]/g, '') : ''
+      const identifier = normalizedPhone || req.ip || req.socket.remoteAddress || 'unknown'
+      return `rate_limit:booking:${identifier}:${req.path}`
+    },
     ...config
   })
 
