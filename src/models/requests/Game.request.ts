@@ -14,6 +14,9 @@ export interface ICreateGameRequestBody {
   slug?: string
   shortDescription?: string
   guideContent: string
+  minPlayers: number
+  maxPlayers: number
+  playTimeMinutes: number
   images?: string[]
   isActive?: boolean
 }

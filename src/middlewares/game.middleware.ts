@@ -178,6 +178,43 @@ export const createGameValidator = validate(
         errorMessage: 'guideContent cannot be empty'
       }
     },
+    minPlayers: {
+      in: ['body'],
+      notEmpty: {
+        errorMessage: 'minPlayers is required'
+      },
+      isInt: {
+        options: { min: 1 },
+        errorMessage: 'minPlayers must be an integer greater than 0'
+      },
+      toInt: true
+    },
+    maxPlayers: {
+      in: ['body'],
+      notEmpty: {
+        errorMessage: 'maxPlayers is required'
+      },
+      isInt: {
+        options: { min: 1 },
+        errorMessage: 'maxPlayers must be an integer greater than 0'
+      },
+      toInt: true,
+      custom: {
+        options: (value, { req }) => Number(value) >= Number(req.body.minPlayers),
+        errorMessage: 'maxPlayers must be greater than or equal to minPlayers'
+      }
+    },
+    playTimeMinutes: {
+      in: ['body'],
+      notEmpty: {
+        errorMessage: 'playTimeMinutes is required'
+      },
+      isInt: {
+        options: { min: 1 },
+        errorMessage: 'playTimeMinutes must be an integer greater than 0'
+      },
+      toInt: true
+    },
     isActive: {
       in: ['body'],
       optional: true,
@@ -245,6 +282,33 @@ export const updateGameValidator = validate(
         options: { min: 1 },
         errorMessage: 'guideContent cannot be empty'
       }
+    },
+    minPlayers: {
+      in: ['body'],
+      optional: true,
+      isInt: {
+        options: { min: 1 },
+        errorMessage: 'minPlayers must be an integer greater than 0'
+      },
+      toInt: true
+    },
+    maxPlayers: {
+      in: ['body'],
+      optional: true,
+      isInt: {
+        options: { min: 1 },
+        errorMessage: 'maxPlayers must be an integer greater than 0'
+      },
+      toInt: true
+    },
+    playTimeMinutes: {
+      in: ['body'],
+      optional: true,
+      isInt: {
+        options: { min: 1 },
+        errorMessage: 'playTimeMinutes must be an integer greater than 0'
+      },
+      toInt: true
     },
     isActive: {
       in: ['body'],

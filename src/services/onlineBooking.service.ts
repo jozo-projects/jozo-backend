@@ -163,7 +163,7 @@ class OnlineBookingService {
     // Không cho đặt vào giờ nghỉ - sử dụng timezone Việt Nam
     const vietnamTime = dayjs.tz(startTime, 'Asia/Ho_Chi_Minh')
     const hour = vietnamTime.hour()
-    if (hour < 10 || hour > 23) {
+    if (hour < 9 || hour > 23) {
       throw new ErrorWithStatus({
         message: 'Chỉ có thể đặt phòng từ 10:00 đến 23:00',
         status: HTTP_STATUS_CODE.BAD_REQUEST

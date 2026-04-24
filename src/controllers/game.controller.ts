@@ -13,6 +13,17 @@ import gameService from '~/services/game.service'
 type UploadResult = { url?: string }
 type MulterRequest = Request & { file?: Express.Multer.File; files?: Express.Multer.File[] }
 
+const parseNumber = (value: unknown): number | undefined => {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string') {
+    const normalized = value.trim()
+    if (!normalized) return undefined
+    const parsed = Number(normalized)
+    return Number.isFinite(parsed) ? parsed : undefined
+  }
+  return undefined
+}
+
 const parseBoolean = (value: unknown): boolean | undefined => {
   if (typeof value === 'boolean') return value
   if (typeof value !== 'string') return undefined
@@ -70,6 +81,9 @@ const normalizeCreateGamePayload = (body: Record<string, unknown>): ICreateGameR
   slug: typeof body.slug === 'string' ? body.slug : undefined,
   shortDescription: typeof body.shortDescription === 'string' ? body.shortDescription : undefined,
   guideContent: String(body.guideContent || ''),
+  minPlayers: Number(body.minPlayers || 0),
+  maxPlayers: Number(body.maxPlayers || 0),
+  playTimeMinutes: Number(body.playTimeMinutes || 0),
   images: parseStringArray(body.images),
   isActive: parseBoolean(body.isActive)
 })
@@ -80,6 +94,9 @@ const normalizeUpdateGamePayload = (body: Record<string, unknown>): IUpdateGameR
   slug: typeof body.slug === 'string' ? body.slug : undefined,
   shortDescription: typeof body.shortDescription === 'string' ? body.shortDescription : undefined,
   guideContent: typeof body.guideContent === 'string' ? body.guideContent : undefined,
+  minPlayers: parseNumber(body.minPlayers),
+  maxPlayers: parseNumber(body.maxPlayers),
+  playTimeMinutes: parseNumber(body.playTimeMinutes),
   images: parseStringArray(body.images),
   isActive: parseBoolean(body.isActive)
 })

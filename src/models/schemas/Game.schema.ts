@@ -7,6 +7,9 @@ export interface IGame {
   slug: string
   shortDescription?: string
   guideContent: string
+  minPlayers: number
+  maxPlayers: number
+  playTimeMinutes: number
   images: string[]
   isActive: boolean
   createdAt: Date
@@ -20,6 +23,9 @@ export class Game implements IGame {
   slug: string
   shortDescription?: string
   guideContent: string
+  minPlayers: number
+  maxPlayers: number
+  playTimeMinutes: number
   images: string[]
   isActive: boolean
   createdAt: Date
@@ -32,6 +38,9 @@ export class Game implements IGame {
     this.slug = game.slug
     this.shortDescription = game.shortDescription
     this.guideContent = game.guideContent
+    this.minPlayers = game.minPlayers
+    this.maxPlayers = game.maxPlayers
+    this.playTimeMinutes = game.playTimeMinutes
     this.images = game.images
     this.isActive = game.isActive
     this.createdAt = game.createdAt

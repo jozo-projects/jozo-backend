@@ -174,6 +174,13 @@ class GameService {
       })
     }
 
+    if (payload.maxPlayers < payload.minPlayers) {
+      throw new ErrorWithStatus({
+        message: 'maxPlayers must be greater than or equal to minPlayers',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
+    }
+
     const now = new Date()
     const game = new Game({
       typeId: typeObjectId,
@@ -181,6 +188,9 @@ class GameService {
       slug,
       shortDescription: payload.shortDescription?.trim(),
       guideContent: payload.guideContent,
+      minPlayers: payload.minPlayers,
+      maxPlayers: payload.maxPlayers,
+      playTimeMinutes: payload.playTimeMinutes,
       images: payload.images || [],
       isActive: payload.isActive ?? true,
       createdAt: now,
@@ -324,12 +334,24 @@ class GameService {
       }
     }
 
+    const nextMinPlayers = payload.minPlayers ?? current.minPlayers
+    const nextMaxPlayers = payload.maxPlayers ?? current.maxPlayers
+    if (nextMaxPlayers < nextMinPlayers) {
+      throw new ErrorWithStatus({
+        message: 'maxPlayers must be greater than or equal to minPlayers',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
+    }
+
     const updateDoc = {
       ...(payload.typeId ? { typeId: nextTypeId } : {}),
       ...(payload.name ? { name: payload.name.trim() } : {}),
       ...(nextSlug ? { slug: nextSlug } : {}),
       ...(payload.shortDescription !== undefined ? { shortDescription: payload.shortDescription?.trim() } : {}),
       ...(payload.guideContent !== undefined ? { guideContent: payload.guideContent } : {}),
+      ...(payload.minPlayers !== undefined ? { minPlayers: payload.minPlayers } : {}),
+      ...(payload.maxPlayers !== undefined ? { maxPlayers: payload.maxPlayers } : {}),
+      ...(payload.playTimeMinutes !== undefined ? { playTimeMinutes: payload.playTimeMinutes } : {}),
       ...(payload.images !== undefined ? { images: payload.images } : {}),
       ...(payload.isActive !== undefined ? { isActive: payload.isActive } : {}),
       updatedAt: new Date()
