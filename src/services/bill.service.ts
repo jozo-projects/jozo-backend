@@ -262,6 +262,23 @@ export class BillService {
     return Math.round(diffHours * 100) / 100
   }
 
+  private normalizeActualEndDateNearStart(startTime: Date, endTime: Date): Date {
+    const startVn = dayjs(startTime).tz('Asia/Ho_Chi_Minh').startOf('minute')
+    const endVn = dayjs(endTime).tz('Asia/Ho_Chi_Minh').startOf('minute')
+    const maxReasonablePreviewMinutes = 12 * 60
+
+    if (endVn.diff(startVn, 'minute') <= maxReasonablePreviewMinutes) {
+      return endVn.toDate()
+    }
+
+    const endPreviousDay = endVn.subtract(1, 'day')
+    if (!endPreviousDay.isBefore(startVn)) {
+      return endPreviousDay.toDate()
+    }
+
+    return endVn.toDate()
+  }
+
   private async getServiceUnitPrice(startTime: Date, dayType: DayType, roomType: string): Promise<number> {
     const priceDoc = await databaseService.price.findOne({ day_type: dayType })
     if (!priceDoc || !priceDoc.time_slots) {
@@ -447,7 +464,12 @@ export class BillService {
           status: HTTP_STATUS_CODE.BAD_REQUEST
         })
       }
-      validatedEndTime = parsedEnd.second(0).millisecond(0).toDate()
+      // Sau 00:00 FE có thể gửi giờ kết thúc theo ngày hiện tại (vd 23:59 hôm nay)
+      // dù lịch bắt đầu từ tối hôm trước; kéo về ngày gần start để tránh bill > 24h.
+      validatedEndTime = this.normalizeActualEndDateNearStart(
+        validatedStartTime,
+        parsedEnd.second(0).millisecond(0).toDate()
+      )
     }
 
     // Phí phòng chỉ theo chênh lệch phút (giờ:phút), bỏ giây: căn về đầu phút VN
