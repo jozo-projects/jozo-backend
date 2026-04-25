@@ -28,6 +28,8 @@ import { CoffeeSessionFNBOrder } from '~/models/schemas/CoffeeSessionOrder.schem
 import { ICustomizationGroupTemplate } from '~/models/schemas/CustomizationGroupTemplate.schema'
 import { IGameType } from '~/models/schemas/GameType.schema'
 import { IGame } from '~/models/schemas/Game.schema'
+import { EmployeeSalarySnapshot } from '~/models/schemas/EmployeeSalarySnapshot.schema'
+import { EmployeeSalaryConfig } from '~/models/schemas/EmployeeSalaryConfig.schema'
 dotenv.config()
 
 // Interface cho Client Booking
@@ -144,6 +146,14 @@ class DatabaseService {
 
   get employeeSchedules(): Collection<EmployeeSchedule> {
     return this.db.collection('employee_schedules')
+  }
+
+  get employeeSalarySnapshots(): Collection<EmployeeSalarySnapshot> {
+    return this.db.collection('employee_salary_snapshots')
+  }
+
+  get employeeSalaryConfigs(): Collection<EmployeeSalaryConfig> {
+    return this.db.collection('employee_salary_configs')
   }
 
   get notifications(): Collection<Notification> {

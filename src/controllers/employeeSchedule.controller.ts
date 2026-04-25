@@ -7,7 +7,9 @@ import {
   IApproveScheduleBody,
   ICreateEmployeeScheduleBody,
   IGetSchedulesQuery,
+  IOverrideEmployeeSalaryBody,
   IUpdateScheduleBody,
+  IUpdateSalarySnapshotBody,
   IUpdateStatusBody
 } from '~/models/requests/EmployeeSchedule.request'
 import employeeScheduleService from '~/services/employeeSchedule.service'
@@ -351,6 +353,140 @@ export const markCompleted = async (req: Request, res: Response, next: NextFunct
 
     return res.status(HTTP_STATUS_CODE.OK).json({
       message: EMPLOYEE_SCHEDULE_MESSAGES.MARK_COMPLETED_SUCCESS
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+/**
+ * Admin lấy global salary snapshot
+ * GET /api/employee-schedules/salary/snapshot
+ */
+export const getSalarySnapshot = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const result = await employeeScheduleService.getGlobalSalarySnapshot()
+    return res.status(HTTP_STATUS_CODE.OK).json({
+      message: 'Lấy salary snapshot thành công',
+      result
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+/**
+ * Admin cập nhật global salary snapshot
+ * PUT /api/employee-schedules/salary/snapshot
+ */
+export const updateSalarySnapshot = async (
+  req: Request<ParamsDictionary, any, IUpdateSalarySnapshotBody>,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const adminId = req.decoded_authorization?.user_id
+    if (!adminId) {
+      return res.status(HTTP_STATUS_CODE.UNAUTHORIZED).json({
+        message: 'Unauthorized'
+      })
+    }
+
+    const result = await employeeScheduleService.updateGlobalSalarySnapshot(adminId, req.body)
+    return res.status(HTTP_STATUS_CODE.OK).json({
+      message: 'Cập nhật salary snapshot thành công',
+      result
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+/**
+ * Admin đồng bộ salary config cho tất cả staff từ snapshot
+ * POST /api/employee-schedules/salary/sync
+ */
+export const syncSalaryFromSnapshot = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const adminId = req.decoded_authorization?.user_id
+    if (!adminId) {
+      return res.status(HTTP_STATUS_CODE.UNAUTHORIZED).json({
+        message: 'Unauthorized'
+      })
+    }
+
+    const result = await employeeScheduleService.syncSalaryConfigsFromSnapshot(adminId)
+    return res.status(HTTP_STATUS_CODE.OK).json({
+      message: 'Đồng bộ salary config thành công',
+      result
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+/**
+ * Admin lấy danh sách salary config theo nhân viên
+ * GET /api/employee-schedules/salary/employees
+ */
+export const getEmployeeSalaryConfigs = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const result = await employeeScheduleService.getEmployeeSalaryConfigs()
+    return res.status(HTTP_STATUS_CODE.OK).json({
+      message: 'Lấy danh sách salary config thành công',
+      result
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+/**
+ * Admin override lương theo nhân viên
+ * PUT /api/employee-schedules/salary/employees/:userId
+ */
+export const overrideEmployeeSalary = async (
+  req: Request<ParamsDictionary, any, IOverrideEmployeeSalaryBody>,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const adminId = req.decoded_authorization?.user_id
+    if (!adminId) {
+      return res.status(HTTP_STATUS_CODE.UNAUTHORIZED).json({
+        message: 'Unauthorized'
+      })
+    }
+
+    const { userId } = req.params
+    const result = await employeeScheduleService.overrideEmployeeSalary(userId, adminId, req.body)
+    return res.status(HTTP_STATUS_CODE.OK).json({
+      message: 'Override lương nhân viên thành công',
+      result
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+/**
+ * Admin bỏ override lương theo nhân viên
+ * DELETE /api/employee-schedules/salary/employees/:userId/override
+ */
+export const resetEmployeeSalaryOverride = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const adminId = req.decoded_authorization?.user_id
+    if (!adminId) {
+      return res.status(HTTP_STATUS_CODE.UNAUTHORIZED).json({
+        message: 'Unauthorized'
+      })
+    }
+
+    const { userId } = req.params
+    const result = await employeeScheduleService.resetEmployeeSalaryOverride(userId, adminId)
+    return res.status(HTTP_STATUS_CODE.OK).json({
+      message: 'Bỏ override lương nhân viên thành công',
+      result
     })
   } catch (error) {
     next(error)

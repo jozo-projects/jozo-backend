@@ -166,20 +166,29 @@ export const updateScheduleValidator = validate(
       isString: {
         errorMessage: 'Custom end time phải là chuỗi'
       }
+    },
+    specialHourlyRate: {
+      optional: true,
+      isFloat: {
+        options: {
+          gt: 0
+        },
+        errorMessage: 'Special hourly rate phải là số lớn hơn 0'
+      }
     }
   })
 )
 
 /**
- * Middleware kiểm tra chỉ admin mới có thể update thời gian
+ * Middleware kiểm tra chỉ admin mới có thể update thời gian hoặc lương riêng theo ca
  */
 export const checkCanUpdateTime = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { customStartTime, customEndTime } = req.body
+    const { customStartTime, customEndTime, specialHourlyRate } = req.body
     const userId = req.decoded_authorization?.user_id
 
-    // Nếu không update thời gian thì không cần check
-    if (!customStartTime && !customEndTime) {
+    // Nếu không update time/salary đặc quyền thì không cần check
+    if (customStartTime === undefined && customEndTime === undefined && specialHourlyRate === undefined) {
       return next()
     }
 
@@ -195,11 +204,11 @@ export const checkCanUpdateTime = async (req: Request, res: Response, next: Next
     // Lấy user để check role
     const user = await databaseService.users.findOne({ _id: new ObjectId(userId) })
 
-    // Chỉ admin mới được update thời gian
+    // Chỉ admin mới được update thời gian và lương riêng theo ca
     if (user?.role !== 'admin') {
       return next(
         new ErrorWithStatus({
-          message: 'Chỉ admin mới có thể cập nhật thời gian ca làm việc',
+          message: 'Chỉ admin mới có thể cập nhật thời gian hoặc lương riêng cho ca làm việc',
           status: HTTP_STATUS_CODE.FORBIDDEN
         })
       )
@@ -279,6 +288,61 @@ export const updateStatusValidator = validate(
           }
           return true
         }
+      }
+    }
+  })
+)
+
+/**
+ * Validate request body khi cập nhật global salary snapshot
+ */
+export const updateSalarySnapshotValidator = validate(
+  checkSchema({
+    hourlyRate: {
+      notEmpty: {
+        errorMessage: 'Hourly rate không được rỗng'
+      },
+      isFloat: {
+        options: {
+          gt: 0
+        },
+        errorMessage: 'Hourly rate phải là số lớn hơn 0'
+      }
+    }
+  })
+)
+
+/**
+ * Validate request body khi override lương nhân viên
+ */
+export const overrideEmployeeSalaryValidator = validate(
+  checkSchema({
+    hourlyRate: {
+      notEmpty: {
+        errorMessage: 'Hourly rate không được rỗng'
+      },
+      isFloat: {
+        options: {
+          gt: 0
+        },
+        errorMessage: 'Hourly rate phải là số lớn hơn 0'
+      }
+    }
+  })
+)
+
+/**
+ * Validate params khi update/reset override lương nhân viên
+ */
+export const employeeSalaryUserIdParamValidator = validate(
+  checkSchema({
+    userId: {
+      in: ['params'],
+      notEmpty: {
+        errorMessage: 'User ID không được rỗng'
+      },
+      isMongoId: {
+        errorMessage: 'User ID không hợp lệ'
       }
     }
   })

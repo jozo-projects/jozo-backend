@@ -5,11 +5,17 @@ import {
   approveSchedule,
   createSchedule,
   deleteSchedule,
+  getEmployeeSalaryConfigs,
   getAllSchedules,
+  getSalarySnapshot,
   getMySchedules,
   getScheduleById,
   markAbsent,
   markCompleted,
+  overrideEmployeeSalary,
+  resetEmployeeSalaryOverride,
+  syncSalaryFromSnapshot,
+  updateSalarySnapshot,
   updateSchedule,
   updateScheduleStatus
 } from '~/controllers/employeeSchedule.controller'
@@ -23,6 +29,9 @@ import {
   checkScheduleExists,
   checkScheduleOwnership,
   createEmployeeScheduleValidator,
+  employeeSalaryUserIdParamValidator,
+  overrideEmployeeSalaryValidator,
+  updateSalarySnapshotValidator,
   updateScheduleValidator,
   updateStatusValidator
 } from '~/middlewares/employeeSchedule.middleware'
@@ -61,6 +70,64 @@ employeeScheduleRouter.get('/me', protect([UserRole.Staff, UserRole.Admin]), get
  * @access  Private (Admin only)
  */
 employeeScheduleRouter.get('/', protect([UserRole.Admin]), getAllSchedules)
+
+/**
+ * @route   GET /api/employee-schedules/salary/snapshot
+ * @desc    Admin lấy global salary snapshot
+ * @access  Private (Admin only)
+ */
+employeeScheduleRouter.get('/salary/snapshot', protect([UserRole.Admin]), getSalarySnapshot)
+
+/**
+ * @route   PUT /api/employee-schedules/salary/snapshot
+ * @desc    Admin cập nhật global salary snapshot
+ * @access  Private (Admin only)
+ */
+employeeScheduleRouter.put(
+  '/salary/snapshot',
+  protect([UserRole.Admin]),
+  updateSalarySnapshotValidator,
+  updateSalarySnapshot
+)
+
+/**
+ * @route   POST /api/employee-schedules/salary/sync
+ * @desc    Admin đồng bộ salary config theo snapshot
+ * @access  Private (Admin only)
+ */
+employeeScheduleRouter.post('/salary/sync', protect([UserRole.Admin]), syncSalaryFromSnapshot)
+
+/**
+ * @route   GET /api/employee-schedules/salary/employees
+ * @desc    Admin lấy salary config của tất cả staff
+ * @access  Private (Admin only)
+ */
+employeeScheduleRouter.get('/salary/employees', protect([UserRole.Admin]), getEmployeeSalaryConfigs)
+
+/**
+ * @route   PUT /api/employee-schedules/salary/employees/:userId
+ * @desc    Admin override lương nhân viên
+ * @access  Private (Admin only)
+ */
+employeeScheduleRouter.put(
+  '/salary/employees/:userId',
+  protect([UserRole.Admin]),
+  employeeSalaryUserIdParamValidator,
+  overrideEmployeeSalaryValidator,
+  overrideEmployeeSalary
+)
+
+/**
+ * @route   DELETE /api/employee-schedules/salary/employees/:userId/override
+ * @desc    Admin bỏ override lương nhân viên
+ * @access  Private (Admin only)
+ */
+employeeScheduleRouter.delete(
+  '/salary/employees/:userId/override',
+  protect([UserRole.Admin]),
+  employeeSalaryUserIdParamValidator,
+  resetEmployeeSalaryOverride
+)
 
 /**
  * @route   GET /api/employee-schedules/:id

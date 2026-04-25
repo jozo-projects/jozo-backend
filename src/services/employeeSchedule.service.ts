@@ -12,10 +12,12 @@ import {
   IAdminCreateScheduleBody,
   ICreateEmployeeScheduleBody,
   IGetSchedulesQuery,
+  IOverrideEmployeeSalaryBody,
   IUpdateScheduleBody,
+  IUpdateSalarySnapshotBody,
   IUpdateStatusBody
 } from '~/models/requests/EmployeeSchedule.request'
-import { EmployeeSchedule } from '~/models/schemas/EmployeeSchedule.schema'
+import { EmployeeSchedule, IEmployeeSalarySnapshotInSchedule } from '~/models/schemas/EmployeeSchedule.schema'
 import databaseService from './database.service'
 import { getShiftInfo } from '~/constants/shiftDefaults'
 import notificationService from './notification.service'
@@ -27,6 +29,7 @@ dayjs.tz.setDefault('Asia/Ho_Chi_Minh')
 
 // EventEmitter cho employee schedule events
 export const employeeScheduleEventEmitter = new EventEmitter()
+const DEFAULT_HOURLY_RATE = 25000
 
 class EmployeeScheduleService {
   /**
@@ -49,6 +52,7 @@ class EmployeeScheduleService {
 
     const dateObj = dayjs(date).startOf('day').toDate()
     const createdSchedules: EmployeeSchedule[] = []
+    const salarySnapshot = await this.getSalarySnapshotForUser(userId)
 
     // Tạo schedule cho mỗi ca
     for (const shiftType of shifts) {
@@ -65,6 +69,7 @@ class EmployeeScheduleService {
         customEndTime,
         status: EmployeeScheduleStatus.Pending,
         note,
+        salarySnapshot,
         createdBy: new ObjectId(userId),
         createdByName: user.name,
         createdAt: new Date(),
@@ -137,6 +142,7 @@ class EmployeeScheduleService {
 
     const dateObj = dayjs(date).startOf('day').toDate()
     const createdSchedules: EmployeeSchedule[] = []
+    const salarySnapshot = await this.getSalarySnapshotForUser(userId)
 
     // Tạo schedule cho mỗi ca
     for (const shiftType of shifts) {
@@ -153,6 +159,7 @@ class EmployeeScheduleService {
         customEndTime,
         status: EmployeeScheduleStatus.Approved, // Admin tạo thì approved luôn
         note,
+        salarySnapshot,
         createdBy: new ObjectId(adminId),
         createdByName: admin?.name,
         approvedBy: new ObjectId(adminId),
@@ -235,10 +242,12 @@ class EmployeeScheduleService {
 
     // Lấy schedules và sort theo date, shiftType
     const schedules = await databaseService.employeeSchedules.find(query).sort({ date: 1, shiftType: 1 }).toArray()
+    const fallbackSalarySnapshots = await this.getFallbackSalarySnapshotsForSchedules(schedules)
 
     // Group by date và populate shift info
     const schedulesByDate: Record<string, any[]> = {}
     let totalShifts = 0
+    let totalSalary = 0
     const statusCount = {
       pending: 0,
       approved: 0,
@@ -252,6 +261,16 @@ class EmployeeScheduleService {
     for (const schedule of schedules) {
       const dateKey = dayjs(schedule.date).format('YYYY-MM-DD')
       const shiftInfo = getShiftInfo(schedule.shiftType, schedule.customStartTime, schedule.customEndTime)
+      const salarySnapshot =
+        schedule.salarySnapshot ??
+        fallbackSalarySnapshots.get(schedule.userId.toString()) ??
+        this.createDefaultSalarySnapshot()
+      const salary = this.calculateScheduleSalary(
+        shiftInfo.startTime,
+        shiftInfo.endTime,
+        salarySnapshot,
+        schedule.status
+      )
 
       const scheduleWithInfo = {
         _id: schedule._id,
@@ -263,6 +282,8 @@ class EmployeeScheduleService {
         customStartTime: schedule.customStartTime,
         customEndTime: schedule.customEndTime,
         shiftInfo,
+        salarySnapshot,
+        salary,
         status: schedule.status,
         note: schedule.note,
         createdBy: schedule.createdBy,
@@ -289,6 +310,9 @@ class EmployeeScheduleService {
 
       totalShifts++
       statusCount[schedule.status as keyof typeof statusCount]++
+      if (salary.isPayable) {
+        totalSalary += salary.totalAmount
+      }
     }
 
     // Calculate additional stats
@@ -304,6 +328,7 @@ class EmployeeScheduleService {
         completed,
         inProgress,
         upcoming,
+        totalSalary,
         byStatus: statusCount
       }
     }
@@ -359,7 +384,7 @@ class EmployeeScheduleService {
 
     // Status validation đã được handle ở middleware
     // Admin có thể update bất kỳ, Staff chỉ update được pending/rejected
-    // Cho phép cập nhật note (Staff + Admin), customStartTime, customEndTime (chỉ Admin)
+    // Cho phép cập nhật note (Staff + Admin), customStartTime/customEndTime/specialHourlyRate (chỉ Admin)
 
     const updateData: any = {
       updatedAt: new Date()
@@ -375,6 +400,24 @@ class EmployeeScheduleService {
 
     if (data.customEndTime !== undefined) {
       updateData.customEndTime = data.customEndTime
+    }
+
+    if (data.specialHourlyRate !== undefined) {
+      const currentSnapshot =
+        schedule.salarySnapshot ??
+        ({
+          hourlyRate: DEFAULT_HOURLY_RATE,
+          source: 'global',
+          syncedFromSnapshot: DEFAULT_HOURLY_RATE,
+          capturedAt: new Date()
+        } as IEmployeeSalarySnapshotInSchedule)
+
+      updateData.salarySnapshot = {
+        ...currentSnapshot,
+        hourlyRate: data.specialHourlyRate,
+        source: 'manual',
+        capturedAt: new Date()
+      }
     }
 
     const result = await databaseService.employeeSchedules.updateOne({ _id: new ObjectId(id) }, { $set: updateData })
@@ -710,6 +753,223 @@ class EmployeeScheduleService {
   }
 
   /**
+   * Lấy global salary snapshot
+   */
+  async getGlobalSalarySnapshot() {
+    const snapshot = await this.ensureGlobalSalarySnapshot()
+    return snapshot
+  }
+
+  /**
+   * Admin cập nhật global salary snapshot
+   */
+  async updateGlobalSalarySnapshot(adminId: string, data: IUpdateSalarySnapshotBody) {
+    const admin = await databaseService.users.findOne({ _id: new ObjectId(adminId) })
+    const now = new Date()
+
+    await databaseService.employeeSalarySnapshots.updateOne(
+      { key: 'default' },
+      {
+        $set: {
+          key: 'default',
+          hourlyRate: data.hourlyRate,
+          updatedBy: new ObjectId(adminId),
+          updatedByName: admin?.name,
+          updatedAt: now
+        },
+        $setOnInsert: {
+          createdAt: now
+        }
+      },
+      { upsert: true }
+    )
+
+    return databaseService.employeeSalarySnapshots.findOne({ key: 'default' })
+  }
+
+  /**
+   * Đồng bộ lương tất cả staff từ global snapshot
+   */
+  async syncSalaryConfigsFromSnapshot(adminId: string) {
+    const [snapshot, admin, staffs] = await Promise.all([
+      this.ensureGlobalSalarySnapshot(),
+      databaseService.users.findOne({ _id: new ObjectId(adminId) }),
+      databaseService.users.find({ role: UserRole.Staff }).toArray()
+    ])
+    const now = new Date()
+
+    if (staffs.length === 0) {
+      return {
+        totalStaffs: 0,
+        syncedCount: 0,
+        overrideKeptCount: 0,
+        snapshotHourlyRate: snapshot.hourlyRate
+      }
+    }
+
+    const existingConfigs = await databaseService.employeeSalaryConfigs
+      .find({
+        userId: { $in: staffs.map((staff) => staff._id) }
+      })
+      .toArray()
+    const configMap = new Map(existingConfigs.map((config) => [config.userId.toString(), config]))
+
+    const operations = staffs.map((staff) => {
+      const existing = configMap.get(staff._id.toString())
+      const shouldKeepOverride = existing?.isOverride === true
+
+      return {
+        updateOne: {
+          filter: { userId: staff._id },
+          update: {
+            $set: {
+              userName: staff.name,
+              userPhone: staff.phone_number,
+              snapshotHourlyRate: snapshot.hourlyRate,
+              hourlyRate: shouldKeepOverride ? existing?.hourlyRate : snapshot.hourlyRate,
+              isOverride: shouldKeepOverride,
+              syncedAt: now,
+              updatedBy: new ObjectId(adminId),
+              updatedByName: admin?.name,
+              updatedAt: now
+            },
+            $setOnInsert: {
+              userId: staff._id,
+              createdAt: now
+            }
+          },
+          upsert: true
+        }
+      }
+    })
+
+    if (operations.length > 0) {
+      await databaseService.employeeSalaryConfigs.bulkWrite(operations)
+    }
+
+    const overrideKeptCount = existingConfigs.filter((config) => config.isOverride).length
+
+    return {
+      totalStaffs: staffs.length,
+      syncedCount: staffs.length,
+      overrideKeptCount,
+      snapshotHourlyRate: snapshot.hourlyRate
+    }
+  }
+
+  /**
+   * Danh sách lương tất cả staff
+   */
+  async getEmployeeSalaryConfigs() {
+    const [snapshot, staffs, configs] = await Promise.all([
+      this.ensureGlobalSalarySnapshot(),
+      databaseService.users.find({ role: UserRole.Staff }).toArray(),
+      databaseService.employeeSalaryConfigs.find({}).toArray()
+    ])
+    const configMap = new Map(configs.map((config) => [config.userId.toString(), config]))
+
+    return staffs.map((staff) => {
+      const config = configMap.get(staff._id.toString())
+      return {
+        userId: staff._id,
+        userName: staff.name,
+        userPhone: staff.phone_number,
+        hourlyRate: config?.hourlyRate ?? snapshot.hourlyRate,
+        isOverride: config?.isOverride ?? false,
+        snapshotHourlyRate: config?.snapshotHourlyRate ?? snapshot.hourlyRate,
+        syncedAt: config?.syncedAt,
+        updatedAt: config?.updatedAt
+      }
+    })
+  }
+
+  /**
+   * Override lương theo nhân viên
+   */
+  async overrideEmployeeSalary(userId: string, adminId: string, data: IOverrideEmployeeSalaryBody) {
+    const [snapshot, admin, staff] = await Promise.all([
+      this.ensureGlobalSalarySnapshot(),
+      databaseService.users.findOne({ _id: new ObjectId(adminId) }),
+      databaseService.users.findOne({ _id: new ObjectId(userId), role: UserRole.Staff })
+    ])
+
+    if (!staff) {
+      throw new ErrorWithStatus({
+        message: 'Nhân viên không tồn tại',
+        status: HTTP_STATUS_CODE.NOT_FOUND
+      })
+    }
+
+    const now = new Date()
+    await databaseService.employeeSalaryConfigs.updateOne(
+      { userId: staff._id },
+      {
+        $set: {
+          userId: staff._id,
+          userName: staff.name,
+          userPhone: staff.phone_number,
+          hourlyRate: data.hourlyRate,
+          isOverride: true,
+          snapshotHourlyRate: snapshot.hourlyRate,
+          syncedAt: now,
+          updatedBy: new ObjectId(adminId),
+          updatedByName: admin?.name,
+          updatedAt: now
+        },
+        $setOnInsert: {
+          createdAt: now
+        }
+      },
+      { upsert: true }
+    )
+
+    return databaseService.employeeSalaryConfigs.findOne({ userId: staff._id })
+  }
+
+  /**
+   * Bỏ override của nhân viên, quay về global snapshot
+   */
+  async resetEmployeeSalaryOverride(userId: string, adminId: string) {
+    const [snapshot, admin, staff] = await Promise.all([
+      this.ensureGlobalSalarySnapshot(),
+      databaseService.users.findOne({ _id: new ObjectId(adminId) }),
+      databaseService.users.findOne({ _id: new ObjectId(userId), role: UserRole.Staff })
+    ])
+
+    if (!staff) {
+      throw new ErrorWithStatus({
+        message: 'Nhân viên không tồn tại',
+        status: HTTP_STATUS_CODE.NOT_FOUND
+      })
+    }
+
+    const now = new Date()
+    await databaseService.employeeSalaryConfigs.updateOne(
+      { userId: staff._id },
+      {
+        $set: {
+          userId: staff._id,
+          userName: staff.name,
+          userPhone: staff.phone_number,
+          hourlyRate: snapshot.hourlyRate,
+          isOverride: false,
+          snapshotHourlyRate: snapshot.hourlyRate,
+          syncedAt: now,
+          updatedBy: new ObjectId(adminId),
+          updatedByName: admin?.name,
+          updatedAt: now
+        },
+        $setOnInsert: {
+          createdAt: now
+        }
+      },
+      { upsert: true }
+    )
+
+    return databaseService.employeeSalaryConfigs.findOne({ userId: staff._id })
+  }
+
+  /**
    * Cronjob: Auto start shifts (approved → in-progress)
    */
   async autoStartShifts() {
@@ -876,6 +1136,134 @@ class EmployeeScheduleService {
         status: HTTP_STATUS_CODE.BAD_REQUEST
       })
     }
+  }
+
+  /**
+   * Helper: tạo/lấy global snapshot mặc định
+   */
+  private async ensureGlobalSalarySnapshot() {
+    const existing = await databaseService.employeeSalarySnapshots.findOne({ key: 'default' })
+    if (existing) {
+      return existing
+    }
+
+    const now = new Date()
+    const fallback = {
+      key: 'default' as const,
+      hourlyRate: DEFAULT_HOURLY_RATE,
+      createdAt: now,
+      updatedAt: now
+    }
+    await databaseService.employeeSalarySnapshots.insertOne(fallback)
+    return fallback
+  }
+
+  /**
+   * Helper: lấy salary snapshot hiệu lực của user tại thời điểm tạo lịch
+   */
+  private async getSalarySnapshotForUser(userId: string): Promise<IEmployeeSalarySnapshotInSchedule> {
+    const [snapshot, config] = await Promise.all([
+      this.ensureGlobalSalarySnapshot(),
+      databaseService.employeeSalaryConfigs.findOne({ userId: new ObjectId(userId) })
+    ])
+
+    const now = new Date()
+    if (config?.isOverride) {
+      return {
+        hourlyRate: config.hourlyRate,
+        source: 'override',
+        syncedFromSnapshot: snapshot.hourlyRate,
+        capturedAt: now
+      }
+    }
+
+    return {
+      hourlyRate: config?.hourlyRate ?? snapshot.hourlyRate,
+      source: 'global',
+      syncedFromSnapshot: snapshot.hourlyRate,
+      capturedAt: now
+    }
+  }
+
+  private async getFallbackSalarySnapshotsForSchedules(schedules: EmployeeSchedule[]) {
+    const schedulesMissingSnapshot = schedules.filter((schedule) => !schedule.salarySnapshot)
+    if (schedulesMissingSnapshot.length === 0) {
+      return new Map<string, IEmployeeSalarySnapshotInSchedule>()
+    }
+
+    const [snapshot, configs] = await Promise.all([
+      this.ensureGlobalSalarySnapshot(),
+      databaseService.employeeSalaryConfigs
+        .find({
+          userId: {
+            $in: [...new Set(schedulesMissingSnapshot.map((schedule) => schedule.userId.toString()))].map(
+              (userId) => new ObjectId(userId)
+            )
+          }
+        })
+        .toArray()
+    ])
+
+    const configMap = new Map(configs.map((config) => [config.userId.toString(), config]))
+    const fallbackMap = new Map<string, IEmployeeSalarySnapshotInSchedule>()
+    const now = new Date()
+
+    for (const schedule of schedulesMissingSnapshot) {
+      const userId = schedule.userId.toString()
+      if (fallbackMap.has(userId)) {
+        continue
+      }
+
+      const config = configMap.get(userId)
+      fallbackMap.set(userId, {
+        hourlyRate: config?.hourlyRate ?? snapshot.hourlyRate,
+        source: config?.isOverride ? 'override' : 'global',
+        syncedFromSnapshot: config?.snapshotHourlyRate ?? snapshot.hourlyRate,
+        capturedAt: config?.syncedAt ?? now
+      })
+    }
+
+    return fallbackMap
+  }
+
+  private createDefaultSalarySnapshot(): IEmployeeSalarySnapshotInSchedule {
+    return {
+      hourlyRate: DEFAULT_HOURLY_RATE,
+      source: 'global',
+      syncedFromSnapshot: DEFAULT_HOURLY_RATE,
+      capturedAt: new Date()
+    }
+  }
+
+  private calculateScheduleSalary(
+    startTime: string,
+    endTime: string,
+    salarySnapshot: IEmployeeSalarySnapshotInSchedule,
+    status: EmployeeScheduleStatus
+  ) {
+    const hours = this.calculateShiftHours(startTime, endTime)
+    const totalAmount = Math.round(hours * salarySnapshot.hourlyRate)
+    const isPayable = status === EmployeeScheduleStatus.Completed
+
+    return {
+      hourlyRate: salarySnapshot.hourlyRate,
+      hours,
+      totalAmount,
+      isPayable
+    }
+  }
+
+  private calculateShiftHours(startTime: string, endTime: string) {
+    const [startHours, startMinutes] = startTime.split(':').map(Number)
+    const [endHours, endMinutes] = endTime.split(':').map(Number)
+    const startTotalMinutes = startHours * 60 + startMinutes
+    let endTotalMinutes = endHours * 60 + endMinutes
+
+    if (endTotalMinutes <= startTotalMinutes) {
+      endTotalMinutes += 24 * 60
+    }
+
+    return (endTotalMinutes - startTotalMinutes) / 60
   }
 
   /**

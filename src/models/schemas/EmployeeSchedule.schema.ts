@@ -1,6 +1,13 @@
 import { ObjectId } from 'mongodb'
 import { EmployeeScheduleStatus, ShiftType } from '~/constants/enum'
 
+export interface IEmployeeSalarySnapshotInSchedule {
+  hourlyRate: number
+  source: 'global' | 'override' | 'manual'
+  syncedFromSnapshot: number
+  capturedAt: Date
+}
+
 export interface IEmployeeSchedule {
   _id?: ObjectId
   userId: ObjectId
@@ -25,6 +32,7 @@ export interface IEmployeeSchedule {
   completedAt?: Date // When shift completed
   markedAbsentBy?: ObjectId // Admin who marked absent
   markedAbsentAt?: Date
+  salarySnapshot?: IEmployeeSalarySnapshotInSchedule
   createdAt: Date
   updatedAt: Date
 }
@@ -53,6 +61,7 @@ export class EmployeeSchedule {
   completedAt?: Date
   markedAbsentBy?: ObjectId
   markedAbsentAt?: Date
+  salarySnapshot?: IEmployeeSalarySnapshotInSchedule
   createdAt: Date
   updatedAt: Date
 
@@ -82,6 +91,7 @@ export class EmployeeSchedule {
     this.completedAt = schedule.completedAt
     this.markedAbsentBy = schedule.markedAbsentBy
     this.markedAbsentAt = schedule.markedAbsentAt
+    this.salarySnapshot = schedule.salarySnapshot
     this.createdAt = schedule.createdAt || date
     this.updatedAt = schedule.updatedAt || date
   }

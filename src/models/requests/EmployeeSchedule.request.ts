@@ -26,6 +26,7 @@ export interface IUpdateScheduleBody {
   note?: string
   customStartTime?: string // HH:mm - Override default start time (Admin only)
   customEndTime?: string // HH:mm - Override default end time (Admin only)
+  specialHourlyRate?: number // Chỉnh lương riêng cho ca này (Admin only)
 }
 
 // Request body khi approve/reject lịch
@@ -40,6 +41,16 @@ export interface IUpdateStatusBody {
   rejectedReason?: string // Bắt buộc khi status = rejected
 }
 
+// Request body khi cập nhật global salary snapshot
+export interface IUpdateSalarySnapshotBody {
+  hourlyRate: number
+}
+
+// Request body khi override lương cho từng nhân viên
+export interface IOverrideEmployeeSalaryBody {
+  hourlyRate: number
+}
+
 // Query params khi lấy danh sách lịch
 export interface IGetSchedulesQuery {
   userId?: string
@@ -48,5 +59,5 @@ export interface IGetSchedulesQuery {
   endDate?: string // ISO date string - for week filter
   status?: EmployeeScheduleStatus
   shiftType?: ShiftType
-  filterType?: 'day' | 'week'
+  filterType?: 'day' | 'week' | 'month'
 }
