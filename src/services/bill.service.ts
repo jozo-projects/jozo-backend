@@ -2028,12 +2028,7 @@ export class BillService {
     if (bill.paymentMethod) {
       const paymentMethods: { [key: string]: string } = {
         cash: 'Tien mat',
-        bank_transfer: 'Chuyen khoan',
-        momo: 'MoMo',
-        zalo_pay: 'Zalo Pay',
-        vnpay: 'VNPay',
-        visa: 'Visa',
-        mastercard: 'Mastercard'
+        bank_transfer: 'Chuyen khoan'
       }
       const paymentMethodText = paymentMethods[bill.paymentMethod] || bill.paymentMethod
       printer.text(`Phuong thuc thanh toan: ${paymentMethodText}`)
@@ -2046,7 +2041,7 @@ export class BillService {
       .text('Hen gap lai quy khach!')
       .text('--------------------------------------------')
       .align('ct')
-      .text('Dia chi: 247/5 Phan Trung, Tam Hiep, Bien Hoa')
+      .text('Dia chi: 30 Phan Trung, Tam Hiep, Bien Hoa')
       .text('Website: jozo.com.vn')
       .style('i')
       .text('Powered by Jozo')
