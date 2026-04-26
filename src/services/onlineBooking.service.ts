@@ -33,6 +33,9 @@ interface RoomAvailabilityResult {
   upgraded: boolean
 }
 
+const DEFAULT_LARGE_ROOM_IDS = new Set([1, 6, 8, 9, 10, 12])
+const DEFAULT_SMALL_ROOM_IDS = new Set([2, 3])
+
 class OnlineBookingService {
   /**
    * Parse thời gian với timezone Việt Nam
@@ -172,7 +175,8 @@ class OnlineBookingService {
   }
 
   /**
-   * Tìm phòng trống với hardcode logic: Phòng 1-3 = Small, 4-6 = Medium, 7+ = Large
+   * Tìm phòng trống với hardcode logic theo roomId.
+   * Phòng lớn mặc định: 1, 6, 8, 9, 10, 12.
    */
   private async findAvailableRoomWithHardcode(
     requestedSize: RoomType,
@@ -185,12 +189,16 @@ class OnlineBookingService {
     const allRooms = await databaseService.rooms.find().sort({ roomId: 1 }).toArray()
     console.log(`📋 Tìm thấy ${allRooms.length} phòng trong database`)
 
-    // Karaoke box: hardcode theo thứ tự roomId. Dorm: chỉ các phòng có roomType dorm trên DB.
+    // Karaoke box: hardcode theo roomId. Dorm: chỉ các phòng có roomType dorm trên DB.
+    const dormRooms = allRooms.filter((r) => roomTypeFieldToEnum(r.roomType) === RoomType.Dorm)
+    const karaokeRooms = allRooms.filter((r) => roomTypeFieldToEnum(r.roomType) !== RoomType.Dorm)
     const roomMapping: Record<RoomType, typeof allRooms> = {
-      [RoomType.Small]: allRooms.slice(0, 3), // Phòng 1, 2, 3
-      [RoomType.Medium]: allRooms.slice(3, 6), // Phòng 4, 5, 6
-      [RoomType.Large]: allRooms.slice(6), // Phòng 7+
-      [RoomType.Dorm]: allRooms.filter((r) => roomTypeFieldToEnum(r.roomType) === RoomType.Dorm)
+      [RoomType.Small]: karaokeRooms.filter((r) => DEFAULT_SMALL_ROOM_IDS.has(r.roomId)),
+      [RoomType.Medium]: karaokeRooms.filter(
+        (r) => !DEFAULT_SMALL_ROOM_IDS.has(r.roomId) && !DEFAULT_LARGE_ROOM_IDS.has(r.roomId)
+      ),
+      [RoomType.Large]: karaokeRooms.filter((r) => DEFAULT_LARGE_ROOM_IDS.has(r.roomId)),
+      [RoomType.Dorm]: dormRooms
     }
 
     // 1. Tìm phòng có size đúng yêu cầu
