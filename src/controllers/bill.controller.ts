@@ -5,6 +5,7 @@ import weekOfYear from 'dayjs/plugin/weekOfYear'
 import weekday from 'dayjs/plugin/weekday'
 import { Request, Response } from 'express'
 import { ObjectId } from 'mongodb'
+import { UserRole } from '~/constants/enum'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import billService from '~/services/bill.service'
 import databaseService from '~/services/database.service'
@@ -14,6 +15,20 @@ dayjs.extend(weekOfYear)
 dayjs.extend(weekday)
 dayjs.extend(utc)
 dayjs.extend(timezone)
+
+const getRevenueViewerUserId = async (req: Request): Promise<string | undefined | null> => {
+  const userId = req.decoded_authorization?.user_id
+  if (!userId || !ObjectId.isValid(userId)) {
+    return null
+  }
+
+  const user = await databaseService.users.findOne({ _id: new ObjectId(userId) })
+  if (!user) {
+    return null
+  }
+
+  return user.role === UserRole.Admin ? undefined : userId
+}
 
 export const getBill = async (req: Request, res: Response) => {
   const { scheduleId } = req.params
@@ -67,6 +82,7 @@ export const printBill = async (req: Request, res: Response) => {
     actualStartTime as string,
     shouldApplyFreeHourPromotion
   )
+  billData.completedBy = billData.completedBy || req.decoded_authorization?.user_id
 
   const bill = await billService.printBill(billData)
 
@@ -127,7 +143,12 @@ export const getDailyRevenue = async (req: Request, res: Response) => {
         .format('YYYY-MM-DD HH:mm:ss')}`
     )
 
-    const revenueData = await billService.getDailyRevenue(date as string)
+    const viewerUserId = await getRevenueViewerUserId(req)
+    if (viewerUserId === null) {
+      return res.status(HTTP_STATUS_CODE.UNAUTHORIZED).json({ message: 'Unauthorized' })
+    }
+
+    const revenueData = await billService.getDailyRevenue(date as string, viewerUserId)
 
     return res.status(HTTP_STATUS_CODE.OK).json({
       message: 'Get daily revenue successfully',
@@ -170,7 +191,12 @@ export const getWeeklyRevenue = async (req: Request, res: Response) => {
       })
     }
 
-    const revenueData = await billService.getWeeklyRevenue(date as string)
+    const viewerUserId = await getRevenueViewerUserId(req)
+    if (viewerUserId === null) {
+      return res.status(HTTP_STATUS_CODE.UNAUTHORIZED).json({ message: 'Unauthorized' })
+    }
+
+    const revenueData = await billService.getWeeklyRevenue(date as string, viewerUserId)
     const startDateFormatted = dayjs(revenueData.startDate).format('DD/MM/YYYY')
     const endDateFormatted = dayjs(revenueData.endDate).format('DD/MM/YYYY')
     const weekNumber = dayjs(date as string).week()
@@ -220,7 +246,12 @@ export const getMonthlyRevenue = async (req: Request, res: Response) => {
       })
     }
 
-    const revenueData = await billService.getMonthlyRevenue(date as string)
+    const viewerUserId = await getRevenueViewerUserId(req)
+    if (viewerUserId === null) {
+      return res.status(HTTP_STATUS_CODE.UNAUTHORIZED).json({ message: 'Unauthorized' })
+    }
+
+    const revenueData = await billService.getMonthlyRevenue(date as string, viewerUserId)
     const monthName = dayjs(date as string).format('MMMM')
     const year = dayjs(date as string).year()
     const startDateFormatted = dayjs(revenueData.startDate).format('DD/MM/YYYY')
@@ -270,7 +301,12 @@ export const getCustomRangeRevenue = async (req: Request, res: Response) => {
       })
     }
 
-    const revenueData = await billService.getRevenueByCustomRange(startDate as string, endDate as string)
+    const viewerUserId = await getRevenueViewerUserId(req)
+    if (viewerUserId === null) {
+      return res.status(HTTP_STATUS_CODE.UNAUTHORIZED).json({ message: 'Unauthorized' })
+    }
+
+    const revenueData = await billService.getRevenueByCustomRange(startDate as string, endDate as string, viewerUserId)
     const startDateFormatted = dayjs(revenueData.startDate).format('DD/MM/YYYY')
     const endDateFormatted = dayjs(revenueData.endDate).format('DD/MM/YYYY')
 
@@ -339,10 +375,16 @@ export const getRevenueFromBills = async (req: Request, res: Response) => {
       )
     }
 
+    const viewerUserId = await getRevenueViewerUserId(req)
+    if (viewerUserId === null) {
+      return res.status(HTTP_STATUS_CODE.UNAUTHORIZED).json({ message: 'Unauthorized' })
+    }
+
     const revenueData = await billService.getRevenueFromBillsCollection(
       dateType as 'day' | 'week' | 'month' | 'custom',
       startDate as string,
-      endDate as string
+      endDate as string,
+      viewerUserId
     )
 
     return res.status(HTTP_STATUS_CODE.OK).json({
@@ -824,6 +866,7 @@ export const getAllBills = async (req: Request, res: Response) => {
  */
 export const saveBill = async (req: Request, res: Response) => {
   const bill = req.body
+  const userId = req.decoded_authorization?.user_id
 
   // Kiểm tra các trường bắt buộc
   if (!bill || !bill.scheduleId || !bill.roomId) {
@@ -847,6 +890,10 @@ export const saveBill = async (req: Request, res: Response) => {
   }
 
   try {
+    if (!bill.completedBy && userId) {
+      bill.completedBy = userId
+    }
+
     // Nếu chưa có freeHourPromotion, BE tự tính để lưu xuống DB
     if (!bill.freeHourPromotion) {
       try {

@@ -75,9 +75,12 @@ export const createSchedule = async (
   next: NextFunction
 ) => {
   try {
+    const userId = req.decoded_authorization?.user_id
     // Gán source mặc định là Staff cho các đặt phòng từ Admin/Staff
     const scheduleData: IRoomScheduleRequestBody = {
       ...req.body,
+      createdBy: req.body.createdBy || userId,
+      updatedBy: req.body.updatedBy || userId,
       source: BookingSource.Staff // Đánh dấu nguồn là từ nhân viên
     }
 
@@ -99,7 +102,11 @@ export const updateSchedule = async (
 ) => {
   try {
     const { id } = req.params
-    const modifiedCount = await roomScheduleService.updateSchedule(id, req.body)
+    const userId = req.decoded_authorization?.user_id
+    const modifiedCount = await roomScheduleService.updateSchedule(id, {
+      ...req.body,
+      updatedBy: req.body.updatedBy || userId
+    })
     if (modifiedCount === 0) {
       return res.status(HTTP_STATUS_CODE.NOT_FOUND).json({ error: ROOM_SCHEDULE_MESSAGES.SCHEDULE_NOT_FOUND })
     }
@@ -113,7 +120,7 @@ export const updateSchedule = async (
 export const cancelSchedule = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params
-    const modifiedCount = await roomScheduleService.cancelSchedule(id)
+    const modifiedCount = await roomScheduleService.cancelSchedule(id, req.decoded_authorization?.user_id)
     if (modifiedCount === 0) {
       return res.status(HTTP_STATUS_CODE.NOT_FOUND).json({ error: ROOM_SCHEDULE_MESSAGES.SCHEDULE_NOT_FOUND })
     }

@@ -202,6 +202,80 @@ export class BillService {
   private printQueue: Array<() => Promise<any>> = [] // Queue để tránh conflict
   private isPrinting: boolean = false // Flag đang in
 
+  private async attachRevenueAuditInfo<T extends IBill>(bills: T[]): Promise<T[]> {
+    if (bills.length === 0) {
+      return bills
+    }
+
+    const scheduleIds = bills
+      .map((bill) => bill.scheduleId?.toString())
+      .filter((scheduleId): scheduleId is string => !!scheduleId && ObjectId.isValid(scheduleId))
+
+    if (scheduleIds.length === 0) {
+      return bills
+    }
+
+    const schedules = await databaseService.roomSchedule
+      .find({ _id: { $in: Array.from(new Set(scheduleIds)).map((scheduleId) => new ObjectId(scheduleId)) } })
+      .project({ createdBy: 1, updatedBy: 1, status: 1 })
+      .toArray()
+    const scheduleMap = new Map(schedules.map((schedule) => [schedule._id?.toString(), schedule]))
+
+    return bills.map((bill) => {
+      const schedule = scheduleMap.get(bill.scheduleId?.toString())
+      const completedByFromSchedule = schedule?.status === RoomScheduleStatus.Finished ? schedule.updatedBy : undefined
+
+      return {
+        ...bill,
+        createdBy: bill.createdBy || schedule?.createdBy,
+        completedBy: bill.completedBy || completedByFromSchedule || bill.fnbOrder?.completedBy
+      }
+    })
+  }
+
+  private filterRevenueBillsForUser<T extends IBill>(bills: T[], viewerUserId?: string): T[] {
+    if (!viewerUserId) {
+      return bills
+    }
+
+    return bills.filter(
+      (bill) =>
+        bill.createdBy === viewerUserId ||
+        bill.completedBy === viewerUserId ||
+        bill.createdBy === 'system' ||
+        bill.completedBy === 'system'
+    )
+  }
+
+  private async attachRevenueUserNames<T extends IBill>(bills: T[]): Promise<T[]> {
+    const userIds = bills
+      .flatMap((bill) => [bill.createdBy, bill.completedBy])
+      .filter((userId): userId is string => !!userId && userId !== 'system' && ObjectId.isValid(userId))
+
+    if (userIds.length === 0) {
+      return bills
+    }
+
+    const users = await databaseService.users
+      .find({ _id: { $in: Array.from(new Set(userIds)).map((userId) => new ObjectId(userId)) } })
+      .project({ name: 1, username: 1 })
+      .toArray()
+    const userNameMap = new Map(users.map((user) => [user._id?.toString(), user.name || user.username]))
+
+    return bills.map((bill) => ({
+      ...bill,
+      createdBy: bill.createdBy && userNameMap.has(bill.createdBy) ? userNameMap.get(bill.createdBy) : bill.createdBy,
+      completedBy:
+        bill.completedBy && userNameMap.has(bill.completedBy) ? userNameMap.get(bill.completedBy) : bill.completedBy
+    }))
+  }
+
+  private async prepareRevenueBills<T extends IBill>(bills: T[], viewerUserId?: string): Promise<T[]> {
+    const billsWithAuditInfo = await this.attachRevenueAuditInfo(bills)
+    const filteredBills = this.filterRevenueBillsForUser(billsWithAuditInfo, viewerUserId)
+    return this.attachRevenueUserNames(filteredBills)
+  }
+
   constructor() {
     this.initEscPos()
   }
@@ -900,6 +974,7 @@ export class BillService {
       startTime: startTime, // Sử dụng startTime đã điều chỉnh
       endTime: validatedEndTime,
       createdAt: schedule.createdAt,
+      createdBy: schedule.createdBy,
       note: schedule.note,
       items: timeSlotItems.map((item) => ({
         description: item.description,
@@ -1104,7 +1179,7 @@ export class BillService {
    * @param date Date to get revenue for (format: ISO date string)
    * @returns Object containing total revenue and bill details
    */
-  async getDailyRevenue(date: string): Promise<{ totalRevenue: number; bills: IBill[] }> {
+  async getDailyRevenue(date: string, viewerUserId?: string): Promise<{ totalRevenue: number; bills: IBill[] }> {
     try {
       // Validate date format
       if (!dayjs(date).isValid()) {
@@ -1168,7 +1243,7 @@ export class BillService {
         }
       }
 
-      const finalBills = Array.from(uniqueBills.values())
+      const finalBills = await this.prepareRevenueBills(Array.from(uniqueBills.values()), viewerUserId)
 
       // Simple calculation - just sum all totalAmount
       const totalRevenue = finalBills.reduce((sum, bill) => sum + bill.totalAmount, 0)
@@ -1189,7 +1264,8 @@ export class BillService {
    * @returns Object containing total revenue, bill details, and date range
    */
   async getWeeklyRevenue(
-    date: string
+    date: string,
+    viewerUserId?: string
   ): Promise<{ totalRevenue: number; bills: any[]; startDate: Date; endDate: Date }> {
     try {
       const targetDate = dayjs(date).tz('Asia/Ho_Chi_Minh')
@@ -1256,7 +1332,7 @@ export class BillService {
         }
       }
 
-      const finalBills = Array.from(uniqueBills.values())
+      const finalBills = await this.prepareRevenueBills(Array.from(uniqueBills.values()), viewerUserId)
 
       // Làm tròn tổng tiền của từng hóa đơn
       finalBills.forEach((bill) => {
@@ -1284,7 +1360,8 @@ export class BillService {
    * @returns Object containing total revenue, bill details, and date range
    */
   async getMonthlyRevenue(
-    date: string
+    date: string,
+    viewerUserId?: string
   ): Promise<{ totalRevenue: number; bills: any[]; startDate: Date; endDate: Date }> {
     try {
       const targetDate = dayjs(date).tz('Asia/Ho_Chi_Minh')
@@ -1351,7 +1428,7 @@ export class BillService {
         }
       }
 
-      const finalBills = Array.from(uniqueBills.values())
+      const finalBills = await this.prepareRevenueBills(Array.from(uniqueBills.values()), viewerUserId)
 
       // Làm tròn tổng tiền của từng hóa đơn
       finalBills.forEach((bill) => {
@@ -1381,7 +1458,8 @@ export class BillService {
    */
   async getRevenueByCustomRange(
     startDate: string,
-    endDate: string
+    endDate: string,
+    viewerUserId?: string
   ): Promise<{ totalRevenue: number; bills: any[]; startDate: Date; endDate: Date }> {
     try {
       const start = dayjs(startDate).tz('Asia/Ho_Chi_Minh').startOf('day')
@@ -1454,7 +1532,7 @@ export class BillService {
         }
       }
 
-      const finalBills = Array.from(uniqueBills.values())
+      const finalBills = await this.prepareRevenueBills(Array.from(uniqueBills.values()), viewerUserId)
 
       // Làm tròn tổng tiền của từng hóa đơn
       finalBills.forEach((bill) => {
@@ -1656,7 +1734,8 @@ export class BillService {
   async getRevenueFromBillsCollection(
     dateType: 'day' | 'week' | 'month' | 'custom',
     startDate: string,
-    endDate?: string
+    endDate?: string,
+    viewerUserId?: string
   ): Promise<{
     totalRevenue: number
     bills: IBill[]
@@ -1784,7 +1863,7 @@ export class BillService {
         }
       }
 
-      const finalBills = Array.from(uniqueBills.values())
+      const finalBills = await this.prepareRevenueBills(Array.from(uniqueBills.values()), viewerUserId)
 
       // Làm tròn tổng tiền của từng hóa đơn (nếu cần)
       finalBills.forEach((bill) => {
@@ -2178,17 +2257,15 @@ export class BillService {
         console.warn(`Invoice ${billData.invoiceCode} đã được tích điểm rồi, bỏ qua tích điểm`)
       }
 
+      const schedule = await databaseService.roomSchedule.findOne({
+        _id: new ObjectId(billData.scheduleId)
+      })
+
       // 4. Lấy phone_number từ bill hoặc schedule
       let customerPhone = billData.customerPhone
 
-      if (!customerPhone) {
-        const schedule = await databaseService.roomSchedule.findOne({
-          _id: new ObjectId(billData.scheduleId)
-        })
-
-        if (schedule?.customerPhone) {
-          customerPhone = schedule.customerPhone
-        }
+      if (!customerPhone && schedule?.customerPhone) {
+        customerPhone = schedule.customerPhone
       }
 
       // 5. Chuẩn bị bill để lưu
@@ -2199,6 +2276,8 @@ export class BillService {
         scheduleId: new ObjectId(billData.scheduleId),
         roomId: new ObjectId(billData.roomId),
         createdAt: billData.createdAt ? new Date(billData.createdAt) : now,
+        createdBy: billData.createdBy || schedule?.createdBy,
+        completedBy: billData.completedBy || billData.fnbOrder?.completedBy,
         startTime: billData.startTime ? new Date(billData.startTime) : now,
         endTime: billData.endTime ? new Date(billData.endTime) : now,
         customerPhone: customerPhone || undefined

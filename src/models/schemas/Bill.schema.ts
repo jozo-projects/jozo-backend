@@ -20,6 +20,8 @@ export interface IBill {
   startTime: Date
   endTime: Date
   createdAt: Date
+  createdBy?: string
+  completedBy?: string
   paymentMethod?: string
   userId?: ObjectId | string
   customerPhone?: string
@@ -71,6 +73,8 @@ export class Bill {
   totalAmount!: number
   giftDiscountAmount?: number
   createdAt!: Date
+  createdBy?: string
+  completedBy?: string
   paymentMethod?: string
   userId?: ObjectId
   customerPhone?: string

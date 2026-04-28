@@ -425,7 +425,7 @@ class RoomScheduleService {
    * @param id - RoomSchedule id
    * @returns Số lượng bản ghi được cập nhật
    */
-  async cancelSchedule(id: string) {
+  async cancelSchedule(id: string, updatedBy?: string) {
     // Lấy event hiện tại theo id
     const currentEvent = await databaseService.roomSchedule.findOne({ _id: new ObjectId(id) })
     if (!currentEvent) {
@@ -444,7 +444,7 @@ class RoomScheduleService {
     const updateData = {
       status: RoomScheduleStatus.Cancelled,
       updatedAt: new Date(),
-      updatedBy: 'system' // hoặc từ req.userId nếu có
+      updatedBy: updatedBy || 'system'
     }
     const result = await databaseService.roomSchedule.updateOne({ _id: new ObjectId(id) }, { $set: updateData })
     return result.modifiedCount
