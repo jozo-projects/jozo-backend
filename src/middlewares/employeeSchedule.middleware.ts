@@ -9,6 +9,42 @@ import databaseService from '~/services/database.service'
 import { validate } from '~/utils/validation'
 import dayjs from 'dayjs'
 
+const HOUR_KEYS = Array.from({ length: 24 }, (_, index) => index.toString())
+
+const validateHourlyRateMap = (value: unknown) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('hourlyRateMap phải là object')
+  }
+  const rateMap = value as Record<string, unknown>
+  for (const hourKey of HOUR_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(rateMap, hourKey)) {
+      throw new Error(`hourlyRateMap thiếu giờ ${hourKey}`)
+    }
+    const hourRate = rateMap[hourKey]
+    if (typeof hourRate !== 'number' || Number.isNaN(hourRate) || hourRate < 0) {
+      throw new Error(`hourlyRateMap[${hourKey}] phải là số >= 0`)
+    }
+  }
+  return true
+}
+
+const validateHourlyShiftMap = (value: unknown) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('hourlyShiftMap phải là object')
+  }
+  const shiftMap = value as Record<string, unknown>
+  const validShiftValues = new Set([...Object.values(ShiftType), null])
+  for (const hourKey of HOUR_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(shiftMap, hourKey)) {
+      throw new Error(`hourlyShiftMap thiếu giờ ${hourKey}`)
+    }
+    if (!validShiftValues.has((shiftMap[hourKey] as ShiftType | null) ?? null)) {
+      throw new Error(`hourlyShiftMap[${hourKey}] không hợp lệ`)
+    }
+  }
+  return true
+}
+
 /**
  * Validate request body khi tạo employee schedule (staff tự đăng ký)
  */
@@ -298,15 +334,47 @@ export const updateStatusValidator = validate(
  */
 export const updateSalarySnapshotValidator = validate(
   checkSchema({
+    hourlyRateMap: {
+      optional: true,
+      custom: {
+        options: (value: unknown, { req }) => {
+          if (value !== undefined) {
+            return validateHourlyRateMap(value)
+          }
+          const legacyRate = req.body?.hourlyRate
+          if (typeof legacyRate !== 'number' || Number.isNaN(legacyRate) || legacyRate < 0) {
+            throw new Error('Cần truyền hourlyRateMap hoặc hourlyRate >= 0')
+          }
+          return true
+        }
+      }
+    },
     hourlyRate: {
-      notEmpty: {
-        errorMessage: 'Hourly rate không được rỗng'
-      },
+      optional: true,
       isFloat: {
         options: {
-          gt: 0
+          min: 0
         },
-        errorMessage: 'Hourly rate phải là số lớn hơn 0'
+        errorMessage: 'hourlyRate phải là số >= 0'
+      },
+      custom: {
+        options: (value: unknown, { req }) => {
+          if (req.body?.hourlyRateMap === undefined && value === undefined) {
+            throw new Error('Cần truyền hourlyRateMap hoặc hourlyRate >= 0')
+          }
+          return true
+        }
+      }
+    },
+    hourlyShiftMap: {
+      optional: true,
+      custom: {
+        options: (value: unknown) => {
+          if (value === undefined) {
+            return true
+          }
+          return validateHourlyShiftMap(value)
+        }
       }
     }
   })
@@ -317,15 +385,36 @@ export const updateSalarySnapshotValidator = validate(
  */
 export const overrideEmployeeSalaryValidator = validate(
   checkSchema({
+    hourlyRateMap: {
+      optional: true,
+      custom: {
+        options: (value: unknown, { req }) => {
+          if (value !== undefined) {
+            return validateHourlyRateMap(value)
+          }
+          const legacyRate = req.body?.hourlyRate
+          if (typeof legacyRate !== 'number' || Number.isNaN(legacyRate) || legacyRate < 0) {
+            throw new Error('Cần truyền hourlyRateMap hoặc hourlyRate >= 0')
+          }
+          return true
+        }
+      }
+    },
     hourlyRate: {
-      notEmpty: {
-        errorMessage: 'Hourly rate không được rỗng'
-      },
+      optional: true,
       isFloat: {
         options: {
-          gt: 0
+          min: 0
         },
-        errorMessage: 'Hourly rate phải là số lớn hơn 0'
+        errorMessage: 'hourlyRate phải là số >= 0'
+      },
+      custom: {
+        options: (value: unknown, { req }) => {
+          if (req.body?.hourlyRateMap === undefined && value === undefined) {
+            throw new Error('Cần truyền hourlyRateMap hoặc hourlyRate >= 0')
+          }
+          return true
+        }
       }
     }
   })

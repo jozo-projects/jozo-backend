@@ -1,4 +1,5 @@
 import { EmployeeScheduleStatus, ShiftType } from '~/constants/enum'
+import { HourlyRateMap, HourlyShiftMap } from '../schemas/EmployeeSalarySnapshot.schema'
 
 // Request body khi nhân viên tự đăng ký
 export interface ICreateEmployeeScheduleBody {
@@ -43,12 +44,15 @@ export interface IUpdateStatusBody {
 
 // Request body khi cập nhật global salary snapshot
 export interface IUpdateSalarySnapshotBody {
-  hourlyRate: number
+  hourlyRateMap?: HourlyRateMap
+  hourlyShiftMap?: HourlyShiftMap
+  hourlyRate?: number
 }
 
 // Request body khi override lương cho từng nhân viên
 export interface IOverrideEmployeeSalaryBody {
-  hourlyRate: number
+  hourlyRateMap?: HourlyRateMap
+  hourlyRate?: number
 }
 
 // Query params khi lấy danh sách lịch

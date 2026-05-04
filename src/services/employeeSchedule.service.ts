@@ -18,6 +18,7 @@ import {
   IUpdateStatusBody
 } from '~/models/requests/EmployeeSchedule.request'
 import { EmployeeSchedule, IEmployeeSalarySnapshotInSchedule } from '~/models/schemas/EmployeeSchedule.schema'
+import { HourlyRateMap, HourlyShiftMap } from '~/models/schemas/EmployeeSalarySnapshot.schema'
 import databaseService from './database.service'
 import { getShiftInfo } from '~/constants/shiftDefaults'
 import notificationService from './notification.service'
@@ -30,6 +31,7 @@ dayjs.tz.setDefault('Asia/Ho_Chi_Minh')
 // EventEmitter cho employee schedule events
 export const employeeScheduleEventEmitter = new EventEmitter()
 const DEFAULT_HOURLY_RATE = 25000
+const NIGHT_SHIFT_CUTOFF_HOUR = 6
 
 class EmployeeScheduleService {
   /**
@@ -260,14 +262,19 @@ class EmployeeScheduleService {
 
     for (const schedule of schedules) {
       const dateKey = dayjs(schedule.date).format('YYYY-MM-DD')
-      const shiftInfo = getShiftInfo(schedule.shiftType, schedule.customStartTime, schedule.customEndTime)
       const salarySnapshot =
         schedule.salarySnapshot ??
         fallbackSalarySnapshots.get(schedule.userId.toString()) ??
         this.createDefaultSalarySnapshot()
+      const shiftInfo = this.getShiftInfoFromSnapshot(schedule.shiftType, salarySnapshot, {
+        customStartTime: schedule.customStartTime,
+        customEndTime: schedule.customEndTime
+      })
       const salary = this.calculateScheduleSalary(
         shiftInfo.startTime,
         shiftInfo.endTime,
+        schedule.shiftType,
+        schedule.date,
         salarySnapshot,
         schedule.status
       )
@@ -354,10 +361,15 @@ class EmployeeScheduleService {
     }
 
     // Populate shift info
-    const shiftInfo = getShiftInfo(schedule.shiftType, schedule.customStartTime, schedule.customEndTime)
+    const salarySnapshot = schedule.salarySnapshot ?? this.createDefaultSalarySnapshot()
+    const shiftInfo = this.getShiftInfoFromSnapshot(schedule.shiftType, salarySnapshot, {
+      customStartTime: schedule.customStartTime,
+      customEndTime: schedule.customEndTime
+    })
 
     return {
       ...schedule,
+      salarySnapshot,
       shiftInfo
     }
   }
@@ -406,15 +418,26 @@ class EmployeeScheduleService {
       const currentSnapshot =
         schedule.salarySnapshot ??
         ({
-          hourlyRate: DEFAULT_HOURLY_RATE,
+          hourlyRateMap: this.createDefaultHourlyRateMap(DEFAULT_HOURLY_RATE),
+          hourlyShiftMap: this.createDefaultHourlyShiftMap(),
           source: 'global',
-          syncedFromSnapshot: DEFAULT_HOURLY_RATE,
+          syncedFromSnapshotRateMap: this.createDefaultHourlyRateMap(DEFAULT_HOURLY_RATE),
+          syncedFromSnapshotShiftMap: this.createDefaultHourlyShiftMap(),
           capturedAt: new Date()
         } as IEmployeeSalarySnapshotInSchedule)
+      const shiftInfo = this.getShiftInfoFromSnapshot(schedule.shiftType, schedule.salarySnapshot, {
+        customStartTime: schedule.customStartTime,
+        customEndTime: schedule.customEndTime
+      })
 
       updateData.salarySnapshot = {
         ...currentSnapshot,
-        hourlyRate: data.specialHourlyRate,
+        hourlyRateMap: this.applySpecialHourlyRateToRange(
+          currentSnapshot.hourlyRateMap,
+          shiftInfo.startTime,
+          shiftInfo.endTime,
+          data.specialHourlyRate
+        ),
         source: 'manual',
         capturedAt: new Date()
       }
@@ -766,13 +789,16 @@ class EmployeeScheduleService {
   async updateGlobalSalarySnapshot(adminId: string, data: IUpdateSalarySnapshotBody) {
     const admin = await databaseService.users.findOne({ _id: new ObjectId(adminId) })
     const now = new Date()
+    const normalizedRateMap = this.resolveHourlyRateMapPayload(data)
+    const normalizedShiftMap = this.normalizeHourlyShiftMap(data.hourlyShiftMap)
 
     await databaseService.employeeSalarySnapshots.updateOne(
       { key: 'default' },
       {
         $set: {
           key: 'default',
-          hourlyRate: data.hourlyRate,
+          hourlyRateMap: normalizedRateMap,
+          hourlyShiftMap: normalizedShiftMap,
           updatedBy: new ObjectId(adminId),
           updatedByName: admin?.name,
           updatedAt: now
@@ -803,7 +829,7 @@ class EmployeeScheduleService {
         totalStaffs: 0,
         syncedCount: 0,
         overrideKeptCount: 0,
-        snapshotHourlyRate: snapshot.hourlyRate
+        snapshotHourlyRateMap: snapshot.hourlyRateMap
       }
     }
 
@@ -825,8 +851,12 @@ class EmployeeScheduleService {
             $set: {
               userName: staff.name,
               userPhone: staff.phone_number,
-              snapshotHourlyRate: snapshot.hourlyRate,
-              hourlyRate: shouldKeepOverride ? existing?.hourlyRate : snapshot.hourlyRate,
+              snapshotHourlyRateMap: this.normalizeHourlyRateMap(snapshot.hourlyRateMap),
+              snapshotHourlyShiftMap: this.normalizeHourlyShiftMap(snapshot.hourlyShiftMap),
+              hourlyRateMap: shouldKeepOverride
+                ? this.normalizeHourlyRateMap(existing?.hourlyRateMap ?? snapshot.hourlyRateMap)
+                : this.normalizeHourlyRateMap(snapshot.hourlyRateMap),
+              hourlyShiftMap: this.normalizeHourlyShiftMap(snapshot.hourlyShiftMap),
               isOverride: shouldKeepOverride,
               syncedAt: now,
               updatedBy: new ObjectId(adminId),
@@ -853,7 +883,7 @@ class EmployeeScheduleService {
       totalStaffs: staffs.length,
       syncedCount: staffs.length,
       overrideKeptCount,
-      snapshotHourlyRate: snapshot.hourlyRate
+      snapshotHourlyRateMap: snapshot.hourlyRateMap
     }
   }
 
@@ -874,9 +904,11 @@ class EmployeeScheduleService {
         userId: staff._id,
         userName: staff.name,
         userPhone: staff.phone_number,
-        hourlyRate: config?.hourlyRate ?? snapshot.hourlyRate,
+        hourlyRateMap: this.normalizeHourlyRateMap(config?.hourlyRateMap ?? snapshot.hourlyRateMap),
+        hourlyShiftMap: this.normalizeHourlyShiftMap(config?.hourlyShiftMap ?? snapshot.hourlyShiftMap),
         isOverride: config?.isOverride ?? false,
-        snapshotHourlyRate: config?.snapshotHourlyRate ?? snapshot.hourlyRate,
+        snapshotHourlyRateMap: this.normalizeHourlyRateMap(config?.snapshotHourlyRateMap ?? snapshot.hourlyRateMap),
+        snapshotHourlyShiftMap: this.normalizeHourlyShiftMap(config?.snapshotHourlyShiftMap ?? snapshot.hourlyShiftMap),
         syncedAt: config?.syncedAt,
         updatedAt: config?.updatedAt
       }
@@ -901,6 +933,7 @@ class EmployeeScheduleService {
     }
 
     const now = new Date()
+    const normalizedRateMap = this.resolveHourlyRateMapPayload(data)
     await databaseService.employeeSalaryConfigs.updateOne(
       { userId: staff._id },
       {
@@ -908,9 +941,11 @@ class EmployeeScheduleService {
           userId: staff._id,
           userName: staff.name,
           userPhone: staff.phone_number,
-          hourlyRate: data.hourlyRate,
+          hourlyRateMap: normalizedRateMap,
+          hourlyShiftMap: this.normalizeHourlyShiftMap(snapshot.hourlyShiftMap),
           isOverride: true,
-          snapshotHourlyRate: snapshot.hourlyRate,
+          snapshotHourlyRateMap: this.normalizeHourlyRateMap(snapshot.hourlyRateMap),
+          snapshotHourlyShiftMap: this.normalizeHourlyShiftMap(snapshot.hourlyShiftMap),
           syncedAt: now,
           updatedBy: new ObjectId(adminId),
           updatedByName: admin?.name,
@@ -951,9 +986,11 @@ class EmployeeScheduleService {
           userId: staff._id,
           userName: staff.name,
           userPhone: staff.phone_number,
-          hourlyRate: snapshot.hourlyRate,
+          hourlyRateMap: this.normalizeHourlyRateMap(snapshot.hourlyRateMap),
+          hourlyShiftMap: this.normalizeHourlyShiftMap(snapshot.hourlyShiftMap),
           isOverride: false,
-          snapshotHourlyRate: snapshot.hourlyRate,
+          snapshotHourlyRateMap: this.normalizeHourlyRateMap(snapshot.hourlyRateMap),
+          snapshotHourlyShiftMap: this.normalizeHourlyShiftMap(snapshot.hourlyShiftMap),
           syncedAt: now,
           updatedBy: new ObjectId(adminId),
           updatedByName: admin?.name,
@@ -994,7 +1031,13 @@ class EmployeeScheduleService {
     const toStart = []
 
     for (const schedule of schedules) {
-      const startTime = this.calculateStartDateTime(schedule.date, schedule.shiftType, schedule.customStartTime)
+      const startTime = this.calculateStartDateTime(
+        schedule.date,
+        schedule.shiftType,
+        schedule.salarySnapshot,
+        schedule.customStartTime,
+        schedule.customEndTime
+      )
       const shouldStart = now >= startTime
 
       console.log(
@@ -1049,7 +1092,13 @@ class EmployeeScheduleService {
     const toComplete = []
 
     for (const schedule of schedules) {
-      const endTime = this.calculateEndDateTime(schedule.date, schedule.shiftType, schedule.customEndTime)
+      const endTime = this.calculateEndDateTime(
+        schedule.date,
+        schedule.shiftType,
+        schedule.salarySnapshot,
+        schedule.customStartTime,
+        schedule.customEndTime
+      )
       const shouldComplete = now >= endTime
 
       console.log(
@@ -1082,8 +1131,14 @@ class EmployeeScheduleService {
   /**
    * Helper: Calculate start date time
    */
-  private calculateStartDateTime(date: Date, shiftType: ShiftType, customStartTime?: string): Date {
-    const shiftInfo = getShiftInfo(shiftType, customStartTime, undefined)
+  private calculateStartDateTime(
+    date: Date,
+    shiftType: ShiftType,
+    salarySnapshot?: IEmployeeSalarySnapshotInSchedule,
+    customStartTime?: string,
+    customEndTime?: string
+  ): Date {
+    const shiftInfo = this.getShiftInfoFromSnapshot(shiftType, salarySnapshot, { customStartTime, customEndTime })
     const [hours, minutes] = shiftInfo.startTime.split(':').map(Number)
 
     return dayjs(date).hour(hours).minute(minutes).second(0).millisecond(0).toDate()
@@ -1092,8 +1147,14 @@ class EmployeeScheduleService {
   /**
    * Helper: Calculate end date time
    */
-  private calculateEndDateTime(date: Date, shiftType: ShiftType, customEndTime?: string): Date {
-    const shiftInfo = getShiftInfo(shiftType, undefined, customEndTime)
+  private calculateEndDateTime(
+    date: Date,
+    shiftType: ShiftType,
+    salarySnapshot?: IEmployeeSalarySnapshotInSchedule,
+    customStartTime?: string,
+    customEndTime?: string
+  ): Date {
+    const shiftInfo = this.getShiftInfoFromSnapshot(shiftType, salarySnapshot, { customStartTime, customEndTime })
     const [startHours, startMinutes] = shiftInfo.startTime.split(':').map(Number)
     const [hours, minutes] = shiftInfo.endTime.split(':').map(Number)
     let endDateTime = dayjs(date).hour(hours).minute(minutes).second(0).millisecond(0)
@@ -1144,13 +1205,18 @@ class EmployeeScheduleService {
   private async ensureGlobalSalarySnapshot() {
     const existing = await databaseService.employeeSalarySnapshots.findOne({ key: 'default' })
     if (existing) {
-      return existing
+      return {
+        ...existing,
+        hourlyRateMap: this.normalizeHourlyRateMap(existing.hourlyRateMap),
+        hourlyShiftMap: this.normalizeHourlyShiftMap(existing.hourlyShiftMap)
+      }
     }
 
     const now = new Date()
     const fallback = {
       key: 'default' as const,
-      hourlyRate: DEFAULT_HOURLY_RATE,
+      hourlyRateMap: this.createDefaultHourlyRateMap(DEFAULT_HOURLY_RATE),
+      hourlyShiftMap: this.createDefaultHourlyShiftMap(),
       createdAt: now,
       updatedAt: now
     }
@@ -1170,17 +1236,21 @@ class EmployeeScheduleService {
     const now = new Date()
     if (config?.isOverride) {
       return {
-        hourlyRate: config.hourlyRate,
+        hourlyRateMap: this.normalizeHourlyRateMap(config.hourlyRateMap ?? snapshot.hourlyRateMap),
+        hourlyShiftMap: this.normalizeHourlyShiftMap(config.hourlyShiftMap ?? snapshot.hourlyShiftMap),
         source: 'override',
-        syncedFromSnapshot: snapshot.hourlyRate,
+        syncedFromSnapshotRateMap: this.normalizeHourlyRateMap(snapshot.hourlyRateMap),
+        syncedFromSnapshotShiftMap: this.normalizeHourlyShiftMap(snapshot.hourlyShiftMap),
         capturedAt: now
       }
     }
 
     return {
-      hourlyRate: config?.hourlyRate ?? snapshot.hourlyRate,
+      hourlyRateMap: this.normalizeHourlyRateMap(config?.hourlyRateMap ?? snapshot.hourlyRateMap),
+      hourlyShiftMap: this.normalizeHourlyShiftMap(config?.hourlyShiftMap ?? snapshot.hourlyShiftMap),
       source: 'global',
-      syncedFromSnapshot: snapshot.hourlyRate,
+      syncedFromSnapshotRateMap: this.normalizeHourlyRateMap(snapshot.hourlyRateMap),
+      syncedFromSnapshotShiftMap: this.normalizeHourlyShiftMap(snapshot.hourlyShiftMap),
       capturedAt: now
     }
   }
@@ -1216,9 +1286,13 @@ class EmployeeScheduleService {
 
       const config = configMap.get(userId)
       fallbackMap.set(userId, {
-        hourlyRate: config?.hourlyRate ?? snapshot.hourlyRate,
+        hourlyRateMap: this.normalizeHourlyRateMap(config?.hourlyRateMap ?? snapshot.hourlyRateMap),
+        hourlyShiftMap: this.normalizeHourlyShiftMap(config?.hourlyShiftMap ?? snapshot.hourlyShiftMap),
         source: config?.isOverride ? 'override' : 'global',
-        syncedFromSnapshot: config?.snapshotHourlyRate ?? snapshot.hourlyRate,
+        syncedFromSnapshotRateMap: this.normalizeHourlyRateMap(config?.snapshotHourlyRateMap ?? snapshot.hourlyRateMap),
+        syncedFromSnapshotShiftMap: this.normalizeHourlyShiftMap(
+          config?.snapshotHourlyShiftMap ?? snapshot.hourlyShiftMap
+        ),
         capturedAt: config?.syncedAt ?? now
       })
     }
@@ -1228,9 +1302,11 @@ class EmployeeScheduleService {
 
   private createDefaultSalarySnapshot(): IEmployeeSalarySnapshotInSchedule {
     return {
-      hourlyRate: DEFAULT_HOURLY_RATE,
+      hourlyRateMap: this.createDefaultHourlyRateMap(DEFAULT_HOURLY_RATE),
+      hourlyShiftMap: this.createDefaultHourlyShiftMap(),
       source: 'global',
-      syncedFromSnapshot: DEFAULT_HOURLY_RATE,
+      syncedFromSnapshotRateMap: this.createDefaultHourlyRateMap(DEFAULT_HOURLY_RATE),
+      syncedFromSnapshotShiftMap: this.createDefaultHourlyShiftMap(),
       capturedAt: new Date()
     }
   }
@@ -1238,18 +1314,28 @@ class EmployeeScheduleService {
   private calculateScheduleSalary(
     startTime: string,
     endTime: string,
+    shiftType: ShiftType,
+    scheduleDate: Date,
     salarySnapshot: IEmployeeSalarySnapshotInSchedule,
     status: EmployeeScheduleStatus
   ) {
+    const normalizedSnapshot = this.normalizeScheduleSalarySnapshot(salarySnapshot)
     const hours = this.calculateShiftHours(startTime, endTime)
-    const totalAmount = Math.round(hours * salarySnapshot.hourlyRate)
+    const totalAmount = this.calculateTotalAmountByHour(
+      startTime,
+      endTime,
+      shiftType,
+      scheduleDate,
+      normalizedSnapshot
+    )
     const isPayable = status === EmployeeScheduleStatus.Completed
 
     return {
-      hourlyRate: salarySnapshot.hourlyRate,
+      hourlyRate: hours > 0 ? Math.round((totalAmount / hours) * 100) / 100 : 0,
       hours,
       totalAmount,
-      isPayable
+      isPayable,
+      hourlyBreakdown: this.buildHourlyBreakdown(startTime, endTime, shiftType, scheduleDate, normalizedSnapshot)
     }
   }
 
@@ -1264,6 +1350,240 @@ class EmployeeScheduleService {
     }
 
     return (endTotalMinutes - startTotalMinutes) / 60
+  }
+
+  private calculateTotalAmountByHour(
+    startTime: string,
+    endTime: string,
+    shiftType: ShiftType,
+    scheduleDate: Date,
+    salarySnapshot: IEmployeeSalarySnapshotInSchedule
+  ) {
+    const hourlyBreakdown = this.buildHourlyBreakdown(startTime, endTime, shiftType, scheduleDate, salarySnapshot)
+    return hourlyBreakdown.reduce((total, item) => total + item.amount, 0)
+  }
+
+  private buildHourlyBreakdown(
+    startTime: string,
+    endTime: string,
+    shiftType: ShiftType,
+    scheduleDate: Date,
+    salarySnapshot: IEmployeeSalarySnapshotInSchedule
+  ) {
+    const [startHour, startMinute] = startTime.split(':').map(Number)
+    const [endHour, endMinute] = endTime.split(':').map(Number)
+    const startTotalMinutes = startHour * 60 + startMinute
+    let endTotalMinutes = endHour * 60 + endMinute
+    if (endTotalMinutes <= startTotalMinutes) {
+      endTotalMinutes += 24 * 60
+    }
+
+    const scheduleDay = dayjs(scheduleDate).startOf('day')
+    const breakdown: Array<{ hour: number; minutes: number; rate: number; amount: number }> = []
+    for (let cursor = startTotalMinutes; cursor < endTotalMinutes; ) {
+      const normalizedMinute = cursor % (24 * 60)
+      const hour = Math.floor(normalizedMinute / 60)
+      const nextHourCursor = Math.min(Math.floor(cursor / 60) * 60 + 60, endTotalMinutes)
+      const minutes = nextHourCursor - cursor
+      const dateOffset = Math.floor(cursor / (24 * 60))
+      const blockDate = scheduleDay.add(dateOffset, 'day')
+      const businessDate = hour < NIGHT_SHIFT_CUTOFF_HOUR ? blockDate.subtract(1, 'day') : blockDate
+      const isSameBusinessDay = businessDate.isSame(scheduleDay, 'day')
+      const hourKey = hour.toString()
+      const assignedShift = salarySnapshot.hourlyShiftMap[hourKey] ?? null
+      const isMatchedShift = assignedShift === shiftType
+      const rate = salarySnapshot.hourlyRateMap[hourKey] ?? 0
+      const payableRate = isSameBusinessDay && isMatchedShift ? rate : 0
+      const amount = (minutes / 60) * payableRate
+
+      breakdown.push({ hour, minutes, rate: payableRate, amount: Math.round(amount) })
+      cursor = nextHourCursor
+    }
+
+    return breakdown
+  }
+
+  private createDefaultHourlyRateMap(defaultRate: number): HourlyRateMap {
+    const rateMap: HourlyRateMap = {}
+    for (let hour = 0; hour < 24; hour++) {
+      rateMap[hour.toString()] = defaultRate
+    }
+    return rateMap
+  }
+
+  private createDefaultHourlyShiftMap(): HourlyShiftMap {
+    const shiftMap: HourlyShiftMap = {}
+    for (let hour = 0; hour < 24; hour++) {
+      if (hour >= 9 && hour < 14) {
+        shiftMap[hour.toString()] = ShiftType.Shift1
+      } else if (hour >= 14 && hour < 19) {
+        shiftMap[hour.toString()] = ShiftType.Shift2
+      } else if (hour >= 19 || hour === 0) {
+        shiftMap[hour.toString()] = ShiftType.Shift3
+      } else {
+        shiftMap[hour.toString()] = null
+      }
+    }
+    return shiftMap
+  }
+
+  private normalizeHourlyRateMap(rateMap?: HourlyRateMap): HourlyRateMap {
+    const normalized = this.createDefaultHourlyRateMap(DEFAULT_HOURLY_RATE)
+    for (let hour = 0; hour < 24; hour++) {
+      const key = hour.toString()
+      const value = rateMap?.[key]
+      if (typeof value === 'number' && !Number.isNaN(value) && value >= 0) {
+        normalized[key] = value
+      }
+    }
+    return normalized
+  }
+
+  private resolveHourlyRateMapPayload(data: { hourlyRateMap?: HourlyRateMap; hourlyRate?: number }) {
+    if (data.hourlyRateMap) {
+      return this.normalizeHourlyRateMap(data.hourlyRateMap)
+    }
+    if (typeof data.hourlyRate === 'number' && !Number.isNaN(data.hourlyRate) && data.hourlyRate >= 0) {
+      return this.createDefaultHourlyRateMap(data.hourlyRate)
+    }
+    return this.createDefaultHourlyRateMap(DEFAULT_HOURLY_RATE)
+  }
+
+  private normalizeHourlyShiftMap(shiftMap?: HourlyShiftMap): HourlyShiftMap {
+    const normalized = this.createDefaultHourlyShiftMap()
+    const validShiftValues = new Set([...Object.values(ShiftType), null])
+    for (let hour = 0; hour < 24; hour++) {
+      const key = hour.toString()
+      const value = shiftMap?.[key] ?? null
+      if (validShiftValues.has(value)) {
+        normalized[key] = value
+      }
+    }
+    return normalized
+  }
+
+  private getShiftInfoFromSnapshot(
+    shiftType: ShiftType,
+    snapshot?: IEmployeeSalarySnapshotInSchedule,
+    options?: { customStartTime?: string; customEndTime?: string }
+  ) {
+    if (options?.customStartTime || options?.customEndTime) {
+      return getShiftInfo(shiftType, options.customStartTime, options.customEndTime)
+    }
+    const normalizedSnapshot = this.normalizeScheduleSalarySnapshot(snapshot)
+    const shiftMap = this.normalizeHourlyShiftMap(normalizedSnapshot.hourlyShiftMap)
+    const assignedHours = Object.entries(shiftMap)
+      .filter(([, assignedShift]) => assignedShift === shiftType)
+      .map(([hourKey]) => Number(hourKey))
+      .sort((a, b) => a - b)
+
+    if (assignedHours.length === 0) {
+      return getShiftInfo(shiftType)
+    }
+
+    let bestStart = assignedHours[0]
+    let bestLength = 1
+    let currentStart = assignedHours[0]
+    let currentLength = 1
+
+    for (let index = 1; index < assignedHours.length; index++) {
+      const prev = assignedHours[index - 1]
+      const current = assignedHours[index]
+      if (current === prev + 1) {
+        currentLength += 1
+      } else {
+        if (currentLength > bestLength) {
+          bestLength = currentLength
+          bestStart = currentStart
+        }
+        currentStart = current
+        currentLength = 1
+      }
+    }
+
+    if (currentLength > bestLength) {
+      bestLength = currentLength
+      bestStart = currentStart
+    }
+
+    const startHour = bestStart
+    const endHour = (bestStart + bestLength) % 24
+    return {
+      name: getShiftInfo(shiftType).name,
+      startTime: `${startHour.toString().padStart(2, '0')}:00`,
+      endTime: `${endHour.toString().padStart(2, '0')}:00`
+    }
+  }
+
+  private applySpecialHourlyRateToRange(
+    currentMap: HourlyRateMap,
+    startTime: string,
+    endTime: string,
+    specialHourlyRate: number
+  ) {
+    const updatedMap = this.normalizeHourlyRateMap(currentMap)
+    const [startHour, startMinute] = startTime.split(':').map(Number)
+    const [endHour, endMinute] = endTime.split(':').map(Number)
+    const startTotalMinutes = startHour * 60 + startMinute
+    let endTotalMinutes = endHour * 60 + endMinute
+    if (endTotalMinutes <= startTotalMinutes) {
+      endTotalMinutes += 24 * 60
+    }
+
+    for (let cursor = startTotalMinutes; cursor < endTotalMinutes; ) {
+      const hour = Math.floor((cursor % (24 * 60)) / 60)
+      updatedMap[hour.toString()] = specialHourlyRate
+      const nextHourCursor = Math.min(Math.floor(cursor / 60) * 60 + 60, endTotalMinutes)
+      cursor = nextHourCursor
+    }
+
+    return updatedMap
+  }
+
+  private normalizeScheduleSalarySnapshot(snapshot?: IEmployeeSalarySnapshotInSchedule): IEmployeeSalarySnapshotInSchedule {
+    const fallback = this.createDefaultSalarySnapshot()
+    if (!snapshot) {
+      return fallback
+    }
+
+    const legacySnapshot = snapshot as IEmployeeSalarySnapshotInSchedule & {
+      hourlyRate?: number
+      syncedFromSnapshot?: number
+    }
+    const hasLegacyHourlyRate =
+      typeof legacySnapshot.hourlyRate === 'number' &&
+      !Number.isNaN(legacySnapshot.hourlyRate) &&
+      legacySnapshot.hourlyRate >= 0
+    const hasLegacySyncedFromSnapshot =
+      typeof legacySnapshot.syncedFromSnapshot === 'number' &&
+      !Number.isNaN(legacySnapshot.syncedFromSnapshot) &&
+      legacySnapshot.syncedFromSnapshot >= 0
+
+    const normalizedHourlyRateMap = snapshot.hourlyRateMap
+      ? this.normalizeHourlyRateMap(snapshot.hourlyRateMap)
+      : hasLegacyHourlyRate
+        ? this.createDefaultHourlyRateMap(legacySnapshot.hourlyRate as number)
+        : this.normalizeHourlyRateMap(fallback.hourlyRateMap)
+    const normalizedSyncedFromSnapshotRateMap = snapshot.syncedFromSnapshotRateMap
+      ? this.normalizeHourlyRateMap(snapshot.syncedFromSnapshotRateMap)
+      : hasLegacySyncedFromSnapshot
+        ? this.createDefaultHourlyRateMap(legacySnapshot.syncedFromSnapshot as number)
+        : this.normalizeHourlyRateMap(fallback.syncedFromSnapshotRateMap)
+    const normalizedSource =
+      snapshot.source === 'global' || snapshot.source === 'override' || snapshot.source === 'manual'
+        ? snapshot.source
+        : fallback.source
+
+    return {
+      hourlyRateMap: normalizedHourlyRateMap,
+      hourlyShiftMap: this.normalizeHourlyShiftMap(snapshot.hourlyShiftMap ?? fallback.hourlyShiftMap),
+      source: normalizedSource,
+      syncedFromSnapshotRateMap: normalizedSyncedFromSnapshotRateMap,
+      syncedFromSnapshotShiftMap: this.normalizeHourlyShiftMap(
+        snapshot.syncedFromSnapshotShiftMap ?? fallback.syncedFromSnapshotShiftMap
+      ),
+      capturedAt: snapshot.capturedAt ?? fallback.capturedAt
+    }
   }
 
   /**

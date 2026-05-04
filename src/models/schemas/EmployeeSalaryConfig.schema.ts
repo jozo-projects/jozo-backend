@@ -1,13 +1,16 @@
 import { ObjectId } from 'mongodb'
+import { HourlyRateMap, HourlyShiftMap } from './EmployeeSalarySnapshot.schema'
 
 export interface IEmployeeSalaryConfig {
   _id?: ObjectId
   userId: ObjectId
   userName?: string
   userPhone?: string
-  hourlyRate: number
+  hourlyRateMap: HourlyRateMap
+  hourlyShiftMap: HourlyShiftMap
   isOverride: boolean
-  snapshotHourlyRate: number
+  snapshotHourlyRateMap: HourlyRateMap
+  snapshotHourlyShiftMap: HourlyShiftMap
   syncedAt?: Date
   updatedBy?: ObjectId
   updatedByName?: string
@@ -20,9 +23,11 @@ export class EmployeeSalaryConfig {
   userId: ObjectId
   userName?: string
   userPhone?: string
-  hourlyRate: number
+  hourlyRateMap: HourlyRateMap
+  hourlyShiftMap: HourlyShiftMap
   isOverride: boolean
-  snapshotHourlyRate: number
+  snapshotHourlyRateMap: HourlyRateMap
+  snapshotHourlyShiftMap: HourlyShiftMap
   syncedAt?: Date
   updatedBy?: ObjectId
   updatedByName?: string
@@ -35,9 +40,11 @@ export class EmployeeSalaryConfig {
     this.userId = config.userId
     this.userName = config.userName
     this.userPhone = config.userPhone
-    this.hourlyRate = config.hourlyRate
+    this.hourlyRateMap = config.hourlyRateMap
+    this.hourlyShiftMap = config.hourlyShiftMap
     this.isOverride = config.isOverride
-    this.snapshotHourlyRate = config.snapshotHourlyRate
+    this.snapshotHourlyRateMap = config.snapshotHourlyRateMap
+    this.snapshotHourlyShiftMap = config.snapshotHourlyShiftMap
     this.syncedAt = config.syncedAt
     this.updatedBy = config.updatedBy
     this.updatedByName = config.updatedByName

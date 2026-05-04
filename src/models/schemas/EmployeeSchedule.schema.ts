@@ -1,10 +1,13 @@
 import { ObjectId } from 'mongodb'
 import { EmployeeScheduleStatus, ShiftType } from '~/constants/enum'
+import { HourlyRateMap, HourlyShiftMap } from './EmployeeSalarySnapshot.schema'
 
 export interface IEmployeeSalarySnapshotInSchedule {
-  hourlyRate: number
+  hourlyRateMap: HourlyRateMap
+  hourlyShiftMap: HourlyShiftMap
   source: 'global' | 'override' | 'manual'
-  syncedFromSnapshot: number
+  syncedFromSnapshotRateMap: HourlyRateMap
+  syncedFromSnapshotShiftMap: HourlyShiftMap
   capturedAt: Date
 }
 
