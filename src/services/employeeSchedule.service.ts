@@ -1314,28 +1314,24 @@ class EmployeeScheduleService {
   private calculateScheduleSalary(
     startTime: string,
     endTime: string,
-    shiftType: ShiftType,
+    _shiftType: ShiftType,
     scheduleDate: Date,
     salarySnapshot: IEmployeeSalarySnapshotInSchedule,
     status: EmployeeScheduleStatus
   ) {
     const normalizedSnapshot = this.normalizeScheduleSalarySnapshot(salarySnapshot)
-    const hours = this.calculateShiftHours(startTime, endTime)
-    const totalAmount = this.calculateTotalAmountByHour(
-      startTime,
-      endTime,
-      shiftType,
-      scheduleDate,
-      normalizedSnapshot
-    )
+    const hourlyBreakdown = this.buildHourlyBreakdown(startTime, endTime, scheduleDate, normalizedSnapshot)
+    const totalAmount = hourlyBreakdown.reduce((total, item) => total + item.amount, 0)
+    const payableMinutes = hourlyBreakdown.reduce((total, item) => total + (item.rate > 0 ? item.minutes : 0), 0)
+    const payableHours = payableMinutes / 60
     const isPayable = status === EmployeeScheduleStatus.Completed
 
     return {
-      hourlyRate: hours > 0 ? Math.round((totalAmount / hours) * 100) / 100 : 0,
-      hours,
+      hourlyRate: payableHours > 0 ? Math.round((totalAmount / payableHours) * 100) / 100 : 0,
+      hours: payableHours,
       totalAmount,
       isPayable,
-      hourlyBreakdown: this.buildHourlyBreakdown(startTime, endTime, shiftType, scheduleDate, normalizedSnapshot)
+      hourlyBreakdown
     }
   }
 
@@ -1352,21 +1348,9 @@ class EmployeeScheduleService {
     return (endTotalMinutes - startTotalMinutes) / 60
   }
 
-  private calculateTotalAmountByHour(
-    startTime: string,
-    endTime: string,
-    shiftType: ShiftType,
-    scheduleDate: Date,
-    salarySnapshot: IEmployeeSalarySnapshotInSchedule
-  ) {
-    const hourlyBreakdown = this.buildHourlyBreakdown(startTime, endTime, shiftType, scheduleDate, salarySnapshot)
-    return hourlyBreakdown.reduce((total, item) => total + item.amount, 0)
-  }
-
   private buildHourlyBreakdown(
     startTime: string,
     endTime: string,
-    shiftType: ShiftType,
     scheduleDate: Date,
     salarySnapshot: IEmployeeSalarySnapshotInSchedule
   ) {
@@ -1391,9 +1375,9 @@ class EmployeeScheduleService {
       const isSameBusinessDay = businessDate.isSame(scheduleDay, 'day')
       const hourKey = hour.toString()
       const assignedShift = salarySnapshot.hourlyShiftMap[hourKey] ?? null
-      const isMatchedShift = assignedShift === shiftType
       const rate = salarySnapshot.hourlyRateMap[hourKey] ?? 0
-      const payableRate = isSameBusinessDay && isMatchedShift ? rate : 0
+      const hasAssignedShift = assignedShift !== null
+      const payableRate = isSameBusinessDay && hasAssignedShift ? rate : 0
       const amount = (minutes / 60) * payableRate
 
       breakdown.push({ hour, minutes, rate: payableRate, amount: Math.round(amount) })
@@ -1540,7 +1524,9 @@ class EmployeeScheduleService {
     return updatedMap
   }
 
-  private normalizeScheduleSalarySnapshot(snapshot?: IEmployeeSalarySnapshotInSchedule): IEmployeeSalarySnapshotInSchedule {
+  private normalizeScheduleSalarySnapshot(
+    snapshot?: IEmployeeSalarySnapshotInSchedule
+  ): IEmployeeSalarySnapshotInSchedule {
     const fallback = this.createDefaultSalarySnapshot()
     if (!snapshot) {
       return fallback
