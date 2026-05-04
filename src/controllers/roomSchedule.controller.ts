@@ -103,9 +103,13 @@ export const updateSchedule = async (
   try {
     const { id } = req.params
     const userId = req.decoded_authorization?.user_id
+    if (!userId) {
+      return res.status(HTTP_STATUS_CODE.UNAUTHORIZED).json({ message: 'Unauthorized' })
+    }
+    const { createdBy: _ignoreCreatedBy, updatedBy: _ignoreUpdatedBy, ...clientBody } = req.body
     const modifiedCount = await roomScheduleService.updateSchedule(id, {
-      ...req.body,
-      updatedBy: req.body.updatedBy || userId
+      ...clientBody,
+      updatedBy: userId
     })
     if (modifiedCount === 0) {
       return res.status(HTTP_STATUS_CODE.NOT_FOUND).json({ error: ROOM_SCHEDULE_MESSAGES.SCHEDULE_NOT_FOUND })
