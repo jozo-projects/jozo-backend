@@ -1,5 +1,6 @@
 import { NextFunction, Request, Response } from 'express'
 import { ParamsDictionary } from 'express-serve-static-core'
+import { UserRole } from '~/constants/enum'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { EMPLOYEE_SCHEDULE_MESSAGES } from '~/constants/messages'
 import {
@@ -14,6 +15,7 @@ import {
   IUpdateStatusBody
 } from '~/models/requests/EmployeeSchedule.request'
 import employeeScheduleService from '~/services/employeeSchedule.service'
+import { usersServices } from '~/services/users.services'
 import { getShiftInfo } from '~/constants/shiftDefaults'
 
 const OVERRIDE_REMOVED_MESSAGE =
@@ -284,11 +286,29 @@ export const updateScheduleStatus = async (
 /**
  * Xóa lịch
  * DELETE /api/employee-schedules/:id
+ * Admin: xóa bất kỳ ca. Staff: chỉ ca pending của mình, trong 1 giờ sau khi đăng ký.
  */
 export const deleteSchedule = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params
-    const deletedCount = await employeeScheduleService.deleteSchedule(id)
+    const userId = req.decoded_authorization?.user_id
+    if (!userId) {
+      return res.status(HTTP_STATUS_CODE.UNAUTHORIZED).json({
+        message: 'Unauthorized'
+      })
+    }
+
+    const user = await usersServices.getUserById(userId)
+    if (!user?.role) {
+      return res.status(HTTP_STATUS_CODE.UNAUTHORIZED).json({
+        message: 'Unauthorized'
+      })
+    }
+
+    const deletedCount = await employeeScheduleService.deleteSchedule(id, {
+      userId,
+      role: user.role as UserRole
+    })
 
     if (deletedCount === 0) {
       return res.status(HTTP_STATUS_CODE.NOT_FOUND).json({

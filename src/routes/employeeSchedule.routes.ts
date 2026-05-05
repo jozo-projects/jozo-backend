@@ -221,10 +221,16 @@ employeeScheduleRouter.put(
 
 /**
  * @route   DELETE /api/employee-schedules/:id
- * @desc    Xóa lịch (chỉ Admin mới được xóa)
- * @access  Private (Admin only)
+ * @desc    Xóa lịch — Admin: mọi ca. Staff: chỉ ca của mình, pending, trong 1 giờ sau khi đăng ký (createdAt).
+ * @access  Private (Staff, Admin)
  */
-employeeScheduleRouter.delete('/:id', protect([UserRole.Admin]), checkScheduleExists, deleteSchedule)
+employeeScheduleRouter.delete(
+  '/:id',
+  protect([UserRole.Staff, UserRole.Admin]),
+  checkScheduleExists,
+  checkScheduleOwnership,
+  deleteSchedule
+)
 
 /**
  * @route   PUT /api/employee-schedules/:id/mark-absent

@@ -36,6 +36,7 @@ export interface IEmployeeSchedule {
   markedAbsentBy?: ObjectId // Admin who marked absent
   markedAbsentAt?: Date
   salarySnapshot?: IEmployeeSalarySnapshotInSchedule
+  /** Thời điểm đăng ký ca; nhân viên chỉ được tự xóa ca pending trong 1 giờ kể từ thời điểm này. */
   createdAt: Date
   updatedAt: Date
 }

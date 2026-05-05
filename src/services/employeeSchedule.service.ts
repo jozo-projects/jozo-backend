@@ -33,6 +33,8 @@ dayjs.tz.setDefault('Asia/Ho_Chi_Minh')
 export const employeeScheduleEventEmitter = new EventEmitter()
 const DEFAULT_HOURLY_RATE = 25000
 const NIGHT_SHIFT_CUTOFF_HOUR = 6
+/** Nhân viên chỉ được tự xóa ca pending trong khoảng thời gian này sau khi đăng ký (createdAt). */
+const EMPLOYEE_SELF_DELETE_WINDOW_MS = 60 * 60 * 1000
 
 type UserProbationFields = {
   probationStartDate?: Date
@@ -838,10 +840,11 @@ class EmployeeScheduleService {
   }
 
   /**
-   * Xóa schedule
-   * Note: Validation status đã được handle ở middleware (Admin bypass, Staff restricted)
+   * Xóa schedule.
+   * Admin: xóa bất kỳ ca nào (đã middleware kiểm tra tồn tại + ownership bypass).
+   * Staff: chỉ ca của mình, status pending, trong vòng 1 giờ kể từ createdAt (lúc submit đăng ký).
    */
-  async deleteSchedule(id: string) {
+  async deleteSchedule(id: string, actor: { userId: string; role: UserRole }) {
     if (!ObjectId.isValid(id)) {
       throw new ErrorWithStatus({
         message: EMPLOYEE_SCHEDULE_MESSAGES.SCHEDULE_NOT_FOUND,
@@ -857,8 +860,28 @@ class EmployeeScheduleService {
       })
     }
 
-    // Status validation đã được handle ở middleware
-    // Admin có thể delete bất kỳ, Staff chỉ delete được pending/rejected
+    const isAdmin = actor.role === UserRole.Admin
+    if (!isAdmin) {
+      if (schedule.userId.toString() !== actor.userId) {
+        throw new ErrorWithStatus({
+          message: EMPLOYEE_SCHEDULE_MESSAGES.UNAUTHORIZED_ACCESS,
+          status: HTTP_STATUS_CODE.FORBIDDEN
+        })
+      }
+      if (schedule.status !== EmployeeScheduleStatus.Pending) {
+        throw new ErrorWithStatus({
+          message: EMPLOYEE_SCHEDULE_MESSAGES.CANNOT_DELETE_SCHEDULE_NOT_PENDING,
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      }
+      const createdAtMs = new Date(schedule.createdAt).getTime()
+      if (Number.isNaN(createdAtMs) || Date.now() - createdAtMs > EMPLOYEE_SELF_DELETE_WINDOW_MS) {
+        throw new ErrorWithStatus({
+          message: EMPLOYEE_SCHEDULE_MESSAGES.DELETE_SCHEDULE_WINDOW_EXPIRED,
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      }
+    }
 
     const result = await databaseService.employeeSchedules.deleteOne({ _id: new ObjectId(id) })
     return result.deletedCount

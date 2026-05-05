@@ -186,6 +186,8 @@ export const EMPLOYEE_SCHEDULE_MESSAGES = {
   INVALID_TIME_RANGE: 'Thời gian bắt đầu phải nhỏ hơn thời gian kết thúc',
   CANNOT_UPDATE_APPROVED: 'Không thể cập nhật lịch đã được phê duyệt',
   CANNOT_DELETE_APPROVED: 'Không thể xóa lịch đã được phê duyệt',
+  CANNOT_DELETE_SCHEDULE_NOT_PENDING: 'Chỉ có thể xóa ca đang chờ duyệt (chưa được phê duyệt).',
+  DELETE_SCHEDULE_WINDOW_EXPIRED: 'Chỉ có thể xóa ca trong vòng 1 giờ kể từ lúc đăng ký',
   ONLY_PENDING_CAN_APPROVE: 'Chỉ có thể phê duyệt lịch đang chờ duyệt',
   UNAUTHORIZED_ACCESS: 'Bạn không có quyền truy cập lịch này',
   REJECTED_REASON_REQUIRED: 'Vui lòng nhập lý do từ chối',
