@@ -7,47 +7,17 @@ import {
   IApproveScheduleBody,
   ICreateEmployeeScheduleBody,
   IGetSchedulesQuery,
-  IOverrideEmployeeSalaryBody,
+  IGetSpecialSalaryDaysQuery,
   IUpdateScheduleBody,
   IUpdateSalarySnapshotBody,
+  IUpsertSpecialSalaryDayBody,
   IUpdateStatusBody
 } from '~/models/requests/EmployeeSchedule.request'
 import employeeScheduleService from '~/services/employeeSchedule.service'
 import { getShiftInfo } from '~/constants/shiftDefaults'
 
-const getUniformHourlyRate = (hourlyRateMap?: Record<string, number>) => {
-  if (!hourlyRateMap) {
-    return null
-  }
-
-  const rates = Object.values(hourlyRateMap)
-  if (rates.length === 0) {
-    return null
-  }
-
-  const firstRate = rates[0]
-  return rates.every((rate) => rate === firstRate) ? firstRate : null
-}
-
-const toCompactSalaryOverrideResponse = (config: any) => {
-  if (!config) {
-    return null
-  }
-
-  const uniformHourlyRate = getUniformHourlyRate(config.hourlyRateMap)
-
-  return {
-    userId: config.userId,
-    userName: config.userName,
-    userPhone: config.userPhone,
-    isOverride: config.isOverride,
-    hourlyRate: uniformHourlyRate,
-    hourlyRateMap: uniformHourlyRate === null ? config.hourlyRateMap : undefined,
-    syncedAt: config.syncedAt,
-    updatedAt: config.updatedAt,
-    updatedByName: config.updatedByName
-  }
-}
+const OVERRIDE_REMOVED_MESSAGE =
+  'Override lương theo nhân viên đã ngừng hỗ trợ. Dùng snapshot global + PUT /api/employee-schedules/salary/special-days (businessDate + hourlyAmountMap) cho ngày đặc biệt.'
 
 /**
  * Nhân viên tự đăng ký lịch
@@ -140,7 +110,8 @@ export const getMySchedules = async (
       endDate: req.query.endDate,
       status: req.query.status,
       shiftType: req.query.shiftType,
-      filterType: req.query.filterType
+      filterType: req.query.filterType,
+      salaryView: req.query.salaryView === 'compact' ? 'compact' : req.query.salaryView === 'full' ? 'full' : undefined
     }
 
     const result = await employeeScheduleService.getSchedules(filter, userId, false)
@@ -171,7 +142,8 @@ export const getAllSchedules = async (
       endDate: req.query.endDate,
       status: req.query.status,
       shiftType: req.query.shiftType,
-      filterType: req.query.filterType
+      filterType: req.query.filterType,
+      salaryView: req.query.salaryView === 'compact' ? 'compact' : req.query.salaryView === 'full' ? 'full' : undefined
     }
 
     const result = await employeeScheduleService.getSchedules(filter, undefined, true)
@@ -192,7 +164,8 @@ export const getAllSchedules = async (
 export const getScheduleById = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params
-    const schedule = await employeeScheduleService.getScheduleById(id)
+    const salaryView = req.query.salaryView === 'compact' ? 'compact' : req.query.salaryView === 'full' ? 'full' : undefined
+    const schedule = await employeeScheduleService.getScheduleById(id, { salaryView })
 
     return res.status(HTTP_STATUS_CODE.OK).json({
       message: EMPLOYEE_SCHEDULE_MESSAGES.GET_SCHEDULE_BY_ID_SUCCESS,
@@ -476,11 +449,62 @@ export const getEmployeeSalaryConfigs = async (req: Request, res: Response, next
 }
 
 /**
- * Admin override lương theo nhân viên
+ * Đã bỏ: override lương theo nhân viên
  * PUT /api/employee-schedules/salary/employees/:userId
  */
-export const overrideEmployeeSalary = async (
-  req: Request<ParamsDictionary, any, IOverrideEmployeeSalaryBody>,
+export const overrideEmployeeSalary = async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    return res.status(HTTP_STATUS_CODE.GONE).json({
+      message: OVERRIDE_REMOVED_MESSAGE
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+/**
+ * Đã bỏ: reset override lương theo nhân viên
+ * DELETE /api/employee-schedules/salary/employees/:userId/override
+ */
+export const resetEmployeeSalaryOverride = async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    return res.status(HTTP_STATUS_CODE.GONE).json({
+      message: OVERRIDE_REMOVED_MESSAGE
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+/**
+ * Admin: danh sách ngày lương đặc biệt
+ * GET /api/employee-schedules/salary/special-days
+ */
+export const listSpecialSalaryDays = async (
+  req: Request<ParamsDictionary, any, any, IGetSpecialSalaryDaysQuery>,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const result = await employeeScheduleService.listSpecialSalaryDays({
+      from: req.query.from,
+      to: req.query.to
+    })
+    return res.status(HTTP_STATUS_CODE.OK).json({
+      message: 'Lấy danh sách ngày lương đặc biệt thành công',
+      result
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+/**
+ * Admin: tạo/cập nhật mức lương theo giờ cho một businessDate
+ * PUT /api/employee-schedules/salary/special-days
+ */
+export const upsertSpecialSalaryDay = async (
+  req: Request<ParamsDictionary, any, IUpsertSpecialSalaryDayBody>,
   res: Response,
   next: NextFunction
 ) => {
@@ -492,11 +516,10 @@ export const overrideEmployeeSalary = async (
       })
     }
 
-    const { userId } = req.params
-    const result = await employeeScheduleService.overrideEmployeeSalary(userId, adminId, req.body)
+    const result = await employeeScheduleService.upsertSpecialSalaryDay(adminId, req.body)
     return res.status(HTTP_STATUS_CODE.OK).json({
-      message: 'Override lương nhân viên thành công',
-      result: toCompactSalaryOverrideResponse(result)
+      message: 'Lưu cấu hình ngày lương đặc biệt thành công',
+      result
     })
   } catch (error) {
     next(error)
@@ -504,23 +527,15 @@ export const overrideEmployeeSalary = async (
 }
 
 /**
- * Admin bỏ override lương theo nhân viên
- * DELETE /api/employee-schedules/salary/employees/:userId/override
+ * Admin: xóa cấu hình ngày lương đặc biệt
+ * DELETE /api/employee-schedules/salary/special-days/:businessDate
  */
-export const resetEmployeeSalaryOverride = async (req: Request, res: Response, next: NextFunction) => {
+export const deleteSpecialSalaryDay = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const adminId = req.decoded_authorization?.user_id
-    if (!adminId) {
-      return res.status(HTTP_STATUS_CODE.UNAUTHORIZED).json({
-        message: 'Unauthorized'
-      })
-    }
-
-    const { userId } = req.params
-    const result = await employeeScheduleService.resetEmployeeSalaryOverride(userId, adminId)
+    const { businessDate } = req.params
+    await employeeScheduleService.deleteSpecialSalaryDay(businessDate)
     return res.status(HTTP_STATUS_CODE.OK).json({
-      message: 'Bỏ override lương nhân viên thành công',
-      result: toCompactSalaryOverrideResponse(result)
+      message: 'Xóa ngày lương đặc biệt thành công'
     })
   } catch (error) {
     next(error)

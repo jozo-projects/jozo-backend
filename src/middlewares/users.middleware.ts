@@ -351,6 +351,34 @@ export const updateUserValidator = validate(
           options: [Object.values(UserRole)],
           errorMessage: USER_MESSAGES.INVALID_ROLE
         }
+      },
+      probationStartDate: {
+        optional: { options: { nullable: true } },
+        isISO8601: {
+          options: { strict: true, strictSeparator: true },
+          errorMessage: 'probationStartDate không hợp lệ'
+        }
+      },
+      probationEndDate: {
+        optional: { options: { nullable: true } },
+        isISO8601: {
+          options: { strict: true, strictSeparator: true },
+          errorMessage: 'probationEndDate không hợp lệ'
+        }
+      },
+      probationHourlyRate: {
+        optional: { options: { nullable: true } },
+        isFloat: {
+          options: { min: 0 },
+          errorMessage: 'probationHourlyRate phải >= 0'
+        }
+      },
+      probationHolidayMultiplier: {
+        optional: { options: { nullable: true } },
+        isFloat: {
+          options: { min: 0, max: 20 },
+          errorMessage: 'probationHolidayMultiplier phải từ 0 đến 20'
+        }
       }
     },
     ['body']

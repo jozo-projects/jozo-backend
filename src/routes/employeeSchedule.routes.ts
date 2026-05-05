@@ -5,11 +5,13 @@ import {
   approveSchedule,
   createSchedule,
   deleteSchedule,
+  deleteSpecialSalaryDay,
   getEmployeeSalaryConfigs,
   getAllSchedules,
   getSalarySnapshot,
   getMySchedules,
   getScheduleById,
+  listSpecialSalaryDays,
   markAbsent,
   markCompleted,
   overrideEmployeeSalary,
@@ -17,7 +19,8 @@ import {
   syncSalaryFromSnapshot,
   updateSalarySnapshot,
   updateSchedule,
-  updateScheduleStatus
+  updateScheduleStatus,
+  upsertSpecialSalaryDay
 } from '~/controllers/employeeSchedule.controller'
 import { protect } from '~/middlewares/auth.middleware'
 import {
@@ -30,10 +33,11 @@ import {
   checkScheduleOwnership,
   createEmployeeScheduleValidator,
   employeeSalaryUserIdParamValidator,
-  overrideEmployeeSalaryValidator,
+  specialSalaryBusinessDateParamValidator,
   updateSalarySnapshotValidator,
   updateScheduleValidator,
-  updateStatusValidator
+  updateStatusValidator,
+  upsertSpecialSalaryDayValidator
 } from '~/middlewares/employeeSchedule.middleware'
 
 const employeeScheduleRouter = Router()
@@ -105,21 +109,51 @@ employeeScheduleRouter.post('/salary/sync', protect([UserRole.Admin]), syncSalar
 employeeScheduleRouter.get('/salary/employees', protect([UserRole.Admin]), getEmployeeSalaryConfigs)
 
 /**
+ * @route   GET /api/employee-schedules/salary/special-days
+ * @desc    Admin liệt kê ngày lương đặc biệt (optional ?from=&to= YYYY-MM-DD)
+ * @access  Private (Admin only)
+ */
+employeeScheduleRouter.get('/salary/special-days', protect([UserRole.Admin]), listSpecialSalaryDays)
+
+/**
+ * @route   PUT /api/employee-schedules/salary/special-days
+ * @desc    Admin tạo/cập nhật mức lương theo giờ cho một businessDate
+ * @access  Private (Admin only)
+ */
+employeeScheduleRouter.put(
+  '/salary/special-days',
+  protect([UserRole.Admin]),
+  upsertSpecialSalaryDayValidator,
+  upsertSpecialSalaryDay
+)
+
+/**
+ * @route   DELETE /api/employee-schedules/salary/special-days/:businessDate
+ * @desc    Admin xóa cấu hình ngày lương đặc biệt
+ * @access  Private (Admin only)
+ */
+employeeScheduleRouter.delete(
+  '/salary/special-days/:businessDate',
+  protect([UserRole.Admin]),
+  specialSalaryBusinessDateParamValidator,
+  deleteSpecialSalaryDay
+)
+
+/**
  * @route   PUT /api/employee-schedules/salary/employees/:userId
- * @desc    Admin override lương nhân viên
+ * @desc    (Deprecated) Override lương nhân viên — trả 410
  * @access  Private (Admin only)
  */
 employeeScheduleRouter.put(
   '/salary/employees/:userId',
   protect([UserRole.Admin]),
   employeeSalaryUserIdParamValidator,
-  overrideEmployeeSalaryValidator,
   overrideEmployeeSalary
 )
 
 /**
  * @route   DELETE /api/employee-schedules/salary/employees/:userId/override
- * @desc    Admin bỏ override lương nhân viên
+ * @desc    (Deprecated) Bỏ override — trả 410
  * @access  Private (Admin only)
  */
 employeeScheduleRouter.delete(

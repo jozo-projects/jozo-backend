@@ -30,6 +30,7 @@ import { IGameType } from '~/models/schemas/GameType.schema'
 import { IGame } from '~/models/schemas/Game.schema'
 import { EmployeeSalarySnapshot } from '~/models/schemas/EmployeeSalarySnapshot.schema'
 import { EmployeeSalaryConfig } from '~/models/schemas/EmployeeSalaryConfig.schema'
+import { EmployeeSalarySpecialDay } from '~/models/schemas/EmployeeSalarySpecialDay.schema'
 dotenv.config()
 
 // Interface cho Client Booking
@@ -67,6 +68,7 @@ class DatabaseService {
       // Send a ping to confirm a successful connection
       await this.db.command({ ping: 1 })
       console.log('Pinged your deployment. You successfully connected to MongoDB!')
+      await this.db.collection('employee_salary_special_days').createIndex({ businessDate: 1 }, { unique: true })
     } catch (error) {
       console.log('Can not Pinge your deployment. You failed connected to MongoDB!')
       console.error(error)
@@ -154,6 +156,10 @@ class DatabaseService {
 
   get employeeSalaryConfigs(): Collection<EmployeeSalaryConfig> {
     return this.db.collection('employee_salary_configs')
+  }
+
+  get employeeSalarySpecialDays(): Collection<EmployeeSalarySpecialDay> {
+    return this.db.collection('employee_salary_special_days')
   }
 
   get notifications(): Collection<Notification> {

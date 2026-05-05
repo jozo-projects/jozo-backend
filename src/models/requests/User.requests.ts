@@ -41,6 +41,12 @@ export interface UpdateUserRequestBody {
   location?: string
   avatar?: string
   role?: UserRole
+  /** ISO date — xóa thử việc: gửi null cho cả 4 field thử việc */
+  probationStartDate?: string | Date | null
+  probationEndDate?: string | Date | null
+  probationHourlyRate?: number | null
+  /** Hệ số lương ngày lễ khi đang thử việc (vd. 1.5). null = xóa, dùng mặc định backend nếu có thử việc */
+  probationHolidayMultiplier?: number | null
 }
 
 export interface GetUsersQuery {

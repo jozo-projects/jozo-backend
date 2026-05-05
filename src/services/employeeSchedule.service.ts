@@ -12,9 +12,10 @@ import {
   IAdminCreateScheduleBody,
   ICreateEmployeeScheduleBody,
   IGetSchedulesQuery,
-  IOverrideEmployeeSalaryBody,
+  IGetSpecialSalaryDaysQuery,
   IUpdateScheduleBody,
   IUpdateSalarySnapshotBody,
+  IUpsertSpecialSalaryDayBody,
   IUpdateStatusBody
 } from '~/models/requests/EmployeeSchedule.request'
 import { EmployeeSchedule, IEmployeeSalarySnapshotInSchedule } from '~/models/schemas/EmployeeSchedule.schema'
@@ -32,6 +33,14 @@ dayjs.tz.setDefault('Asia/Ho_Chi_Minh')
 export const employeeScheduleEventEmitter = new EventEmitter()
 const DEFAULT_HOURLY_RATE = 25000
 const NIGHT_SHIFT_CUTOFF_HOUR = 6
+const DEFAULT_PROBATION_HOLIDAY_MULTIPLIER = 1.5
+
+type UserProbationFields = {
+  probationStartDate?: Date
+  probationEndDate?: Date
+  probationHourlyRate?: number
+  probationHolidayMultiplier?: number
+}
 
 class EmployeeScheduleService {
   /**
@@ -54,7 +63,7 @@ class EmployeeScheduleService {
 
     const dateObj = dayjs(date).startOf('day').toDate()
     const createdSchedules: EmployeeSchedule[] = []
-    const salarySnapshot = await this.getSalarySnapshotForUser(userId)
+    const salarySnapshot = await this.buildGlobalSalarySnapshotInSchedule()
 
     // Tạo schedule cho mỗi ca
     for (const shiftType of shifts) {
@@ -144,7 +153,7 @@ class EmployeeScheduleService {
 
     const dateObj = dayjs(date).startOf('day').toDate()
     const createdSchedules: EmployeeSchedule[] = []
-    const salarySnapshot = await this.getSalarySnapshotForUser(userId)
+    const salarySnapshot = await this.buildGlobalSalarySnapshotInSchedule()
 
     // Tạo schedule cho mỗi ca
     for (const shiftType of shifts) {
@@ -244,10 +253,48 @@ class EmployeeScheduleService {
 
     // Lấy schedules và sort theo date, shiftType
     const schedules = await databaseService.employeeSchedules.find(query).sort({ date: 1, shiftType: 1 }).toArray()
-    const [overrideSalarySnapshots, fallbackSalarySnapshots] = await Promise.all([
-      this.getOverrideSalarySnapshotsForSchedules(schedules),
-      this.getFallbackSalarySnapshotsForSchedules(schedules)
-    ])
+    const globalSnapshot = this.wrapGlobalSalarySnapshotDoc(await this.ensureGlobalSalarySnapshot())
+    const salaryView: 'compact' | 'full' = filter.salaryView === 'compact' ? 'compact' : 'full'
+
+    const userIdStrings = [...new Set(schedules.map((s) => s.userId.toString()))]
+    const probationUsers = await databaseService.users
+      .find(
+        { _id: { $in: userIdStrings.map((id) => new ObjectId(id)) } },
+        {
+          projection: {
+            probationStartDate: 1,
+            probationEndDate: 1,
+            probationHourlyRate: 1,
+            probationHolidayMultiplier: 1
+          }
+        }
+      )
+      .toArray()
+    const userProbationById = new Map<string, UserProbationFields>(
+      probationUsers.map((u) => [u._id!.toString(), u as unknown as UserProbationFields])
+    )
+
+    const allBusinessDateKeys = new Set<string>()
+    for (const schedule of schedules) {
+      const userProbation = userProbationById.get(schedule.userId.toString())
+      const resolvedSalary = this.resolveEffectiveSalarySnapshot({
+        scheduleSnapshot: schedule.salarySnapshot,
+        globalScheduleSnapshot: globalSnapshot,
+        scheduleDate: schedule.date,
+        user: userProbation
+      })
+      const salarySnapshot = resolvedSalary.salarySnapshot
+      const shiftInfo = this.getShiftInfoFromSnapshot(schedule.shiftType, salarySnapshot, {
+        customStartTime: schedule.customStartTime,
+        customEndTime: schedule.customEndTime
+      })
+      for (const key of this.collectBusinessDateKeysForShift(schedule.date, shiftInfo.startTime, shiftInfo.endTime)) {
+        allBusinessDateKeys.add(key)
+      }
+    }
+
+    const specialByDate = await this.loadSpecialDaysForKeys([...allBusinessDateKeys])
+    const holidayBusinessDates = await this.loadHolidayBusinessDateSet([...allBusinessDateKeys])
 
     // Group by date và populate shift info
     const schedulesByDate: Record<string, any[]> = {}
@@ -265,10 +312,12 @@ class EmployeeScheduleService {
 
     for (const schedule of schedules) {
       const dateKey = dayjs(schedule.date).format('YYYY-MM-DD')
+      const userProbation = userProbationById.get(schedule.userId.toString())
       const resolvedSalary = this.resolveEffectiveSalarySnapshot({
         scheduleSnapshot: schedule.salarySnapshot,
-        overrideSnapshot: overrideSalarySnapshots.get(schedule.userId.toString()) ?? null,
-        fallbackSnapshot: fallbackSalarySnapshots.get(schedule.userId.toString()) ?? null
+        globalScheduleSnapshot: globalSnapshot,
+        scheduleDate: schedule.date,
+        user: userProbation
       })
       const salarySnapshot = resolvedSalary.salarySnapshot
       const shiftInfo = this.getShiftInfoFromSnapshot(schedule.shiftType, salarySnapshot, {
@@ -281,40 +330,54 @@ class EmployeeScheduleService {
         schedule.shiftType,
         schedule.date,
         salarySnapshot,
-        schedule.status
+        schedule.status,
+        resolvedSalary.salarySource,
+        specialByDate,
+        holidayBusinessDates,
+        resolvedSalary.probationHolidayMultiplier
       )
 
-      const scheduleWithInfo = {
-        _id: schedule._id,
-        userId: schedule.userId,
-        userName: schedule.userName,
-        userPhone: schedule.userPhone,
-        date: schedule.date,
-        shiftType: schedule.shiftType,
-        customStartTime: schedule.customStartTime,
-        customEndTime: schedule.customEndTime,
-        shiftInfo,
-        salarySnapshot,
-        salarySource: resolvedSalary.salarySource,
-        salary,
-        status: schedule.status,
-        note: schedule.note,
-        createdBy: schedule.createdBy,
-        createdByName: schedule.createdByName,
-        approvedBy: schedule.approvedBy,
-        approvedByName: schedule.approvedByName,
-        approvedAt: schedule.approvedAt,
-        rejectedBy: schedule.rejectedBy,
-        rejectedByName: schedule.rejectedByName,
-        rejectedAt: schedule.rejectedAt,
-        rejectedReason: schedule.rejectedReason,
-        startedAt: schedule.startedAt,
-        completedAt: schedule.completedAt,
-        markedAbsentBy: schedule.markedAbsentBy,
-        markedAbsentAt: schedule.markedAbsentAt,
-        createdAt: schedule.createdAt,
-        updatedAt: schedule.updatedAt
-      }
+      const scheduleWithInfo = this.applySalaryViewToSchedulePayload(
+        {
+          _id: schedule._id,
+          userId: schedule.userId,
+          userName: schedule.userName,
+          userPhone: schedule.userPhone,
+          date: schedule.date,
+          shiftType: schedule.shiftType,
+          customStartTime: schedule.customStartTime,
+          customEndTime: schedule.customEndTime,
+          shiftInfo,
+          salarySnapshot,
+          salarySource: resolvedSalary.salarySource,
+          salaryResolution: salary.salaryResolution,
+          salary: {
+            hourlyRate: salary.hourlyRate,
+            hours: salary.hours,
+            totalAmount: salary.totalAmount,
+            isPayable: salary.isPayable,
+            hourlyBreakdown: salary.hourlyBreakdown
+          },
+          status: schedule.status,
+          note: schedule.note,
+          createdBy: schedule.createdBy,
+          createdByName: schedule.createdByName,
+          approvedBy: schedule.approvedBy,
+          approvedByName: schedule.approvedByName,
+          approvedAt: schedule.approvedAt,
+          rejectedBy: schedule.rejectedBy,
+          rejectedByName: schedule.rejectedByName,
+          rejectedAt: schedule.rejectedAt,
+          rejectedReason: schedule.rejectedReason,
+          startedAt: schedule.startedAt,
+          completedAt: schedule.completedAt,
+          markedAbsentBy: schedule.markedAbsentBy,
+          markedAbsentAt: schedule.markedAbsentAt,
+          createdAt: schedule.createdAt,
+          updatedAt: schedule.updatedAt
+        },
+        salaryView
+      )
 
       if (!schedulesByDate[dateKey]) {
         schedulesByDate[dateKey] = []
@@ -350,7 +413,7 @@ class EmployeeScheduleService {
   /**
    * Lấy chi tiết một schedule
    */
-  async getScheduleById(id: string) {
+  async getScheduleById(id: string, options?: { salaryView?: 'compact' | 'full' }) {
     if (!ObjectId.isValid(id)) {
       throw new ErrorWithStatus({
         message: EMPLOYEE_SCHEDULE_MESSAGES.SCHEDULE_NOT_FOUND,
@@ -366,15 +429,23 @@ class EmployeeScheduleService {
       })
     }
 
-    // Ưu tiên override hiện tại theo nhân viên khi tính lương hiển thị
-    const [overrideSnapshot, fallbackSnapshot] = await Promise.all([
-      this.getOverrideSalarySnapshotByUserId(schedule.userId.toString()),
-      this.getSalarySnapshotForUser(schedule.userId.toString())
-    ])
+    const globalSnapshot = this.wrapGlobalSalarySnapshotDoc(await this.ensureGlobalSalarySnapshot())
+    const probationUser = await databaseService.users.findOne(
+      { _id: schedule.userId },
+      {
+        projection: {
+          probationStartDate: 1,
+          probationEndDate: 1,
+          probationHourlyRate: 1,
+          probationHolidayMultiplier: 1
+        }
+      }
+    )
     const resolvedSalary = this.resolveEffectiveSalarySnapshot({
       scheduleSnapshot: schedule.salarySnapshot,
-      overrideSnapshot,
-      fallbackSnapshot
+      globalScheduleSnapshot: globalSnapshot,
+      scheduleDate: schedule.date,
+      user: (probationUser as unknown as UserProbationFields) ?? undefined
     })
     const salarySnapshot = resolvedSalary.salarySnapshot
     const shiftInfo = this.getShiftInfoFromSnapshot(schedule.shiftType, salarySnapshot, {
@@ -382,12 +453,44 @@ class EmployeeScheduleService {
       customEndTime: schedule.customEndTime
     })
 
-    return {
-      ...schedule,
+    const businessKeys = this.collectBusinessDateKeysForShift(schedule.date, shiftInfo.startTime, shiftInfo.endTime)
+    const specialByDate = await this.loadSpecialDaysForKeys(businessKeys)
+    const holidayBusinessDates = await this.loadHolidayBusinessDateSet(businessKeys)
+
+    const salary = this.calculateScheduleSalary(
+      shiftInfo.startTime,
+      shiftInfo.endTime,
+      schedule.shiftType,
+      schedule.date,
       salarySnapshot,
-      salarySource: resolvedSalary.salarySource,
-      shiftInfo
-    }
+      schedule.status,
+      resolvedSalary.salarySource,
+      specialByDate,
+      holidayBusinessDates,
+      resolvedSalary.probationHolidayMultiplier
+    )
+
+    const salaryView: 'compact' | 'full' = options?.salaryView === 'compact' ? 'compact' : 'full'
+
+    const payload = this.applySalaryViewToSchedulePayload(
+      {
+        ...schedule,
+        salarySnapshot,
+        salarySource: resolvedSalary.salarySource,
+        salaryResolution: salary.salaryResolution,
+        shiftInfo,
+        salary: {
+          hourlyRate: salary.hourlyRate,
+          hours: salary.hours,
+          totalAmount: salary.totalAmount,
+          isPayable: salary.isPayable,
+          hourlyBreakdown: salary.hourlyBreakdown
+        }
+      },
+      salaryView
+    )
+
+    return payload
   }
 
   /**
@@ -412,7 +515,7 @@ class EmployeeScheduleService {
 
     // Status validation đã được handle ở middleware
     // Admin có thể update bất kỳ, Staff chỉ update được pending/rejected
-    // Cho phép cập nhật note (Staff + Admin), customStartTime/customEndTime/specialHourlyRate (chỉ Admin)
+    // Cho phép cập nhật note (Staff + Admin), customStartTime/customEndTime (chỉ Admin)
 
     const updateData: any = {
       updatedAt: new Date()
@@ -428,37 +531,6 @@ class EmployeeScheduleService {
 
     if (data.customEndTime !== undefined) {
       updateData.customEndTime = data.customEndTime
-    }
-
-    if (data.specialHourlyRate !== undefined) {
-      const currentSnapshot =
-        schedule.salarySnapshot ??
-        ({
-          hourlyRateMap: this.createDefaultHourlyRateMap(DEFAULT_HOURLY_RATE),
-          hourlyShiftMap: this.createDefaultHourlyShiftMap(),
-          source: 'global',
-          syncedFromSnapshotRateMap: this.createDefaultHourlyRateMap(DEFAULT_HOURLY_RATE),
-          syncedFromSnapshotShiftMap: this.createDefaultHourlyShiftMap(),
-          capturedAt: new Date()
-        } as IEmployeeSalarySnapshotInSchedule)
-      const effectiveCustomStartTime = data.customStartTime ?? schedule.customStartTime
-      const effectiveCustomEndTime = data.customEndTime ?? schedule.customEndTime
-      const shiftInfo = this.getShiftInfoFromSnapshot(schedule.shiftType, currentSnapshot, {
-        customStartTime: effectiveCustomStartTime,
-        customEndTime: effectiveCustomEndTime
-      })
-
-      updateData.salarySnapshot = {
-        ...currentSnapshot,
-        hourlyRateMap: this.applySpecialHourlyRateToRange(
-          currentSnapshot.hourlyRateMap,
-          shiftInfo.startTime,
-          shiftInfo.endTime,
-          data.specialHourlyRate
-        ),
-        source: 'manual',
-        capturedAt: new Date()
-      }
     }
 
     const result = await databaseService.employeeSchedules.updateOne({ _id: new ObjectId(id) }, { $set: updateData })
@@ -729,7 +801,7 @@ class EmployeeScheduleService {
   /**
    * Admin mark completed (manual)
    */
-  async markCompleted(id: string, adminId: string) {
+  async markCompleted(id: string, _adminId: string) {
     if (!ObjectId.isValid(id)) {
       throw new ErrorWithStatus({
         message: EMPLOYEE_SCHEDULE_MESSAGES.SCHEDULE_NOT_FOUND,
@@ -846,22 +918,11 @@ class EmployeeScheduleService {
       return {
         totalStaffs: 0,
         syncedCount: 0,
-        overrideKeptCount: 0,
         snapshotHourlyRateMap: snapshot.hourlyRateMap
       }
     }
 
-    const existingConfigs = await databaseService.employeeSalaryConfigs
-      .find({
-        userId: { $in: staffs.map((staff) => staff._id) }
-      })
-      .toArray()
-    const configMap = new Map(existingConfigs.map((config) => [config.userId.toString(), config]))
-
     const operations = staffs.map((staff) => {
-      const existing = configMap.get(staff._id.toString())
-      const shouldKeepOverride = existing?.isOverride === true
-
       return {
         updateOne: {
           filter: { userId: staff._id },
@@ -871,11 +932,9 @@ class EmployeeScheduleService {
               userPhone: staff.phone_number,
               snapshotHourlyRateMap: this.normalizeHourlyRateMap(snapshot.hourlyRateMap),
               snapshotHourlyShiftMap: this.normalizeHourlyShiftMap(snapshot.hourlyShiftMap),
-              hourlyRateMap: shouldKeepOverride
-                ? this.normalizeHourlyRateMap(existing?.hourlyRateMap ?? snapshot.hourlyRateMap)
-                : this.normalizeHourlyRateMap(snapshot.hourlyRateMap),
+              hourlyRateMap: this.normalizeHourlyRateMap(snapshot.hourlyRateMap),
               hourlyShiftMap: this.normalizeHourlyShiftMap(snapshot.hourlyShiftMap),
-              isOverride: shouldKeepOverride,
+              isOverride: false,
               syncedAt: now,
               updatedBy: new ObjectId(adminId),
               updatedByName: admin?.name,
@@ -895,12 +954,9 @@ class EmployeeScheduleService {
       await databaseService.employeeSalaryConfigs.bulkWrite(operations)
     }
 
-    const overrideKeptCount = existingConfigs.filter((config) => config.isOverride).length
-
     return {
       totalStaffs: staffs.length,
       syncedCount: staffs.length,
-      overrideKeptCount,
       snapshotHourlyRateMap: snapshot.hourlyRateMap
     }
   }
@@ -933,83 +989,43 @@ class EmployeeScheduleService {
     })
   }
 
-  /**
-   * Override lương theo nhân viên
-   */
-  async overrideEmployeeSalary(userId: string, adminId: string, data: IOverrideEmployeeSalaryBody) {
-    const [snapshot, admin, staff] = await Promise.all([
-      this.ensureGlobalSalarySnapshot(),
-      databaseService.users.findOne({ _id: new ObjectId(adminId) }),
-      databaseService.users.findOne({ _id: new ObjectId(userId), role: UserRole.Staff })
-    ])
-
-    if (!staff) {
-      throw new ErrorWithStatus({
-        message: 'Nhân viên không tồn tại',
-        status: HTTP_STATUS_CODE.NOT_FOUND
-      })
+  async listSpecialSalaryDays(query: IGetSpecialSalaryDaysQuery) {
+    const filter: Record<string, unknown> = {}
+    if (query.from !== undefined && query.to !== undefined) {
+      filter.businessDate = { $gte: query.from, $lte: query.to }
+    } else if (query.from !== undefined) {
+      filter.businessDate = { $gte: query.from }
+    } else if (query.to !== undefined) {
+      filter.businessDate = { $lte: query.to }
     }
-
-    const now = new Date()
-    const normalizedRateMap = this.resolveHourlyRateMapPayload(data)
-    await databaseService.employeeSalaryConfigs.updateOne(
-      { userId: staff._id },
-      {
-        $set: {
-          userId: staff._id,
-          userName: staff.name,
-          userPhone: staff.phone_number,
-          hourlyRateMap: normalizedRateMap,
-          hourlyShiftMap: this.normalizeHourlyShiftMap(snapshot.hourlyShiftMap),
-          isOverride: true,
-          snapshotHourlyRateMap: this.normalizeHourlyRateMap(snapshot.hourlyRateMap),
-          snapshotHourlyShiftMap: this.normalizeHourlyShiftMap(snapshot.hourlyShiftMap),
-          syncedAt: now,
-          updatedBy: new ObjectId(adminId),
-          updatedByName: admin?.name,
-          updatedAt: now
-        },
-        $setOnInsert: {
-          createdAt: now
-        }
-      },
-      { upsert: true }
-    )
-
-    return databaseService.employeeSalaryConfigs.findOne({ userId: staff._id })
+    return databaseService.employeeSalarySpecialDays.find(filter).sort({ businessDate: 1 }).toArray()
   }
 
-  /**
-   * Bỏ override của nhân viên, quay về global snapshot
-   */
-  async resetEmployeeSalaryOverride(userId: string, adminId: string) {
-    const [snapshot, admin, staff] = await Promise.all([
-      this.ensureGlobalSalarySnapshot(),
-      databaseService.users.findOne({ _id: new ObjectId(adminId) }),
-      databaseService.users.findOne({ _id: new ObjectId(userId), role: UserRole.Staff })
-    ])
-
-    if (!staff) {
+  async upsertSpecialSalaryDay(adminId: string, data: IUpsertSpecialSalaryDayBody) {
+    const parsed = dayjs(data.businessDate)
+    if (!parsed.isValid() || parsed.format('YYYY-MM-DD') !== data.businessDate) {
       throw new ErrorWithStatus({
-        message: 'Nhân viên không tồn tại',
-        status: HTTP_STATUS_CODE.NOT_FOUND
+        message: 'businessDate phải là chuỗi YYYY-MM-DD hợp lệ',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
+    }
+
+    const admin = await databaseService.users.findOne({ _id: new ObjectId(adminId) })
+    const normalizedMap = this.normalizePartialHourlyAmountMap(data.hourlyAmountMap)
+    if (Object.keys(normalizedMap).length === 0) {
+      throw new ErrorWithStatus({
+        message: 'hourlyAmountMap cần có ít nhất một giờ hợp lệ (0–23)',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
       })
     }
 
     const now = new Date()
-    await databaseService.employeeSalaryConfigs.updateOne(
-      { userId: staff._id },
+    await databaseService.employeeSalarySpecialDays.updateOne(
+      { businessDate: data.businessDate },
       {
         $set: {
-          userId: staff._id,
-          userName: staff.name,
-          userPhone: staff.phone_number,
-          hourlyRateMap: this.normalizeHourlyRateMap(snapshot.hourlyRateMap),
-          hourlyShiftMap: this.normalizeHourlyShiftMap(snapshot.hourlyShiftMap),
-          isOverride: false,
-          snapshotHourlyRateMap: this.normalizeHourlyRateMap(snapshot.hourlyRateMap),
-          snapshotHourlyShiftMap: this.normalizeHourlyShiftMap(snapshot.hourlyShiftMap),
-          syncedAt: now,
+          businessDate: data.businessDate,
+          hourlyAmountMap: normalizedMap,
           updatedBy: new ObjectId(adminId),
           updatedByName: admin?.name,
           updatedAt: now
@@ -1021,7 +1037,25 @@ class EmployeeScheduleService {
       { upsert: true }
     )
 
-    return databaseService.employeeSalaryConfigs.findOne({ userId: staff._id })
+    return databaseService.employeeSalarySpecialDays.findOne({ businessDate: data.businessDate })
+  }
+
+  async deleteSpecialSalaryDay(businessDate: string) {
+    const parsed = dayjs(businessDate)
+    if (!parsed.isValid() || parsed.format('YYYY-MM-DD') !== businessDate) {
+      throw new ErrorWithStatus({
+        message: 'businessDate phải là chuỗi YYYY-MM-DD hợp lệ',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
+    }
+
+    const result = await databaseService.employeeSalarySpecialDays.deleteOne({ businessDate })
+    if (result.deletedCount === 0) {
+      throw new ErrorWithStatus({
+        message: 'Không tìm thấy cấu hình lương ngày đặc biệt',
+        status: HTTP_STATUS_CODE.NOT_FOUND
+      })
+    }
   }
 
   /**
@@ -1242,170 +1276,24 @@ class EmployeeScheduleService {
     return fallback
   }
 
-  /**
-   * Helper: lấy salary snapshot hiệu lực của user tại thời điểm tạo lịch
-   */
-  private async getSalarySnapshotForUser(userId: string): Promise<IEmployeeSalarySnapshotInSchedule> {
-    const [snapshot, config] = await Promise.all([
-      this.ensureGlobalSalarySnapshot(),
-      databaseService.employeeSalaryConfigs.findOne({ userId: new ObjectId(userId) })
-    ])
+  private async buildGlobalSalarySnapshotInSchedule(): Promise<IEmployeeSalarySnapshotInSchedule> {
+    return this.wrapGlobalSalarySnapshotDoc(await this.ensureGlobalSalarySnapshot())
+  }
 
+  private wrapGlobalSalarySnapshotDoc(snapshot: {
+    hourlyRateMap: HourlyRateMap
+    hourlyShiftMap: HourlyShiftMap
+  }): IEmployeeSalarySnapshotInSchedule {
     const now = new Date()
-    if (config?.isOverride) {
-      return {
-        hourlyRateMap: this.normalizeHourlyRateMap(config.hourlyRateMap ?? snapshot.hourlyRateMap),
-        hourlyShiftMap: this.normalizeHourlyShiftMap(config.hourlyShiftMap ?? snapshot.hourlyShiftMap),
-        source: 'override',
-        syncedFromSnapshotRateMap: this.normalizeHourlyRateMap(snapshot.hourlyRateMap),
-        syncedFromSnapshotShiftMap: this.normalizeHourlyShiftMap(snapshot.hourlyShiftMap),
-        capturedAt: now
-      }
-    }
-
+    const hourlyRateMap = this.normalizeHourlyRateMap(snapshot.hourlyRateMap)
+    const hourlyShiftMap = this.normalizeHourlyShiftMap(snapshot.hourlyShiftMap)
     return {
-      hourlyRateMap: this.normalizeHourlyRateMap(config?.hourlyRateMap ?? snapshot.hourlyRateMap),
-      hourlyShiftMap: this.normalizeHourlyShiftMap(config?.hourlyShiftMap ?? snapshot.hourlyShiftMap),
+      hourlyRateMap,
+      hourlyShiftMap,
       source: 'global',
-      syncedFromSnapshotRateMap: this.normalizeHourlyRateMap(snapshot.hourlyRateMap),
-      syncedFromSnapshotShiftMap: this.normalizeHourlyShiftMap(snapshot.hourlyShiftMap),
+      syncedFromSnapshotRateMap: hourlyRateMap,
+      syncedFromSnapshotShiftMap: hourlyShiftMap,
       capturedAt: now
-    }
-  }
-
-  private async getFallbackSalarySnapshotsForSchedules(schedules: EmployeeSchedule[]) {
-    const schedulesMissingSnapshot = schedules.filter((schedule) => !schedule.salarySnapshot)
-    if (schedulesMissingSnapshot.length === 0) {
-      return new Map<string, IEmployeeSalarySnapshotInSchedule>()
-    }
-
-    const [snapshot, configs] = await Promise.all([
-      this.ensureGlobalSalarySnapshot(),
-      databaseService.employeeSalaryConfigs
-        .find({
-          userId: {
-            $in: [...new Set(schedulesMissingSnapshot.map((schedule) => schedule.userId.toString()))].map(
-              (userId) => new ObjectId(userId)
-            )
-          }
-        })
-        .toArray()
-    ])
-
-    const configMap = new Map(configs.map((config) => [config.userId.toString(), config]))
-    const fallbackMap = new Map<string, IEmployeeSalarySnapshotInSchedule>()
-    const now = new Date()
-
-    for (const schedule of schedulesMissingSnapshot) {
-      const userId = schedule.userId.toString()
-      if (fallbackMap.has(userId)) {
-        continue
-      }
-
-      const config = configMap.get(userId)
-      fallbackMap.set(userId, {
-        hourlyRateMap: this.normalizeHourlyRateMap(config?.hourlyRateMap ?? snapshot.hourlyRateMap),
-        hourlyShiftMap: this.normalizeHourlyShiftMap(config?.hourlyShiftMap ?? snapshot.hourlyShiftMap),
-        source: config?.isOverride ? 'override' : 'global',
-        syncedFromSnapshotRateMap: this.normalizeHourlyRateMap(config?.snapshotHourlyRateMap ?? snapshot.hourlyRateMap),
-        syncedFromSnapshotShiftMap: this.normalizeHourlyShiftMap(
-          config?.snapshotHourlyShiftMap ?? snapshot.hourlyShiftMap
-        ),
-        capturedAt: config?.syncedAt ?? now
-      })
-    }
-
-    return fallbackMap
-  }
-
-  private async getOverrideSalarySnapshotsForSchedules(schedules: EmployeeSchedule[]) {
-    if (schedules.length === 0) {
-      return new Map<string, IEmployeeSalarySnapshotInSchedule>()
-    }
-
-    const uniqueUserIds = [...new Set(schedules.map((schedule) => schedule.userId.toString()))]
-    const configs = await databaseService.employeeSalaryConfigs
-      .find({
-        userId: { $in: uniqueUserIds.map((userId) => new ObjectId(userId)) },
-        isOverride: true
-      })
-      .toArray()
-
-    const overrideMap = new Map<string, IEmployeeSalarySnapshotInSchedule>()
-    for (const config of configs) {
-      overrideMap.set(config.userId.toString(), {
-        hourlyRateMap: this.normalizeHourlyRateMap(config.hourlyRateMap),
-        hourlyShiftMap: this.normalizeHourlyShiftMap(config.hourlyShiftMap),
-        source: 'override',
-        syncedFromSnapshotRateMap: this.normalizeHourlyRateMap(config.snapshotHourlyRateMap),
-        syncedFromSnapshotShiftMap: this.normalizeHourlyShiftMap(config.snapshotHourlyShiftMap),
-        capturedAt: config.syncedAt ?? new Date()
-      })
-    }
-
-    return overrideMap
-  }
-
-  private async getOverrideSalarySnapshotByUserId(userId: string): Promise<IEmployeeSalarySnapshotInSchedule | null> {
-    const config = await databaseService.employeeSalaryConfigs.findOne({
-      userId: new ObjectId(userId),
-      isOverride: true
-    })
-
-    if (!config) {
-      return null
-    }
-
-    return {
-      hourlyRateMap: this.normalizeHourlyRateMap(config.hourlyRateMap),
-      hourlyShiftMap: this.normalizeHourlyShiftMap(config.hourlyShiftMap),
-      source: 'override',
-      syncedFromSnapshotRateMap: this.normalizeHourlyRateMap(config.snapshotHourlyRateMap),
-      syncedFromSnapshotShiftMap: this.normalizeHourlyShiftMap(config.snapshotHourlyShiftMap),
-      capturedAt: config.syncedAt ?? new Date()
-    }
-  }
-
-  private resolveEffectiveSalarySnapshot({
-    scheduleSnapshot,
-    overrideSnapshot,
-    fallbackSnapshot
-  }: {
-    scheduleSnapshot?: IEmployeeSalarySnapshotInSchedule
-    overrideSnapshot?: IEmployeeSalarySnapshotInSchedule | null
-    fallbackSnapshot?: IEmployeeSalarySnapshotInSchedule | null
-  }): { salarySnapshot: IEmployeeSalarySnapshotInSchedule; salarySource: 'special' | 'override' | 'snapshot' | 'fallback' } {
-    if (scheduleSnapshot?.source === 'manual') {
-      return {
-        salarySnapshot: scheduleSnapshot,
-        salarySource: 'special'
-      }
-    }
-
-    if (overrideSnapshot) {
-      return {
-        salarySnapshot: overrideSnapshot,
-        salarySource: 'override'
-      }
-    }
-
-    if (fallbackSnapshot) {
-      return {
-        salarySnapshot: fallbackSnapshot,
-        salarySource: 'fallback'
-      }
-    }
-
-    if (scheduleSnapshot) {
-      return {
-        salarySnapshot: scheduleSnapshot,
-        salarySource: 'snapshot'
-      }
-    }
-
-    return {
-      salarySnapshot: this.createDefaultSalarySnapshot(),
-      salarySource: 'fallback'
     }
   }
 
@@ -1420,27 +1308,243 @@ class EmployeeScheduleService {
     }
   }
 
+  private collectBusinessDateKeysForShift(scheduleDate: Date, startTime: string, endTime: string): string[] {
+    const [startHour, startMinute] = startTime.split(':').map(Number)
+    const [endHour, endMinute] = endTime.split(':').map(Number)
+    const startTotalMinutes = startHour * 60 + startMinute
+    let endTotalMinutes = endHour * 60 + endMinute
+    if (endTotalMinutes <= startTotalMinutes) {
+      endTotalMinutes += 24 * 60
+    }
+
+    const scheduleDay = dayjs(scheduleDate).startOf('day')
+    const keys = new Set<string>()
+    for (let cursor = startTotalMinutes; cursor < endTotalMinutes; ) {
+      const normalizedMinute = cursor % (24 * 60)
+      const hour = Math.floor(normalizedMinute / 60)
+      const nextHourCursor = Math.min(Math.floor(cursor / 60) * 60 + 60, endTotalMinutes)
+      const dateOffset = Math.floor(cursor / (24 * 60))
+      const blockDate = scheduleDay.add(dateOffset, 'day')
+      const businessDate = hour < NIGHT_SHIFT_CUTOFF_HOUR ? blockDate.subtract(1, 'day') : blockDate
+      keys.add(businessDate.format('YYYY-MM-DD'))
+      cursor = nextHourCursor
+    }
+    return [...keys]
+  }
+
+  private normalizePartialHourlyAmountMap(map: Record<string, number>): Record<string, number> {
+    const out: Record<string, number> = {}
+    for (const [key, value] of Object.entries(map)) {
+      const hourNum = Number(key)
+      if (!Number.isInteger(hourNum) || hourNum < 0 || hourNum > 23) {
+        continue
+      }
+      if (typeof value !== 'number' || Number.isNaN(value) || value < 0) {
+        continue
+      }
+      out[hourNum.toString()] = value
+    }
+    return out
+  }
+
+  private async loadSpecialDaysForKeys(businessDateKeys: string[]) {
+    const map = new Map<string, Record<string, number>>()
+    if (businessDateKeys.length === 0) {
+      return map
+    }
+
+    const uniqueKeys = [...new Set(businessDateKeys)]
+    const docs = await databaseService.employeeSalarySpecialDays.find({ businessDate: { $in: uniqueKeys } }).toArray()
+
+    for (const doc of docs) {
+      map.set(doc.businessDate, this.normalizePartialHourlyAmountMap(doc.hourlyAmountMap))
+    }
+    return map
+  }
+
+  private async loadHolidayBusinessDateSet(businessDateKeys: string[]) {
+    const set = new Set<string>()
+    if (businessDateKeys.length === 0) {
+      return set
+    }
+
+    const unique = [...new Set(businessDateKeys)].sort()
+    const min = dayjs(unique[0]).startOf('day').toDate()
+    const max = dayjs(unique[unique.length - 1]).endOf('day').toDate()
+    const holidays = await databaseService.holidays.find({ date: { $gte: min, $lte: max } }).toArray()
+    for (const h of holidays) {
+      set.add(dayjs(h.date).tz('Asia/Ho_Chi_Minh').format('YYYY-MM-DD'))
+    }
+    return set
+  }
+
+  private isScheduleDateInProbationWindow(scheduleDate: Date, user: UserProbationFields | undefined): boolean {
+    if (!user?.probationStartDate || !user?.probationEndDate) {
+      return false
+    }
+    if (typeof user.probationHourlyRate !== 'number' || Number.isNaN(user.probationHourlyRate) || user.probationHourlyRate < 0) {
+      return false
+    }
+
+    const d = dayjs(scheduleDate).tz('Asia/Ho_Chi_Minh').format('YYYY-MM-DD')
+    const start = dayjs(user.probationStartDate).tz('Asia/Ho_Chi_Minh').format('YYYY-MM-DD')
+    const end = dayjs(user.probationEndDate).tz('Asia/Ho_Chi_Minh').format('YYYY-MM-DD')
+    return d >= start && d <= end
+  }
+
+  private effectiveProbationHolidayMultiplier(user: UserProbationFields | undefined): number {
+    if (
+      user &&
+      typeof user.probationHolidayMultiplier === 'number' &&
+      !Number.isNaN(user.probationHolidayMultiplier) &&
+      user.probationHolidayMultiplier >= 0
+    ) {
+      return user.probationHolidayMultiplier
+    }
+    return DEFAULT_PROBATION_HOLIDAY_MULTIPLIER
+  }
+
+  private buildProbationSalarySnapshot(
+    probationHourlyRate: number,
+    globalScheduleSnapshot: IEmployeeSalarySnapshotInSchedule
+  ): IEmployeeSalarySnapshotInSchedule {
+    const now = new Date()
+    const hourlyRateMap = this.createDefaultHourlyRateMap(probationHourlyRate)
+    const hourlyShiftMap = this.normalizeHourlyShiftMap(globalScheduleSnapshot.hourlyShiftMap)
+    return {
+      hourlyRateMap,
+      hourlyShiftMap,
+      source: 'global',
+      syncedFromSnapshotRateMap: hourlyRateMap,
+      syncedFromSnapshotShiftMap: hourlyShiftMap,
+      capturedAt: now
+    }
+  }
+
+  private resolveEffectiveSalarySnapshot({
+    scheduleSnapshot,
+    globalScheduleSnapshot,
+    scheduleDate,
+    user
+  }: {
+    scheduleSnapshot?: IEmployeeSalarySnapshotInSchedule
+    globalScheduleSnapshot: IEmployeeSalarySnapshotInSchedule
+    scheduleDate: Date
+    user?: UserProbationFields | null
+  }): {
+    salarySnapshot: IEmployeeSalarySnapshotInSchedule
+    salarySource: 'legacy_manual' | 'probation' | 'global'
+    probationHolidayMultiplier: number | null
+  } {
+    if (scheduleSnapshot?.source === 'manual') {
+      return {
+        salarySnapshot: this.normalizeScheduleSalarySnapshot(scheduleSnapshot),
+        salarySource: 'legacy_manual',
+        probationHolidayMultiplier: null
+      }
+    }
+
+    if (this.isScheduleDateInProbationWindow(scheduleDate, user ?? undefined)) {
+      const rate = user!.probationHourlyRate!
+      return {
+        salarySnapshot: this.buildProbationSalarySnapshot(rate, globalScheduleSnapshot),
+        salarySource: 'probation',
+        probationHolidayMultiplier: this.effectiveProbationHolidayMultiplier(user ?? undefined)
+      }
+    }
+
+    return {
+      salarySnapshot: globalScheduleSnapshot,
+      salarySource: 'global',
+      probationHolidayMultiplier: null
+    }
+  }
+
+  private applySalaryViewToSchedulePayload(payload: Record<string, unknown>, salaryView: 'compact' | 'full') {
+    if (salaryView !== 'compact') {
+      return payload
+    }
+
+    const salary = payload.salary as
+      | {
+          hourlyRate: number
+          hours: number
+          totalAmount: number
+          isPayable: boolean
+          hourlyBreakdown?: unknown
+        }
+      | undefined
+    const snap = payload.salarySnapshot as IEmployeeSalarySnapshotInSchedule | undefined
+
+    return {
+      ...payload,
+      salary: salary
+        ? {
+            hourlyRate: salary.hourlyRate,
+            hours: salary.hours,
+            totalAmount: salary.totalAmount,
+            isPayable: salary.isPayable
+          }
+        : salary,
+      salarySnapshot: snap
+        ? {
+            source: snap.source,
+            capturedAt: snap.capturedAt
+          }
+        : snap
+    }
+  }
+
   private calculateScheduleSalary(
     startTime: string,
     endTime: string,
     _shiftType: ShiftType,
     scheduleDate: Date,
     salarySnapshot: IEmployeeSalarySnapshotInSchedule,
-    status: EmployeeScheduleStatus
+    status: EmployeeScheduleStatus,
+    salarySource: 'legacy_manual' | 'probation' | 'global',
+    specialByDate: Map<string, Record<string, number>>,
+    holidayBusinessDates: Set<string>,
+    probationHolidayMultiplier: number | null
   ) {
     const normalizedSnapshot = this.normalizeScheduleSalarySnapshot(salarySnapshot)
-    const hourlyBreakdown = this.buildHourlyBreakdown(startTime, endTime, scheduleDate, normalizedSnapshot)
+    const hourlyBreakdown = this.buildHourlyBreakdown(
+      startTime,
+      endTime,
+      scheduleDate,
+      normalizedSnapshot,
+      specialByDate,
+      salarySource,
+      holidayBusinessDates,
+      probationHolidayMultiplier
+    )
     const totalAmount = hourlyBreakdown.reduce((total, item) => total + item.amount, 0)
     const payableMinutes = hourlyBreakdown.reduce((total, item) => total + (item.rate > 0 ? item.minutes : 0), 0)
     const payableHours = payableMinutes / 60
     const isPayable = status === EmployeeScheduleStatus.Completed
+
+    const specialBusinessDates = [
+      ...new Set(hourlyBreakdown.filter((row) => row.basis === 'special').map((row) => row.businessDate))
+    ]
+
+    const probationHolidayBoostSegments = hourlyBreakdown.filter((row) => row.holidayBoostApplied).length
 
     return {
       hourlyRate: payableHours > 0 ? Math.round((totalAmount / payableHours) * 100) / 100 : 0,
       hours: payableHours,
       totalAmount,
       isPayable,
-      hourlyBreakdown
+      hourlyBreakdown,
+      salaryResolution: {
+        mode: salarySource,
+        specialBusinessDates,
+        ...(salarySource === 'probation' && probationHolidayMultiplier !== null
+          ? {
+              probationHolidayMultiplier,
+              probationHolidayBoostSegments
+            }
+          : {})
+      }
     }
   }
 
@@ -1461,7 +1565,11 @@ class EmployeeScheduleService {
     startTime: string,
     endTime: string,
     scheduleDate: Date,
-    salarySnapshot: IEmployeeSalarySnapshotInSchedule
+    salarySnapshot: IEmployeeSalarySnapshotInSchedule,
+    specialByDate: Map<string, Record<string, number>>,
+    salarySource: 'legacy_manual' | 'probation' | 'global',
+    holidayBusinessDates: Set<string>,
+    probationHolidayMultiplier: number | null
   ) {
     const [startHour, startMinute] = startTime.split(':').map(Number)
     const [endHour, endMinute] = endTime.split(':').map(Number)
@@ -1472,7 +1580,15 @@ class EmployeeScheduleService {
     }
 
     const scheduleDay = dayjs(scheduleDate).startOf('day')
-    const breakdown: Array<{ hour: number; minutes: number; rate: number; amount: number }> = []
+    const breakdown: Array<{
+      hour: number
+      minutes: number
+      rate: number
+      amount: number
+      businessDate: string
+      basis: 'global' | 'special'
+      holidayBoostApplied?: boolean
+    }> = []
     for (let cursor = startTotalMinutes; cursor < endTotalMinutes; ) {
       const normalizedMinute = cursor % (24 * 60)
       const hour = Math.floor(normalizedMinute / 60)
@@ -1483,13 +1599,48 @@ class EmployeeScheduleService {
       const businessDate = hour < NIGHT_SHIFT_CUTOFF_HOUR ? blockDate.subtract(1, 'day') : blockDate
       const isSameBusinessDay = businessDate.isSame(scheduleDay, 'day')
       const hourKey = hour.toString()
+      const businessDateKey = businessDate.format('YYYY-MM-DD')
+      const specialMap = specialByDate.get(businessDateKey)
+      const specialRate = specialMap?.[hourKey]
+      const hasSpecial = typeof specialRate === 'number' && !Number.isNaN(specialRate) && specialRate >= 0
+
       const assignedShift = salarySnapshot.hourlyShiftMap[hourKey] ?? null
       const rate = salarySnapshot.hourlyRateMap[hourKey] ?? 0
       const hasAssignedShift = assignedShift !== null
-      const payableRate = isSameBusinessDay && hasAssignedShift ? rate : 0
+
+      let payableRate = 0
+      let basis: 'global' | 'special' = 'global'
+      if (hasSpecial) {
+        payableRate = isSameBusinessDay ? specialRate : 0
+        basis = 'special'
+      } else {
+        payableRate = isSameBusinessDay && hasAssignedShift ? rate : 0
+      }
+
+      let holidayBoostApplied = false
+      if (
+        salarySource === 'probation' &&
+        probationHolidayMultiplier !== null &&
+        probationHolidayMultiplier > 0 &&
+        basis === 'global' &&
+        holidayBusinessDates.has(businessDateKey) &&
+        payableRate > 0
+      ) {
+        payableRate = Math.round(payableRate * probationHolidayMultiplier * 100) / 100
+        holidayBoostApplied = true
+      }
+
       const amount = (minutes / 60) * payableRate
 
-      breakdown.push({ hour, minutes, rate: payableRate, amount: Math.round(amount) })
+      breakdown.push({
+        hour,
+        minutes,
+        rate: payableRate,
+        amount: Math.round(amount),
+        businessDate: businessDateKey,
+        basis,
+        holidayBoostApplied
+      })
       cursor = nextHourCursor
     }
 
@@ -1606,31 +1757,6 @@ class EmployeeScheduleService {
       startTime: `${startHour.toString().padStart(2, '0')}:00`,
       endTime: `${endHour.toString().padStart(2, '0')}:00`
     }
-  }
-
-  private applySpecialHourlyRateToRange(
-    currentMap: HourlyRateMap,
-    startTime: string,
-    endTime: string,
-    specialHourlyRate: number
-  ) {
-    const updatedMap = this.normalizeHourlyRateMap(currentMap)
-    const [startHour, startMinute] = startTime.split(':').map(Number)
-    const [endHour, endMinute] = endTime.split(':').map(Number)
-    const startTotalMinutes = startHour * 60 + startMinute
-    let endTotalMinutes = endHour * 60 + endMinute
-    if (endTotalMinutes <= startTotalMinutes) {
-      endTotalMinutes += 24 * 60
-    }
-
-    for (let cursor = startTotalMinutes; cursor < endTotalMinutes; ) {
-      const hour = Math.floor((cursor % (24 * 60)) / 60)
-      updatedMap[hour.toString()] = specialHourlyRate
-      const nextHourCursor = Math.min(Math.floor(cursor / 60) * 60 + 60, endTotalMinutes)
-      cursor = nextHourCursor
-    }
-
-    return updatedMap
   }
 
   private normalizeScheduleSalarySnapshot(

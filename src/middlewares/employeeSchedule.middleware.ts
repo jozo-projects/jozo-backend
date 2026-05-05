@@ -45,6 +45,28 @@ const validateHourlyShiftMap = (value: unknown) => {
   return true
 }
 
+const validatePartialHourlyAmountMap = (value: unknown) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('hourlyAmountMap phải là object')
+  }
+  const amountMap = value as Record<string, unknown>
+  let defined = 0
+  for (const [hourKey, hourAmount] of Object.entries(amountMap)) {
+    const hourNum = Number(hourKey)
+    if (!Number.isInteger(hourNum) || hourNum < 0 || hourNum > 23) {
+      throw new Error(`hourlyAmountMap key phải là số nguyên 0–23, nhận được: ${hourKey}`)
+    }
+    if (typeof hourAmount !== 'number' || Number.isNaN(hourAmount) || hourAmount < 0) {
+      throw new Error(`hourlyAmountMap[${hourKey}] phải là số >= 0`)
+    }
+    defined++
+  }
+  if (defined === 0) {
+    throw new Error('hourlyAmountMap cần ít nhất một giờ')
+  }
+  return true
+}
+
 /**
  * Validate request body khi tạo employee schedule (staff tự đăng ký)
  */
@@ -202,29 +224,19 @@ export const updateScheduleValidator = validate(
       isString: {
         errorMessage: 'Custom end time phải là chuỗi'
       }
-    },
-    specialHourlyRate: {
-      optional: true,
-      isFloat: {
-        options: {
-          gt: 0
-        },
-        errorMessage: 'Special hourly rate phải là số lớn hơn 0'
-      }
     }
   })
 )
 
 /**
- * Middleware kiểm tra chỉ admin mới có thể update thời gian hoặc lương riêng theo ca
+ * Middleware kiểm tra chỉ admin mới có thể update thời gian
  */
 export const checkCanUpdateTime = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { customStartTime, customEndTime, specialHourlyRate } = req.body
+    const { customStartTime, customEndTime } = req.body
     const userId = req.decoded_authorization?.user_id
 
-    // Nếu không update time/salary đặc quyền thì không cần check
-    if (customStartTime === undefined && customEndTime === undefined && specialHourlyRate === undefined) {
+    if (customStartTime === undefined && customEndTime === undefined) {
       return next()
     }
 
@@ -240,11 +252,11 @@ export const checkCanUpdateTime = async (req: Request, res: Response, next: Next
     // Lấy user để check role
     const user = await databaseService.users.findOne({ _id: new ObjectId(userId) })
 
-    // Chỉ admin mới được update thời gian và lương riêng theo ca
+    // Chỉ admin mới được update thời gian ca
     if (user?.role !== 'admin') {
       return next(
         new ErrorWithStatus({
-          message: 'Chỉ admin mới có thể cập nhật thời gian hoặc lương riêng cho ca làm việc',
+          message: 'Chỉ admin mới có thể cập nhật thời gian cho ca làm việc',
           status: HTTP_STATUS_CODE.FORBIDDEN
         })
       )
@@ -381,37 +393,49 @@ export const updateSalarySnapshotValidator = validate(
 )
 
 /**
- * Validate request body khi override lương nhân viên
+ * Validate body PUT /salary/special-days
  */
-export const overrideEmployeeSalaryValidator = validate(
+export const upsertSpecialSalaryDayValidator = validate(
   checkSchema({
-    hourlyRateMap: {
-      optional: true,
+    businessDate: {
+      notEmpty: {
+        errorMessage: 'businessDate không được rỗng'
+      },
+      isString: true,
       custom: {
-        options: (value: unknown, { req }) => {
-          if (value !== undefined) {
-            return validateHourlyRateMap(value)
-          }
-          const legacyRate = req.body?.hourlyRate
-          if (typeof legacyRate !== 'number' || Number.isNaN(legacyRate) || legacyRate < 0) {
-            throw new Error('Cần truyền hourlyRateMap hoặc hourlyRate >= 0')
+        options: (value: string) => {
+          const parsed = dayjs(value)
+          if (!parsed.isValid() || parsed.format('YYYY-MM-DD') !== value) {
+            throw new Error('businessDate phải là chuỗi YYYY-MM-DD hợp lệ')
           }
           return true
         }
       }
     },
-    hourlyRate: {
-      optional: true,
-      isFloat: {
-        options: {
-          min: 0
-        },
-        errorMessage: 'hourlyRate phải là số >= 0'
+    hourlyAmountMap: {
+      notEmpty: {
+        errorMessage: 'hourlyAmountMap không được rỗng'
       },
       custom: {
-        options: (value: unknown, { req }) => {
-          if (req.body?.hourlyRateMap === undefined && value === undefined) {
-            throw new Error('Cần truyền hourlyRateMap hoặc hourlyRate >= 0')
+        options: (value: unknown) => validatePartialHourlyAmountMap(value)
+      }
+    }
+  })
+)
+
+export const specialSalaryBusinessDateParamValidator = validate(
+  checkSchema({
+    businessDate: {
+      in: ['params'],
+      notEmpty: {
+        errorMessage: 'businessDate không được rỗng'
+      },
+      isString: true,
+      custom: {
+        options: (value: string) => {
+          const parsed = dayjs(value)
+          if (!parsed.isValid() || parsed.format('YYYY-MM-DD') !== value) {
+            throw new Error('businessDate phải là chuỗi YYYY-MM-DD hợp lệ')
           }
           return true
         }
@@ -421,7 +445,7 @@ export const overrideEmployeeSalaryValidator = validate(
 )
 
 /**
- * Validate params khi update/reset override lương nhân viên
+ * Validate params khi update/reset override lương nhân viên (deprecated — endpoint trả 410)
  */
 export const employeeSalaryUserIdParamValidator = validate(
   checkSchema({

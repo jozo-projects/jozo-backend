@@ -26,6 +26,12 @@ export interface IUser {
   tier?: MembershipTier
   created_at?: Date
   updated_at?: Date
+  /** Thử việc: khoảng ngày (theo lịch VN) + mức lương/giờ; ngày lễ trong khoảng = rate × probationHolidayMultiplier (mặc định 1.5 nếu không set) */
+  probationStartDate?: Date
+  probationEndDate?: Date
+  probationHourlyRate?: number
+  /** Hệ số nhân khi ngày làm thuộc holiday collection (chỉ áp khi đang thử việc). Mặc định backend: 1.5 */
+  probationHolidayMultiplier?: number
 }
 
 // Tại sao lại dùng class thay vì dùng interface để đại diện schema
@@ -59,6 +65,11 @@ export class User {
   lifetimePoint: number
   tier: MembershipTier
 
+  probationStartDate?: Date
+  probationEndDate?: Date
+  probationHourlyRate?: number
+  probationHolidayMultiplier?: number
+
   // khai báo contructor với thuộc tính trên
   constructor(user: IUser) {
     const date = new Date()
@@ -87,5 +98,10 @@ export class User {
     this.availablePoint = user.availablePoint || 0
     this.lifetimePoint = user.lifetimePoint || 0
     this.tier = user.tier || MembershipTier.Member
+
+    this.probationStartDate = user.probationStartDate
+    this.probationEndDate = user.probationEndDate
+    this.probationHourlyRate = user.probationHourlyRate
+    this.probationHolidayMultiplier = user.probationHolidayMultiplier
   }
 }

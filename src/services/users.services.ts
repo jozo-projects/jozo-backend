@@ -199,6 +199,29 @@ class UsersServices {
       updated_at: new Date()
     }
 
+    if (payload.probationStartDate !== undefined) {
+      updateData.probationStartDate =
+        payload.probationStartDate === null ? null : new Date(payload.probationStartDate as string | Date)
+    }
+    if (payload.probationEndDate !== undefined) {
+      updateData.probationEndDate =
+        payload.probationEndDate === null ? null : new Date(payload.probationEndDate as string | Date)
+    }
+    if (payload.probationHourlyRate !== undefined) {
+      updateData.probationHourlyRate = payload.probationHourlyRate
+    }
+    if (payload.probationHolidayMultiplier !== undefined) {
+      updateData.probationHolidayMultiplier = payload.probationHolidayMultiplier
+    }
+
+    if (
+      updateData.probationStartDate &&
+      updateData.probationEndDate &&
+      new Date(updateData.probationStartDate).getTime() > new Date(updateData.probationEndDate).getTime()
+    ) {
+      throw new Error('probationStartDate phải trước hoặc bằng probationEndDate')
+    }
+
     // Convert date_of_birth to Date if provided
     if (payload.date_of_birth) {
       updateData.date_of_birth = new Date(payload.date_of_birth)

@@ -27,7 +27,6 @@ export interface IUpdateScheduleBody {
   note?: string
   customStartTime?: string // HH:mm - Override default start time (Admin only)
   customEndTime?: string // HH:mm - Override default end time (Admin only)
-  specialHourlyRate?: number // Chỉnh lương riêng cho ca này (Admin only)
 }
 
 // Request body khi approve/reject lịch
@@ -64,4 +63,17 @@ export interface IGetSchedulesQuery {
   status?: EmployeeScheduleStatus
   shiftType?: ShiftType
   filterType?: 'day' | 'week' | 'month'
+  /** compact: bỏ hourlyBreakdown và map lương chi tiết */
+  salaryView?: 'compact' | 'full'
+}
+
+/** CRUD ngày lương đặc biệt (theo businessDate) */
+export interface IUpsertSpecialSalaryDayBody {
+  businessDate: string // YYYY-MM-DD
+  hourlyAmountMap: Record<string, number>
+}
+
+export interface IGetSpecialSalaryDaysQuery {
+  from?: string
+  to?: string
 }
