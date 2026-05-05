@@ -17,9 +17,7 @@ async function main() {
   let n = 0
   for await (const doc of cursor) {
     const userId = (doc.userId as ObjectId).toString()
-    const businessDate = doc.date
-      ? new Date(doc.date).toISOString().slice(0, 10)
-      : 'unknown-date'
+    const businessDate = doc.date ? new Date(doc.date).toISOString().slice(0, 10) : 'unknown-date'
     const hourlyAmountMap = doc.salarySnapshot?.hourlyRateMap as Record<string, number> | undefined
     if (!hourlyAmountMap || businessDate === 'unknown-date') continue
 

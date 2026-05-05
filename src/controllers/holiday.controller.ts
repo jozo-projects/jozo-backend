@@ -8,13 +8,22 @@ import { holidayService } from '~/services/holiday.service'
 dayjs.extend(utc)
 dayjs.extend(timezone)
 
+const isValidSalaryMultiplier = (v: unknown): v is number =>
+  typeof v === 'number' && !Number.isNaN(v) && v >= 0.1 && v <= 20
+
 export const addHoliday = async (req: Request, res: Response) => {
   try {
-    const { date, name, description } = req.body
+    const { date, name, description, salaryMultiplier } = req.body
 
     if (!date || !name) {
       return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
         message: 'Date and name are required'
+      })
+    }
+
+    if (salaryMultiplier !== undefined && salaryMultiplier !== null && !isValidSalaryMultiplier(salaryMultiplier)) {
+      return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
+        message: 'salaryMultiplier phải là số từ 0.1 đến 20 (hoặc null để bỏ)'
       })
     }
 
@@ -28,7 +37,8 @@ export const addHoliday = async (req: Request, res: Response) => {
     const holiday = await holidayService.addHoliday({
       date: new Date(date),
       name,
-      description
+      description,
+      ...(salaryMultiplier !== undefined ? { salaryMultiplier: salaryMultiplier === null ? null : salaryMultiplier } : {})
     })
 
     return res.status(HTTP_STATUS_CODE.CREATED).json({
@@ -61,11 +71,18 @@ export const getHolidays = async (req: Request, res: Response) => {
 export const updateHoliday = async (req: Request, res: Response) => {
   try {
     const { id } = req.params
-    const { date, name, description } = req.body
+    const { date, name, description, salaryMultiplier } = req.body
 
-    if (!date && !name && !description) {
+    const hasSalaryMult = salaryMultiplier !== undefined
+    if (!date && !name && description === undefined && !hasSalaryMult) {
       return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
-        message: 'At least one field (date, name, description) is required'
+        message: 'Cần ít nhất một trường: date, name, description hoặc salaryMultiplier'
+      })
+    }
+
+    if (salaryMultiplier !== undefined && salaryMultiplier !== null && !isValidSalaryMultiplier(salaryMultiplier)) {
+      return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
+        message: 'salaryMultiplier phải là số từ 0.1 đến 20 (hoặc null để bỏ)'
       })
     }
 
@@ -79,7 +96,10 @@ export const updateHoliday = async (req: Request, res: Response) => {
     const updateData: any = {}
     if (date) updateData.date = new Date(date)
     if (name) updateData.name = name
-    if (description) updateData.description = description
+    if (description !== undefined) updateData.description = description
+    if (hasSalaryMult) {
+      updateData.salaryMultiplier = salaryMultiplier === null ? null : salaryMultiplier
+    }
 
     const holiday = await holidayService.updateHoliday(id, updateData)
 

@@ -1,27 +1,27 @@
+import dayjs from 'dayjs'
+import isoWeek from 'dayjs/plugin/isoWeek'
+import timezone from 'dayjs/plugin/timezone'
+import utc from 'dayjs/plugin/utc'
 import { EventEmitter } from 'events'
 import { ObjectId } from 'mongodb'
-import dayjs from 'dayjs'
-import utc from 'dayjs/plugin/utc'
-import timezone from 'dayjs/plugin/timezone'
-import isoWeek from 'dayjs/plugin/isoWeek'
-import { EmployeeScheduleStatus, ShiftType, UserRole, NotificationType } from '~/constants/enum'
+import { EmployeeScheduleStatus, NotificationType, ShiftType, UserRole } from '~/constants/enum'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { EMPLOYEE_SCHEDULE_MESSAGES, NOTIFICATION_MESSAGES } from '~/constants/messages'
+import { getShiftInfo } from '~/constants/shiftDefaults'
 import { ErrorWithStatus } from '~/models/Error'
 import {
   IAdminCreateScheduleBody,
   ICreateEmployeeScheduleBody,
   IGetSchedulesQuery,
   IGetSpecialSalaryDaysQuery,
-  IUpdateScheduleBody,
   IUpdateSalarySnapshotBody,
-  IUpsertSpecialSalaryDayBody,
-  IUpdateStatusBody
+  IUpdateScheduleBody,
+  IUpdateStatusBody,
+  IUpsertSpecialSalaryDayBody
 } from '~/models/requests/EmployeeSchedule.request'
-import { EmployeeSchedule, IEmployeeSalarySnapshotInSchedule } from '~/models/schemas/EmployeeSchedule.schema'
 import { HourlyRateMap, HourlyShiftMap } from '~/models/schemas/EmployeeSalarySnapshot.schema'
+import { EmployeeSchedule, IEmployeeSalarySnapshotInSchedule } from '~/models/schemas/EmployeeSchedule.schema'
 import databaseService from './database.service'
-import { getShiftInfo } from '~/constants/shiftDefaults'
 import notificationService from './notification.service'
 
 dayjs.extend(utc)
@@ -33,7 +33,6 @@ dayjs.tz.setDefault('Asia/Ho_Chi_Minh')
 export const employeeScheduleEventEmitter = new EventEmitter()
 const DEFAULT_HOURLY_RATE = 25000
 const NIGHT_SHIFT_CUTOFF_HOUR = 6
-const DEFAULT_PROBATION_HOLIDAY_MULTIPLIER = 1.5
 
 type UserProbationFields = {
   probationStartDate?: Date
@@ -294,7 +293,7 @@ class EmployeeScheduleService {
     }
 
     const specialByDate = await this.loadSpecialDaysForKeys([...allBusinessDateKeys])
-    const holidayBusinessDates = await this.loadHolidayBusinessDateSet([...allBusinessDateKeys])
+    const holidayPayConfig = await this.loadHolidayPayConfigByBusinessDate([...allBusinessDateKeys])
 
     // Group by date và populate shift info
     const schedulesByDate: Record<string, any[]> = {}
@@ -333,7 +332,7 @@ class EmployeeScheduleService {
         schedule.status,
         resolvedSalary.salarySource,
         specialByDate,
-        holidayBusinessDates,
+        holidayPayConfig,
         resolvedSalary.probationHolidayMultiplier
       )
 
@@ -455,7 +454,7 @@ class EmployeeScheduleService {
 
     const businessKeys = this.collectBusinessDateKeysForShift(schedule.date, shiftInfo.startTime, shiftInfo.endTime)
     const specialByDate = await this.loadSpecialDaysForKeys(businessKeys)
-    const holidayBusinessDates = await this.loadHolidayBusinessDateSet(businessKeys)
+    const holidayPayConfig = await this.loadHolidayPayConfigByBusinessDate(businessKeys)
 
     const salary = this.calculateScheduleSalary(
       shiftInfo.startTime,
@@ -466,7 +465,7 @@ class EmployeeScheduleService {
       schedule.status,
       resolvedSalary.salarySource,
       specialByDate,
-      holidayBusinessDates,
+      holidayPayConfig,
       resolvedSalary.probationHolidayMultiplier
     )
 
@@ -1362,27 +1361,43 @@ class EmployeeScheduleService {
     return map
   }
 
-  private async loadHolidayBusinessDateSet(businessDateKeys: string[]) {
-    const set = new Set<string>()
+  /**
+   * businessDate (YYYY-MM-DD) có trong map ⇔ có bản ghi holiday tương ứng.
+   * Value: hệ số trên holiday (null = chưa cấu trên document — NV thử việc chỉ fallback nếu user có probationHolidayMultiplier > 0).
+   */
+  private async loadHolidayPayConfigByBusinessDate(businessDateKeys: string[]) {
+    const map = new Map<string, number | null>()
     if (businessDateKeys.length === 0) {
-      return set
+      return map
     }
 
     const unique = [...new Set(businessDateKeys)].sort()
     const min = dayjs(unique[0]).startOf('day').toDate()
-    const max = dayjs(unique[unique.length - 1]).endOf('day').toDate()
+    const max = dayjs(unique[unique.length - 1])
+      .endOf('day')
+      .toDate()
     const holidays = await databaseService.holidays.find({ date: { $gte: min, $lte: max } }).toArray()
     for (const h of holidays) {
-      set.add(dayjs(h.date).tz('Asia/Ho_Chi_Minh').format('YYYY-MM-DD'))
+      const key = dayjs(h.date).tz('Asia/Ho_Chi_Minh').format('YYYY-MM-DD')
+      const raw = (h as { salaryMultiplier?: number | null }).salaryMultiplier
+      if (typeof raw === 'number' && !Number.isNaN(raw) && raw > 0) {
+        map.set(key, raw)
+      } else {
+        map.set(key, null)
+      }
     }
-    return set
+    return map
   }
 
   private isScheduleDateInProbationWindow(scheduleDate: Date, user: UserProbationFields | undefined): boolean {
     if (!user?.probationStartDate || !user?.probationEndDate) {
       return false
     }
-    if (typeof user.probationHourlyRate !== 'number' || Number.isNaN(user.probationHourlyRate) || user.probationHourlyRate < 0) {
+    if (
+      typeof user.probationHourlyRate !== 'number' ||
+      Number.isNaN(user.probationHourlyRate) ||
+      user.probationHourlyRate < 0
+    ) {
       return false
     }
 
@@ -1392,16 +1407,17 @@ class EmployeeScheduleService {
     return d >= start && d <= end
   }
 
-  private effectiveProbationHolidayMultiplier(user: UserProbationFields | undefined): number {
+  /** Chỉ trả giá trị đã lưu trên user (FE/config), không mặc định số cố định ở BE. */
+  private probationHolidayMultiplierFromUser(user: UserProbationFields | undefined): number | null {
     if (
       user &&
       typeof user.probationHolidayMultiplier === 'number' &&
       !Number.isNaN(user.probationHolidayMultiplier) &&
-      user.probationHolidayMultiplier >= 0
+      user.probationHolidayMultiplier > 0
     ) {
       return user.probationHolidayMultiplier
     }
-    return DEFAULT_PROBATION_HOLIDAY_MULTIPLIER
+    return null
   }
 
   private buildProbationSalarySnapshot(
@@ -1449,7 +1465,7 @@ class EmployeeScheduleService {
       return {
         salarySnapshot: this.buildProbationSalarySnapshot(rate, globalScheduleSnapshot),
         salarySource: 'probation',
-        probationHolidayMultiplier: this.effectiveProbationHolidayMultiplier(user ?? undefined)
+        probationHolidayMultiplier: this.probationHolidayMultiplierFromUser(user ?? undefined)
       }
     }
 
@@ -1504,7 +1520,7 @@ class EmployeeScheduleService {
     status: EmployeeScheduleStatus,
     salarySource: 'legacy_manual' | 'probation' | 'global',
     specialByDate: Map<string, Record<string, number>>,
-    holidayBusinessDates: Set<string>,
+    holidayPayConfig: Map<string, number | null>,
     probationHolidayMultiplier: number | null
   ) {
     const normalizedSnapshot = this.normalizeScheduleSalarySnapshot(salarySnapshot)
@@ -1515,7 +1531,7 @@ class EmployeeScheduleService {
       normalizedSnapshot,
       specialByDate,
       salarySource,
-      holidayBusinessDates,
+      holidayPayConfig,
       probationHolidayMultiplier
     )
     const totalAmount = hourlyBreakdown.reduce((total, item) => total + item.amount, 0)
@@ -1527,7 +1543,7 @@ class EmployeeScheduleService {
       ...new Set(hourlyBreakdown.filter((row) => row.basis === 'special').map((row) => row.businessDate))
     ]
 
-    const probationHolidayBoostSegments = hourlyBreakdown.filter((row) => row.holidayBoostApplied).length
+    const holidayBoostSegments = hourlyBreakdown.filter((row) => row.holidayBoostApplied).length
 
     return {
       hourlyRate: payableHours > 0 ? Math.round((totalAmount / payableHours) * 100) / 100 : 0,
@@ -1538,12 +1554,8 @@ class EmployeeScheduleService {
       salaryResolution: {
         mode: salarySource,
         specialBusinessDates,
-        ...(salarySource === 'probation' && probationHolidayMultiplier !== null
-          ? {
-              probationHolidayMultiplier,
-              probationHolidayBoostSegments
-            }
-          : {})
+        ...(holidayBoostSegments > 0 ? { holidayBoostSegments } : {}),
+        ...(salarySource === 'probation' && probationHolidayMultiplier !== null ? { probationHolidayMultiplier } : {})
       }
     }
   }
@@ -1568,7 +1580,7 @@ class EmployeeScheduleService {
     salarySnapshot: IEmployeeSalarySnapshotInSchedule,
     specialByDate: Map<string, Record<string, number>>,
     salarySource: 'legacy_manual' | 'probation' | 'global',
-    holidayBusinessDates: Set<string>,
+    holidayPayConfig: Map<string, number | null>,
     probationHolidayMultiplier: number | null
   ) {
     const [startHour, startMinute] = startTime.split(':').map(Number)
@@ -1588,6 +1600,7 @@ class EmployeeScheduleService {
       businessDate: string
       basis: 'global' | 'special'
       holidayBoostApplied?: boolean
+      holidayPayFactor?: number
     }> = []
     for (let cursor = startTotalMinutes; cursor < endTotalMinutes; ) {
       const normalizedMinute = cursor % (24 * 60)
@@ -1618,16 +1631,24 @@ class EmployeeScheduleService {
       }
 
       let holidayBoostApplied = false
-      if (
-        salarySource === 'probation' &&
-        probationHolidayMultiplier !== null &&
-        probationHolidayMultiplier > 0 &&
-        basis === 'global' &&
-        holidayBusinessDates.has(businessDateKey) &&
-        payableRate > 0
-      ) {
-        payableRate = Math.round(payableRate * probationHolidayMultiplier * 100) / 100
-        holidayBoostApplied = true
+      let holidayPayFactor: number | undefined
+      const holidayEntry = holidayPayConfig.get(businessDateKey)
+      if (holidayEntry !== undefined && basis === 'global' && payableRate > 0) {
+        let factor: number | null = null
+        if (typeof holidayEntry === 'number' && holidayEntry > 0) {
+          factor = holidayEntry
+        } else if (
+          salarySource === 'probation' &&
+          probationHolidayMultiplier !== null &&
+          probationHolidayMultiplier > 0
+        ) {
+          factor = probationHolidayMultiplier
+        }
+        if (factor !== null && factor !== 1) {
+          payableRate = Math.round(payableRate * factor * 100) / 100
+          holidayBoostApplied = true
+          holidayPayFactor = factor
+        }
       }
 
       const amount = (minutes / 60) * payableRate
@@ -1639,7 +1660,8 @@ class EmployeeScheduleService {
         amount: Math.round(amount),
         businessDate: businessDateKey,
         basis,
-        holidayBoostApplied
+        holidayBoostApplied,
+        ...(holidayPayFactor !== undefined ? { holidayPayFactor } : {})
       })
       cursor = nextHourCursor
     }

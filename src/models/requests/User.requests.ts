@@ -45,7 +45,7 @@ export interface UpdateUserRequestBody {
   probationStartDate?: string | Date | null
   probationEndDate?: string | Date | null
   probationHourlyRate?: number | null
-  /** Hệ số lương ngày lễ khi đang thử việc (vd. 1.5). null = xóa, dùng mặc định backend nếu có thử việc */
+  /** Hệ số lương ngày lễ khi đang thử việc nếu holiday chưa gán salaryMultiplier (vd. 1.5). null = xóa; BE không gán số mặc định. */
   probationHolidayMultiplier?: number | null
 }
 

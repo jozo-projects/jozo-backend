@@ -26,11 +26,11 @@ export interface IUser {
   tier?: MembershipTier
   created_at?: Date
   updated_at?: Date
-  /** Thử việc: khoảng ngày (theo lịch VN) + mức lương/giờ; ngày lễ trong khoảng = rate × probationHolidayMultiplier (mặc định 1.5 nếu không set) */
+  /** Thử việc: khoảng ngày (theo lịch VN) + mức lương/giờ; ngày lễ: ưu tiên salaryMultiplier trên holiday, không thì rate × probationHolidayMultiplier nếu field này được cấu hình (FE). */
   probationStartDate?: Date
   probationEndDate?: Date
   probationHourlyRate?: number
-  /** Hệ số nhân khi ngày làm thuộc holiday collection (chỉ áp khi đang thử việc). Mặc định backend: 1.5 */
+  /** Hệ số nhân ngày lễ khi đang thử việc và holiday chưa có salaryMultiplier (do FE cấu hình). */
   probationHolidayMultiplier?: number
 }
 
