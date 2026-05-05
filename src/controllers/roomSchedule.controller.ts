@@ -1,15 +1,14 @@
+import dayjs from 'dayjs'
+import timezone from 'dayjs/plugin/timezone'
+import utc from 'dayjs/plugin/utc'
 import { NextFunction, Request, Response } from 'express'
+import { type ParamsDictionary } from 'express-serve-static-core'
 import { RoomScheduleStatus } from '~/constants/enum'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { ROOM_SCHEDULE_MESSAGES } from '~/constants/messages'
-import { roomScheduleService } from '~/services/roomSchedule.service'
-import { type ParamsDictionary } from 'express-serve-static-core'
 import { IRoomScheduleRequestBody, IRoomScheduleRequestQuery } from '~/models/requests/RoomSchedule.request'
-import dayjs from 'dayjs'
-import utc from 'dayjs/plugin/utc'
-import timezone from 'dayjs/plugin/timezone'
-import { ObjectId } from 'mongodb'
 import { BookingSource } from '~/models/schemas/RoomSchdedule.schema'
+import { roomScheduleService } from '~/services/roomSchedule.service'
 
 dayjs.extend(utc)
 dayjs.extend(timezone)

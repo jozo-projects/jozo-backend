@@ -15,6 +15,40 @@ import {
 import employeeScheduleService from '~/services/employeeSchedule.service'
 import { getShiftInfo } from '~/constants/shiftDefaults'
 
+const getUniformHourlyRate = (hourlyRateMap?: Record<string, number>) => {
+  if (!hourlyRateMap) {
+    return null
+  }
+
+  const rates = Object.values(hourlyRateMap)
+  if (rates.length === 0) {
+    return null
+  }
+
+  const firstRate = rates[0]
+  return rates.every((rate) => rate === firstRate) ? firstRate : null
+}
+
+const toCompactSalaryOverrideResponse = (config: any) => {
+  if (!config) {
+    return null
+  }
+
+  const uniformHourlyRate = getUniformHourlyRate(config.hourlyRateMap)
+
+  return {
+    userId: config.userId,
+    userName: config.userName,
+    userPhone: config.userPhone,
+    isOverride: config.isOverride,
+    hourlyRate: uniformHourlyRate,
+    hourlyRateMap: uniformHourlyRate === null ? config.hourlyRateMap : undefined,
+    syncedAt: config.syncedAt,
+    updatedAt: config.updatedAt,
+    updatedByName: config.updatedByName
+  }
+}
+
 /**
  * Nhân viên tự đăng ký lịch
  * POST /api/employee-schedules
@@ -462,7 +496,7 @@ export const overrideEmployeeSalary = async (
     const result = await employeeScheduleService.overrideEmployeeSalary(userId, adminId, req.body)
     return res.status(HTTP_STATUS_CODE.OK).json({
       message: 'Override lương nhân viên thành công',
-      result
+      result: toCompactSalaryOverrideResponse(result)
     })
   } catch (error) {
     next(error)
@@ -486,7 +520,7 @@ export const resetEmployeeSalaryOverride = async (req: Request, res: Response, n
     const result = await employeeScheduleService.resetEmployeeSalaryOverride(userId, adminId)
     return res.status(HTTP_STATUS_CODE.OK).json({
       message: 'Bỏ override lương nhân viên thành công',
-      result
+      result: toCompactSalaryOverrideResponse(result)
     })
   } catch (error) {
     next(error)

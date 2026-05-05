@@ -244,7 +244,10 @@ class EmployeeScheduleService {
 
     // Lấy schedules và sort theo date, shiftType
     const schedules = await databaseService.employeeSchedules.find(query).sort({ date: 1, shiftType: 1 }).toArray()
-    const fallbackSalarySnapshots = await this.getFallbackSalarySnapshotsForSchedules(schedules)
+    const [overrideSalarySnapshots, fallbackSalarySnapshots] = await Promise.all([
+      this.getOverrideSalarySnapshotsForSchedules(schedules),
+      this.getFallbackSalarySnapshotsForSchedules(schedules)
+    ])
 
     // Group by date và populate shift info
     const schedulesByDate: Record<string, any[]> = {}
@@ -262,10 +265,12 @@ class EmployeeScheduleService {
 
     for (const schedule of schedules) {
       const dateKey = dayjs(schedule.date).format('YYYY-MM-DD')
-      const salarySnapshot =
-        schedule.salarySnapshot ??
-        fallbackSalarySnapshots.get(schedule.userId.toString()) ??
-        this.createDefaultSalarySnapshot()
+      const resolvedSalary = this.resolveEffectiveSalarySnapshot({
+        scheduleSnapshot: schedule.salarySnapshot,
+        overrideSnapshot: overrideSalarySnapshots.get(schedule.userId.toString()) ?? null,
+        fallbackSnapshot: fallbackSalarySnapshots.get(schedule.userId.toString()) ?? null
+      })
+      const salarySnapshot = resolvedSalary.salarySnapshot
       const shiftInfo = this.getShiftInfoFromSnapshot(schedule.shiftType, salarySnapshot, {
         customStartTime: schedule.customStartTime,
         customEndTime: schedule.customEndTime
@@ -290,6 +295,7 @@ class EmployeeScheduleService {
         customEndTime: schedule.customEndTime,
         shiftInfo,
         salarySnapshot,
+        salarySource: resolvedSalary.salarySource,
         salary,
         status: schedule.status,
         note: schedule.note,
@@ -360,8 +366,17 @@ class EmployeeScheduleService {
       })
     }
 
-    // Populate shift info
-    const salarySnapshot = schedule.salarySnapshot ?? this.createDefaultSalarySnapshot()
+    // Ưu tiên override hiện tại theo nhân viên khi tính lương hiển thị
+    const [overrideSnapshot, fallbackSnapshot] = await Promise.all([
+      this.getOverrideSalarySnapshotByUserId(schedule.userId.toString()),
+      this.getSalarySnapshotForUser(schedule.userId.toString())
+    ])
+    const resolvedSalary = this.resolveEffectiveSalarySnapshot({
+      scheduleSnapshot: schedule.salarySnapshot,
+      overrideSnapshot,
+      fallbackSnapshot
+    })
+    const salarySnapshot = resolvedSalary.salarySnapshot
     const shiftInfo = this.getShiftInfoFromSnapshot(schedule.shiftType, salarySnapshot, {
       customStartTime: schedule.customStartTime,
       customEndTime: schedule.customEndTime
@@ -370,6 +385,7 @@ class EmployeeScheduleService {
     return {
       ...schedule,
       salarySnapshot,
+      salarySource: resolvedSalary.salarySource,
       shiftInfo
     }
   }
@@ -425,9 +441,11 @@ class EmployeeScheduleService {
           syncedFromSnapshotShiftMap: this.createDefaultHourlyShiftMap(),
           capturedAt: new Date()
         } as IEmployeeSalarySnapshotInSchedule)
-      const shiftInfo = this.getShiftInfoFromSnapshot(schedule.shiftType, schedule.salarySnapshot, {
-        customStartTime: schedule.customStartTime,
-        customEndTime: schedule.customEndTime
+      const effectiveCustomStartTime = data.customStartTime ?? schedule.customStartTime
+      const effectiveCustomEndTime = data.customEndTime ?? schedule.customEndTime
+      const shiftInfo = this.getShiftInfoFromSnapshot(schedule.shiftType, currentSnapshot, {
+        customStartTime: effectiveCustomStartTime,
+        customEndTime: effectiveCustomEndTime
       })
 
       updateData.salarySnapshot = {
@@ -1298,6 +1316,97 @@ class EmployeeScheduleService {
     }
 
     return fallbackMap
+  }
+
+  private async getOverrideSalarySnapshotsForSchedules(schedules: EmployeeSchedule[]) {
+    if (schedules.length === 0) {
+      return new Map<string, IEmployeeSalarySnapshotInSchedule>()
+    }
+
+    const uniqueUserIds = [...new Set(schedules.map((schedule) => schedule.userId.toString()))]
+    const configs = await databaseService.employeeSalaryConfigs
+      .find({
+        userId: { $in: uniqueUserIds.map((userId) => new ObjectId(userId)) },
+        isOverride: true
+      })
+      .toArray()
+
+    const overrideMap = new Map<string, IEmployeeSalarySnapshotInSchedule>()
+    for (const config of configs) {
+      overrideMap.set(config.userId.toString(), {
+        hourlyRateMap: this.normalizeHourlyRateMap(config.hourlyRateMap),
+        hourlyShiftMap: this.normalizeHourlyShiftMap(config.hourlyShiftMap),
+        source: 'override',
+        syncedFromSnapshotRateMap: this.normalizeHourlyRateMap(config.snapshotHourlyRateMap),
+        syncedFromSnapshotShiftMap: this.normalizeHourlyShiftMap(config.snapshotHourlyShiftMap),
+        capturedAt: config.syncedAt ?? new Date()
+      })
+    }
+
+    return overrideMap
+  }
+
+  private async getOverrideSalarySnapshotByUserId(userId: string): Promise<IEmployeeSalarySnapshotInSchedule | null> {
+    const config = await databaseService.employeeSalaryConfigs.findOne({
+      userId: new ObjectId(userId),
+      isOverride: true
+    })
+
+    if (!config) {
+      return null
+    }
+
+    return {
+      hourlyRateMap: this.normalizeHourlyRateMap(config.hourlyRateMap),
+      hourlyShiftMap: this.normalizeHourlyShiftMap(config.hourlyShiftMap),
+      source: 'override',
+      syncedFromSnapshotRateMap: this.normalizeHourlyRateMap(config.snapshotHourlyRateMap),
+      syncedFromSnapshotShiftMap: this.normalizeHourlyShiftMap(config.snapshotHourlyShiftMap),
+      capturedAt: config.syncedAt ?? new Date()
+    }
+  }
+
+  private resolveEffectiveSalarySnapshot({
+    scheduleSnapshot,
+    overrideSnapshot,
+    fallbackSnapshot
+  }: {
+    scheduleSnapshot?: IEmployeeSalarySnapshotInSchedule
+    overrideSnapshot?: IEmployeeSalarySnapshotInSchedule | null
+    fallbackSnapshot?: IEmployeeSalarySnapshotInSchedule | null
+  }): { salarySnapshot: IEmployeeSalarySnapshotInSchedule; salarySource: 'special' | 'override' | 'snapshot' | 'fallback' } {
+    if (scheduleSnapshot?.source === 'manual') {
+      return {
+        salarySnapshot: scheduleSnapshot,
+        salarySource: 'special'
+      }
+    }
+
+    if (overrideSnapshot) {
+      return {
+        salarySnapshot: overrideSnapshot,
+        salarySource: 'override'
+      }
+    }
+
+    if (fallbackSnapshot) {
+      return {
+        salarySnapshot: fallbackSnapshot,
+        salarySource: 'fallback'
+      }
+    }
+
+    if (scheduleSnapshot) {
+      return {
+        salarySnapshot: scheduleSnapshot,
+        salarySource: 'snapshot'
+      }
+    }
+
+    return {
+      salarySnapshot: this.createDefaultSalarySnapshot(),
+      salarySource: 'fallback'
+    }
   }
 
   private createDefaultSalarySnapshot(): IEmployeeSalarySnapshotInSchedule {
