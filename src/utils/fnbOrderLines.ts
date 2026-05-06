@@ -156,13 +156,22 @@ export function applyLegacyMapDelta(
   return next
 }
 
-export function appendCartLines(current: FNBOrder, cart: FNBOrder): FNBOrder {
+export interface AppendCartLinesResult {
+  mergedOrder: FNBOrder
+  appendedLineIds: string[]
+}
+
+export function appendCartLines(current: FNBOrder, cart: FNBOrder): AppendCartLinesResult {
   const base = [...current.lines]
+  const appendedLineIds: string[] = []
   for (const line of cart.lines) {
     const sanitized = sanitizeLine({ ...line, lineId: newFnbLineId() })
-    if (sanitized) base.push(sanitized)
+    if (sanitized) {
+      base.push(sanitized)
+      appendedLineIds.push(sanitized.lineId)
+    }
   }
-  return { lines: base }
+  return { mergedOrder: { lines: base }, appendedLineIds }
 }
 
 export function orderFromSetPayload(raw: unknown): FNBOrder {

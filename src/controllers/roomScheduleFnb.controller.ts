@@ -85,7 +85,7 @@ export const submitClientCart = async (req: Request, res: Response, next: NextFu
 
     const cartNorm = normalizeFnbOrder(cart)
     const currentNorm = currentOrder?.order ? normalizeFnbOrder(currentOrder.order) : emptyFnbOrder()
-    const mergedOrder = appendCartLines(currentNorm, cartNorm)
+    const mergedOrder = appendCartLines(currentNorm, cartNorm).mergedOrder
 
     const cartByItem = aggregateQuantitiesByItemId(cartNorm)
     const inventoryUpdates: Array<{ itemId: string; delta: number; item: any; isVariant: boolean }> = []

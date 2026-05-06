@@ -495,7 +495,7 @@ class FnbOrderService {
       }
       let next = currentNorm
       if (Array.isArray(p.lines) && p.lines.length > 0) {
-        next = appendCartLines(next, normalizeFnbOrder({ lines: p.lines }))
+        next = appendCartLines(next, normalizeFnbOrder({ lines: p.lines })).mergedOrder
       }
       if (p.drinks && typeof p.drinks === 'object' && Object.keys(p.drinks).length > 0) {
         next = applyLegacyMapDelta(next, p.drinks, undefined)

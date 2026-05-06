@@ -32,3 +32,17 @@ export const setCoffeeSessionOrderValidator = validate(
     }
   })
 )
+
+export const markCoffeeSessionOrderBatchServedValidator = validate(
+  checkSchema({
+    batchId: {
+      in: ['params'],
+      notEmpty: {
+        errorMessage: 'batchId is required'
+      },
+      isUUID: {
+        errorMessage: 'batchId must be a valid UUID'
+      }
+    }
+  })
+)

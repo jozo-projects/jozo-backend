@@ -38,6 +38,19 @@ export interface CoffeeSessionOrderHistory {
   orderTotalsSnapshot?: ICoffeeSessionOrderTotals
 }
 
+export type CoffeeSessionOrderBatchStatus = 'pending' | 'served'
+
+export interface ICoffeeSessionOrderBatch {
+  batchId: string
+  status: CoffeeSessionOrderBatchStatus
+  submittedAt: Date
+  servedAt?: Date
+  servedBy?: string
+  order: FNBOrder
+  lineItems: ICoffeeSessionFNBLineItem[]
+  orderTotals?: ICoffeeSessionOrderTotals
+}
+
 export interface ICoffeeSessionFNBOrder {
   _id?: ObjectId
   coffeeSessionId: ObjectId
@@ -49,6 +62,7 @@ export interface ICoffeeSessionFNBOrder {
   createdBy?: string
   updatedBy?: string
   history: CoffeeSessionOrderHistory[]
+  batches: ICoffeeSessionOrderBatch[]
 }
 
 export class CoffeeSessionFNBOrder implements ICoffeeSessionFNBOrder {
@@ -62,6 +76,7 @@ export class CoffeeSessionFNBOrder implements ICoffeeSessionFNBOrder {
   createdBy?: string
   updatedBy?: string
   history: CoffeeSessionOrderHistory[]
+  batches: ICoffeeSessionOrderBatch[]
 
   constructor(
     coffeeSessionId: string,
@@ -70,7 +85,8 @@ export class CoffeeSessionFNBOrder implements ICoffeeSessionFNBOrder {
     updatedBy?: string,
     history?: CoffeeSessionOrderHistory[],
     lineItems?: ICoffeeSessionFNBLineItem[],
-    orderTotals?: ICoffeeSessionOrderTotals
+    orderTotals?: ICoffeeSessionOrderTotals,
+    batches?: ICoffeeSessionOrderBatch[]
   ) {
     this.coffeeSessionId = new ObjectId(coffeeSessionId)
     this.order = order
@@ -81,5 +97,6 @@ export class CoffeeSessionFNBOrder implements ICoffeeSessionFNBOrder {
     this.createdBy = createdBy || 'system'
     this.updatedBy = updatedBy || 'system'
     this.history = history || []
+    this.batches = batches || []
   }
 }

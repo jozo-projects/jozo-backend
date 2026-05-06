@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto'
 import { MongoServerError, ObjectId } from 'mongodb'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { ErrorWithStatus } from '~/models/Error'
@@ -5,6 +6,7 @@ import { FNBOrder, FNBOrderSelection } from '~/models/schemas/FNB.schema'
 import { ICoffeeSession } from '~/models/schemas/CoffeeSession.schema'
 import {
   CoffeeSessionFNBOrder,
+  ICoffeeSessionOrderBatch,
   ICoffeeSessionFNBLineItem,
   ICoffeeSessionOrderTotals
 } from '~/models/schemas/CoffeeSessionOrder.schema'
@@ -102,6 +104,17 @@ class CoffeeSessionOrderService {
     return session
   }
 
+  async ensureSessionById(coffeeSessionId: string) {
+    const session = await databaseService.coffeeSessions.findOne({ _id: new ObjectId(coffeeSessionId) })
+    if (!session) {
+      throw new ErrorWithStatus({
+        message: 'Coffee session not found',
+        status: HTTP_STATUS_CODE.NOT_FOUND
+      })
+    }
+    return session
+  }
+
   private async getMenuItem(itemId: string): Promise<{ item: any; isVariant: boolean }> {
     let item: any = await databaseService.fnbMenu.findOne({ _id: new ObjectId(itemId) })
     let isVariant = false
@@ -185,6 +198,76 @@ class CoffeeSessionOrderService {
     const fnbChargedTotal = lineItems.reduce((s, l) => s + l.lineChargedTotal, 0)
 
     return { pricingMode, fnbListTotal, fnbChargedTotal }
+  }
+
+  private buildAggregatedOrderFromBatches(batches: ICoffeeSessionOrderBatch[]) {
+    const mergedLines = batches.flatMap((batch) => this.buildNormalizedOrder(batch.order).lines)
+    return this.buildNormalizedOrder({ lines: mergedLines })
+  }
+
+  private buildAggregatedLineItemsFromBatches(batches: ICoffeeSessionOrderBatch[]): ICoffeeSessionFNBLineItem[] {
+    return batches.flatMap((batch) => batch.lineItems || [])
+  }
+
+  private buildAggregatedTotalsFromBatches(
+    batches: ICoffeeSessionOrderBatch[],
+    session: ICoffeeSession
+  ): ICoffeeSessionOrderTotals {
+    const pricingMode = this.isBoardGameTicketSession(session) ? 'board_game_ticket' : 'menu_listed'
+    const fnbListTotal = batches.reduce((sum, batch) => sum + (batch.orderTotals?.fnbListTotal || 0), 0)
+    const fnbChargedTotal = batches.reduce((sum, batch) => sum + (batch.orderTotals?.fnbChargedTotal || 0), 0)
+    return { pricingMode, fnbListTotal, fnbChargedTotal }
+  }
+
+  private async buildBatchFromOrder(
+    order: FNBOrder,
+    session: ICoffeeSession,
+    createdAt: Date,
+    status: ICoffeeSessionOrderBatch['status'],
+    actorId?: string
+  ): Promise<ICoffeeSessionOrderBatch> {
+    const lineItems = await this.buildLineItems(order, session)
+    const orderTotals = this.buildOrderTotals(lineItems, session)
+    return {
+      batchId: randomUUID(),
+      status,
+      submittedAt: createdAt,
+      servedAt: status === 'served' ? createdAt : undefined,
+      servedBy: status === 'served' ? actorId || 'system' : undefined,
+      order,
+      lineItems,
+      orderTotals
+    }
+  }
+
+  private async backfillLegacyBatches(doc: any, session: ICoffeeSession, actorId?: string) {
+    if (Array.isArray(doc?.batches)) return doc
+
+    const legacyOrder = this.buildNormalizedOrder(doc?.order)
+    const shouldCreateBatch = orderHasPositiveLines(legacyOrder)
+    const backfilledBatches = shouldCreateBatch
+      ? [await this.buildBatchFromOrder(legacyOrder, session, doc?.createdAt || new Date(), 'pending', actorId)]
+      : []
+    const aggregatedOrder = this.buildAggregatedOrderFromBatches(backfilledBatches)
+    const aggregatedLineItems = this.buildAggregatedLineItemsFromBatches(backfilledBatches)
+    const aggregatedTotals = this.buildAggregatedTotalsFromBatches(backfilledBatches, session)
+
+    const healed = await databaseService.coffeeSessionOrders.findOneAndUpdate(
+      { _id: doc._id },
+      {
+        $set: {
+          batches: backfilledBatches,
+          order: aggregatedOrder,
+          lineItems: aggregatedLineItems,
+          orderTotals: aggregatedTotals,
+          updatedAt: new Date(),
+          updatedBy: actorId || doc?.updatedBy || 'system'
+        }
+      },
+      { returnDocument: 'after' }
+    )
+
+    return healed ?? { ...doc, batches: backfilledBatches, order: aggregatedOrder, lineItems: aggregatedLineItems, orderTotals: aggregatedTotals }
   }
 
   private shouldRefreshOrderSnapshots(
@@ -273,22 +356,22 @@ class CoffeeSessionOrderService {
 
     const session = await databaseService.coffeeSessions.findOne({ _id: new ObjectId(coffeeSessionId) })
     if (!session) return doc
-    const normalized = this.buildNormalizedOrder(doc.order)
-    if (orderHasPositiveLines(normalized)) {
-      const lineItems = await this.buildLineItems(normalized, session)
-      const orderTotals = this.buildOrderTotals(lineItems, session)
-      const shouldRefresh = this.shouldRefreshOrderSnapshots(doc, lineItems, orderTotals)
-      if (!shouldRefresh) return doc
+    const normalizedDoc = await this.backfillLegacyBatches(doc, session)
+    const batches = Array.isArray(normalizedDoc.batches) ? normalizedDoc.batches : []
+    const aggregatedOrder = this.buildAggregatedOrderFromBatches(batches)
+    const aggregatedLineItems = this.buildAggregatedLineItemsFromBatches(batches)
+    const aggregatedTotals = this.buildAggregatedTotalsFromBatches(batches, session)
+    const shouldRefresh = this.shouldRefreshOrderSnapshots(normalizedDoc, aggregatedLineItems, aggregatedTotals)
+    const hasOrderChanged = JSON.stringify(normalizedDoc.order?.lines || []) !== JSON.stringify(aggregatedOrder.lines)
 
-      const healed = await databaseService.coffeeSessionOrders.findOneAndUpdate(
-        { coffeeSessionId: new ObjectId(coffeeSessionId) },
-        { $set: { lineItems, orderTotals, updatedAt: new Date() } },
-        { returnDocument: 'after' }
-      )
-      return healed ?? { ...doc, lineItems, orderTotals }
-    }
+    if (!shouldRefresh && !hasOrderChanged) return normalizedDoc
 
-    return doc
+    const healed = await databaseService.coffeeSessionOrders.findOneAndUpdate(
+      { coffeeSessionId: new ObjectId(coffeeSessionId) },
+      { $set: { order: aggregatedOrder, lineItems: aggregatedLineItems, orderTotals: aggregatedTotals, updatedAt: new Date() } },
+      { returnDocument: 'after' }
+    )
+    return healed ?? { ...normalizedDoc, order: aggregatedOrder, lineItems: aggregatedLineItems, orderTotals: aggregatedTotals }
   }
 
   async setCoffeeSessionOrder(coffeeSessionId: string, order: FNBOrder, userId?: string) {
@@ -299,22 +382,27 @@ class CoffeeSessionOrderService {
     const existingOrder = await databaseService.coffeeSessionOrders.findOne({
       coffeeSessionId: new ObjectId(coffeeSessionId)
     })
-    const currentOrder = existingOrder?.order ? this.buildNormalizedOrder(existingOrder.order) : emptyFnbOrder()
+    const ensuredOrder = existingOrder ? await this.backfillLegacyBatches(existingOrder, session, userId) : null
+    const currentOrder = ensuredOrder?.order ? this.buildNormalizedOrder(ensuredOrder.order) : emptyFnbOrder()
 
     await assertOrderLinesMatchMenuCustomizations(normalizedOrder)
     await this.applyInventoryDelta(currentOrder, normalizedOrder)
 
-    const lineItems = await this.buildLineItems(normalizedOrder, session)
-    const orderTotals = this.buildOrderTotals(lineItems, session)
+    const resetBatch = await this.buildBatchFromOrder(normalizedOrder, session, new Date(), 'pending', userId)
+    const batches = orderHasPositiveLines(normalizedOrder) ? [resetBatch] : []
+    const lineItems = this.buildAggregatedLineItemsFromBatches(batches)
+    const orderTotals = this.buildAggregatedTotalsFromBatches(batches, session)
+    const aggregatedOrder = this.buildAggregatedOrderFromBatches(batches)
 
-    if (existingOrder) {
+    if (ensuredOrder) {
       const updatedOrder = await databaseService.coffeeSessionOrders.findOneAndUpdate(
         { coffeeSessionId: new ObjectId(coffeeSessionId) },
         {
           $set: {
-            order: normalizedOrder,
+            order: aggregatedOrder,
             lineItems,
             orderTotals,
+            batches,
             updatedAt: new Date(),
             updatedBy: userId
           },
@@ -322,7 +410,7 @@ class CoffeeSessionOrderService {
             history: {
               timestamp: new Date(),
               updatedBy: userId || 'system',
-              changes: normalizedOrder,
+              changes: aggregatedOrder,
               lineItemsSnapshot: lineItems,
               orderTotalsSnapshot: orderTotals
             }
@@ -343,12 +431,13 @@ class CoffeeSessionOrderService {
 
     const newOrder = new CoffeeSessionFNBOrder(
       coffeeSessionId,
-      normalizedOrder,
+      aggregatedOrder,
       userId,
       userId,
       undefined,
       lineItems,
-      orderTotals
+      orderTotals,
+      batches
     )
 
     try {
@@ -369,15 +458,133 @@ class CoffeeSessionOrderService {
 
   async submitCoffeeSessionOrderCart(coffeeSessionId: string, cart: FNBOrder, actorId?: string) {
     await this.initialize()
+    const session = await this.ensureEditableCoffeeSession(coffeeSessionId)
 
     const normalizedCart = this.buildNormalizedOrder(cart)
-    const existingOrder = await databaseService.coffeeSessionOrders.findOne({
+    await assertOrderLinesMatchMenuCustomizations(normalizedCart)
+    const existingDoc = await databaseService.coffeeSessionOrders.findOne({
       coffeeSessionId: new ObjectId(coffeeSessionId)
     })
-    const currentOrder = existingOrder?.order ? this.buildNormalizedOrder(existingOrder.order) : emptyFnbOrder()
-    const mergedOrder = appendCartLines(currentOrder, normalizedCart)
 
-    return this.setCoffeeSessionOrder(coffeeSessionId, mergedOrder, actorId)
+    const existingOrder = existingDoc ? await this.backfillLegacyBatches(existingDoc, session, actorId) : null
+    const currentOrder = existingOrder?.order ? this.buildNormalizedOrder(existingOrder.order) : emptyFnbOrder()
+    const nextOrder = appendCartLines(currentOrder, normalizedCart).mergedOrder
+    await this.applyInventoryDelta(currentOrder, nextOrder)
+
+    const createdBatch = await this.buildBatchFromOrder(normalizedCart, session, new Date(), 'pending', actorId)
+    const batches = [...(existingOrder?.batches || []), createdBatch]
+    const aggregatedOrder = this.buildAggregatedOrderFromBatches(batches)
+    const aggregatedLineItems = this.buildAggregatedLineItemsFromBatches(batches)
+    const aggregatedTotals = this.buildAggregatedTotalsFromBatches(batches, session)
+    let updatedOrder: any
+
+    if (existingOrder) {
+      updatedOrder = await databaseService.coffeeSessionOrders.findOneAndUpdate(
+        { coffeeSessionId: new ObjectId(coffeeSessionId) },
+        {
+          $set: {
+            batches,
+            order: aggregatedOrder,
+            lineItems: aggregatedLineItems,
+            orderTotals: aggregatedTotals,
+            updatedAt: new Date(),
+            updatedBy: actorId
+          },
+          $push: {
+            history: {
+              timestamp: new Date(),
+              updatedBy: actorId || 'system',
+              changes: aggregatedOrder,
+              lineItemsSnapshot: aggregatedLineItems,
+              orderTotalsSnapshot: aggregatedTotals
+            }
+          }
+        },
+        { returnDocument: 'after' }
+      )
+    } else {
+      const newOrder = new CoffeeSessionFNBOrder(
+        coffeeSessionId,
+        aggregatedOrder,
+        actorId,
+        actorId,
+        undefined,
+        aggregatedLineItems,
+        aggregatedTotals,
+        batches
+      )
+      const result = await databaseService.coffeeSessionOrders.insertOne(newOrder)
+      newOrder._id = result.insertedId
+      updatedOrder = newOrder
+    }
+
+    return {
+      order: updatedOrder,
+      submittedLineItems: createdBatch.lineItems,
+      createdBatch
+    }
+  }
+
+  async markBatchServed(coffeeSessionId: string, batchId: string, actorId?: string) {
+    await this.initialize()
+    const session = await this.ensureEditableCoffeeSession(coffeeSessionId)
+    const existingDoc = await databaseService.coffeeSessionOrders.findOne({
+      coffeeSessionId: new ObjectId(coffeeSessionId)
+    })
+
+    if (!existingDoc) {
+      throw new ErrorWithStatus({
+        message: 'Coffee session order not found',
+        status: HTTP_STATUS_CODE.NOT_FOUND
+      })
+    }
+
+    const existingOrder = await this.backfillLegacyBatches(existingDoc, session, actorId)
+    const batches = Array.isArray(existingOrder?.batches) ? [...existingOrder.batches] : []
+    const idx = batches.findIndex((batch) => batch.batchId === batchId)
+    if (idx < 0) {
+      throw new ErrorWithStatus({
+        message: 'Order batch not found',
+        status: HTTP_STATUS_CODE.NOT_FOUND
+      })
+    }
+    if (batches[idx].status === 'served') {
+      throw new ErrorWithStatus({
+        message: 'Order batch already served',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
+    }
+
+    const servedAt = new Date()
+    batches[idx] = {
+      ...batches[idx],
+      status: 'served',
+      servedAt,
+      servedBy: actorId || 'system'
+    }
+
+    const aggregatedOrder = this.buildAggregatedOrderFromBatches(batches)
+    const aggregatedLineItems = this.buildAggregatedLineItemsFromBatches(batches)
+    const aggregatedTotals = this.buildAggregatedTotalsFromBatches(batches, session)
+    const updatedOrder = await databaseService.coffeeSessionOrders.findOneAndUpdate(
+      { coffeeSessionId: new ObjectId(coffeeSessionId) },
+      {
+        $set: {
+          batches,
+          order: aggregatedOrder,
+          lineItems: aggregatedLineItems,
+          orderTotals: aggregatedTotals,
+          updatedAt: new Date(),
+          updatedBy: actorId || 'system'
+        }
+      },
+      { returnDocument: 'after' }
+    )
+
+    return {
+      order: updatedOrder ?? existingOrder,
+      batch: batches[idx]
+    }
   }
 
   async deleteCoffeeSessionOrder(coffeeSessionId: string) {
@@ -395,10 +602,12 @@ class CoffeeSessionOrderService {
       })
     }
 
-    await this.applyInventoryDelta(this.buildNormalizedOrder(existingOrder.order), emptyFnbOrder())
+    const session = await databaseService.coffeeSessions.findOne({ _id: new ObjectId(coffeeSessionId) })
+    const ensuredOrder = session ? await this.backfillLegacyBatches(existingOrder, session) : existingOrder
+    await this.applyInventoryDelta(this.buildNormalizedOrder(ensuredOrder.order), emptyFnbOrder())
     await databaseService.coffeeSessionOrders.deleteOne({ coffeeSessionId: new ObjectId(coffeeSessionId) })
 
-    return existingOrder
+    return ensuredOrder
   }
 }
 

@@ -2,6 +2,7 @@ import { Server, Socket } from 'socket.io'
 import databaseService from '~/services/database.service'
 import {
   coffeeOrderRealtimeEmitter,
+  OrderBatchStatusChangedPayload,
   OrderCreatedPayload,
   OrderSupportRequestedPayload
 } from '~/services/coffeeOrderRealtime.service'
@@ -22,6 +23,12 @@ export const OrderSocket = (io: Server) => {
 
     io.to('management').emit('order:new', payload)
     io.to(tableRoom).emit('order:created', payload)
+  })
+
+  coffeeOrderRealtimeEmitter.on('order_batch_status_changed', (payload: OrderBatchStatusChangedPayload) => {
+    const tableRoom = getTableRoom(payload.tableCode)
+    io.to('management').emit('order:batch_status_changed', payload)
+    io.to(tableRoom).emit('order:batch_status_changed', payload)
   })
 
   io.on('connection', async (socket: Socket) => {
