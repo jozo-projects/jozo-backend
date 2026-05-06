@@ -310,8 +310,10 @@ class OnlineBookingService {
         })
       }
 
-      // Tạo booking note đơn giản
+      // Tạo booking note đơn giản + gộp ghi chú khách (nếu có)
       const autoNote = `Booking by ${requestWithType.customerName} (${requestWithType.customerPhone})${roomResult.upgraded ? ` - UPGRADE to ${roomResult.assignedRoomType}` : ''}`
+      const customerNoteTrimmed = requestWithType.note?.trim()
+      const mergedNote = customerNoteTrimmed ? `${autoNote} | ${customerNoteTrimmed}` : autoNote
 
       // Sinh mã booking 4 chữ số và dateOfUse
       const dateOfUse = dayjs.tz(startTime, 'Asia/Ho_Chi_Minh').format('YYYY-MM-DD')
@@ -332,7 +334,7 @@ class OnlineBookingService {
         endTime,
         'online_customer',
         'online_customer',
-        autoNote,
+        mergedNote,
         BookingSource.Customer,
         true, // Đã fix: truyền 'true' để đáp ứng kiểu boolean (tham số isOnlineBooking)
         bookingCode, // Mã 4 chữ số
@@ -381,7 +383,7 @@ class OnlineBookingService {
         customerEmail: requestWithType.customerEmail,
         startTime: startTime.toISOString(),
         endTime: endTime.toISOString(),
-        note: autoNote,
+        note: mergedNote,
         source: 'online_booking',
         createdAt: new Date().toISOString(),
         upgraded: roomResult.upgraded,
@@ -404,7 +406,25 @@ class OnlineBookingService {
           upgraded: roomResult.upgraded,
           startTime: startTime.toISOString(),
           endTime: endTime.toISOString(),
-          note: autoNote,
+          note: mergedNote,
+          queueSongs: []
+        },
+        schedule: {
+          _id: result.insertedId.toString(),
+          roomId: roomResult.room._id.toString(),
+          roomName: roomResult.room.roomName,
+          bookingCode,
+          dateOfUse,
+          status: RoomScheduleStatus.Booked,
+          startTime: startTime.toISOString(),
+          endTime: endTime.toISOString(),
+          note: mergedNote,
+          customerName: requestWithType.customerName,
+          customerPhone: requestWithType.customerPhone,
+          customerEmail: requestWithType.customerEmail,
+          originalRoomType: normalizedRoomType,
+          actualRoomType: roomResult.assignedRoomType,
+          upgraded: roomResult.upgraded,
           queueSongs: []
         }
       }
