@@ -52,6 +52,17 @@ class CoffeeSessionOrderService {
     return Number.isFinite(quota) && quota > 0 ? quota : 0
   }
 
+  /** Tổng số đơn vị dòng category drink trên đơn (dùng khi tính offset quota giữa các lần submit giỏ). */
+  private countDrinkUnits(order: FNBOrder): number {
+    let n = 0
+    for (const row of order.lines) {
+      if (row.category !== 'drink') continue
+      const q = Math.floor(Number(row.quantity))
+      if (Number.isFinite(q) && q > 0) n += q
+    }
+    return n
+  }
+
   private parseListUnitPrice(item: { price?: unknown }): number {
     const n = Number(item?.price)
     return Number.isFinite(n) && n >= 0 ? n : 0
@@ -137,9 +148,20 @@ class CoffeeSessionOrderService {
     return { item, isVariant }
   }
 
-  private async buildLineItems(order: FNBOrder, session: ICoffeeSession): Promise<ICoffeeSessionFNBLineItem[]> {
+  /**
+   * @param priorDrinkQuotaConsumedUnits Số đơn vị đồ uống đã dùng hết phần miễn giá base (tối đa bằng quota) trước các dòng trong `order` (khi build snapshot cho một batch con).
+   */
+  private async buildLineItems(
+    order: FNBOrder,
+    session: ICoffeeSession,
+    priorDrinkQuotaConsumedUnits = 0
+  ): Promise<ICoffeeSessionFNBLineItem[]> {
     const ticketMode = this.isBoardGameTicketSession(session)
-    let remainingDrinkBaseFreeQuota = this.getDrinkBaseFreeQuota(session)
+    const quota = this.getDrinkBaseFreeQuota(session)
+    let remainingDrinkBaseFreeQuota = Math.max(
+      0,
+      quota - Math.max(0, Math.floor(priorDrinkQuotaConsumedUnits))
+    )
     const lines: ICoffeeSessionFNBLineItem[] = []
 
     for (const row of order.lines) {
@@ -205,18 +227,14 @@ class CoffeeSessionOrderService {
     return this.buildNormalizedOrder({ lines: mergedLines })
   }
 
-  private buildAggregatedLineItemsFromBatches(batches: ICoffeeSessionOrderBatch[]): ICoffeeSessionFNBLineItem[] {
-    return batches.flatMap((batch) => batch.lineItems || [])
-  }
-
-  private buildAggregatedTotalsFromBatches(
-    batches: ICoffeeSessionOrderBatch[],
+  /** Snapshot F&B toàn phiên: tính lại giá drink theo quota trên đơn gộp mọi batch (thứ tự dòng = aggregatedOrder). */
+  private async rebuildAggregatedSnapshots(
+    aggregatedOrder: FNBOrder,
     session: ICoffeeSession
-  ): ICoffeeSessionOrderTotals {
-    const pricingMode = this.isBoardGameTicketSession(session) ? 'board_game_ticket' : 'menu_listed'
-    const fnbListTotal = batches.reduce((sum, batch) => sum + (batch.orderTotals?.fnbListTotal || 0), 0)
-    const fnbChargedTotal = batches.reduce((sum, batch) => sum + (batch.orderTotals?.fnbChargedTotal || 0), 0)
-    return { pricingMode, fnbListTotal, fnbChargedTotal }
+  ): Promise<{ lineItems: ICoffeeSessionFNBLineItem[]; orderTotals: ICoffeeSessionOrderTotals }> {
+    const lineItems = await this.buildLineItems(aggregatedOrder, session, 0)
+    const orderTotals = this.buildOrderTotals(lineItems, session)
+    return { lineItems, orderTotals }
   }
 
   private async buildBatchFromOrder(
@@ -224,9 +242,10 @@ class CoffeeSessionOrderService {
     session: ICoffeeSession,
     createdAt: Date,
     status: ICoffeeSessionOrderBatch['status'],
-    actorId?: string
+    actorId?: string,
+    priorDrinkQuotaConsumedUnits = 0
   ): Promise<ICoffeeSessionOrderBatch> {
-    const lineItems = await this.buildLineItems(order, session)
+    const lineItems = await this.buildLineItems(order, session, priorDrinkQuotaConsumedUnits)
     const orderTotals = this.buildOrderTotals(lineItems, session)
     return {
       batchId: randomUUID(),
@@ -249,8 +268,8 @@ class CoffeeSessionOrderService {
       ? [await this.buildBatchFromOrder(legacyOrder, session, doc?.createdAt || new Date(), 'pending', actorId)]
       : []
     const aggregatedOrder = this.buildAggregatedOrderFromBatches(backfilledBatches)
-    const aggregatedLineItems = this.buildAggregatedLineItemsFromBatches(backfilledBatches)
-    const aggregatedTotals = this.buildAggregatedTotalsFromBatches(backfilledBatches, session)
+    const { lineItems: aggregatedLineItems, orderTotals: aggregatedTotals } =
+      await this.rebuildAggregatedSnapshots(aggregatedOrder, session)
 
     const healed = await databaseService.coffeeSessionOrders.findOneAndUpdate(
       { _id: doc._id },
@@ -359,8 +378,8 @@ class CoffeeSessionOrderService {
     const normalizedDoc = await this.backfillLegacyBatches(doc, session)
     const batches = Array.isArray(normalizedDoc.batches) ? normalizedDoc.batches : []
     const aggregatedOrder = this.buildAggregatedOrderFromBatches(batches)
-    const aggregatedLineItems = this.buildAggregatedLineItemsFromBatches(batches)
-    const aggregatedTotals = this.buildAggregatedTotalsFromBatches(batches, session)
+    const { lineItems: aggregatedLineItems, orderTotals: aggregatedTotals } =
+      await this.rebuildAggregatedSnapshots(aggregatedOrder, session)
     const shouldRefresh = this.shouldRefreshOrderSnapshots(normalizedDoc, aggregatedLineItems, aggregatedTotals)
     const hasOrderChanged = JSON.stringify(normalizedDoc.order?.lines || []) !== JSON.stringify(aggregatedOrder.lines)
 
@@ -390,9 +409,8 @@ class CoffeeSessionOrderService {
 
     const resetBatch = await this.buildBatchFromOrder(normalizedOrder, session, new Date(), 'pending', userId)
     const batches = orderHasPositiveLines(normalizedOrder) ? [resetBatch] : []
-    const lineItems = this.buildAggregatedLineItemsFromBatches(batches)
-    const orderTotals = this.buildAggregatedTotalsFromBatches(batches, session)
     const aggregatedOrder = this.buildAggregatedOrderFromBatches(batches)
+    const { lineItems, orderTotals } = await this.rebuildAggregatedSnapshots(aggregatedOrder, session)
 
     if (ensuredOrder) {
       const updatedOrder = await databaseService.coffeeSessionOrders.findOneAndUpdate(
@@ -471,11 +489,21 @@ class CoffeeSessionOrderService {
     const nextOrder = appendCartLines(currentOrder, normalizedCart).mergedOrder
     await this.applyInventoryDelta(currentOrder, nextOrder)
 
-    const createdBatch = await this.buildBatchFromOrder(normalizedCart, session, new Date(), 'pending', actorId)
+    const quota = this.getDrinkBaseFreeQuota(session)
+    const priorDrinkUnits = this.countDrinkUnits(currentOrder)
+    const priorDrinkQuotaConsumedUnits = Math.min(quota, priorDrinkUnits)
+    const createdBatch = await this.buildBatchFromOrder(
+      normalizedCart,
+      session,
+      new Date(),
+      'pending',
+      actorId,
+      priorDrinkQuotaConsumedUnits
+    )
     const batches = [...(existingOrder?.batches || []), createdBatch]
     const aggregatedOrder = this.buildAggregatedOrderFromBatches(batches)
-    const aggregatedLineItems = this.buildAggregatedLineItemsFromBatches(batches)
-    const aggregatedTotals = this.buildAggregatedTotalsFromBatches(batches, session)
+    const { lineItems: aggregatedLineItems, orderTotals: aggregatedTotals } =
+      await this.rebuildAggregatedSnapshots(aggregatedOrder, session)
     let updatedOrder: any
 
     if (existingOrder) {
@@ -564,8 +592,8 @@ class CoffeeSessionOrderService {
     }
 
     const aggregatedOrder = this.buildAggregatedOrderFromBatches(batches)
-    const aggregatedLineItems = this.buildAggregatedLineItemsFromBatches(batches)
-    const aggregatedTotals = this.buildAggregatedTotalsFromBatches(batches, session)
+    const { lineItems: aggregatedLineItems, orderTotals: aggregatedTotals } =
+      await this.rebuildAggregatedSnapshots(aggregatedOrder, session)
     const updatedOrder = await databaseService.coffeeSessionOrders.findOneAndUpdate(
       { coffeeSessionId: new ObjectId(coffeeSessionId) },
       {
