@@ -7,11 +7,7 @@ import {
   getBill,
   getBillById,
   getBillsByRoomId,
-  getCustomRangeRevenue,
-  getDailyRevenue,
-  getMonthlyRevenue,
-  getWeeklyRevenue,
-  getRevenueFromBills,
+  getRevenueByRange,
   printBill,
   saveBill,
   testBillWithDiscount,
@@ -23,44 +19,11 @@ import { wrapRequestHandler } from '~/utils/handlers'
 const billRouter = Router()
 
 /**
- * @route GET /bill/revenue/daily
- * @description Get total revenue for a specific date
+ * @route GET /bill/revenue
+ * @description Doanh thu theo khoảng: query startDate, endDate (ISO). Một ngày: hai tham số cùng ngày.
  * @access Private
- * @author: AI Assistant
  */
-billRouter.get('/revenue/daily', protect([UserRole.Admin, UserRole.Staff]), wrapRequestHandler(getDailyRevenue))
-
-/**
- * @route GET /bill/revenue/weekly
- * @description Get total revenue for a specific week
- * @access Private
- * @author: AI Assistant
- */
-billRouter.get('/revenue/weekly', protect([UserRole.Admin, UserRole.Staff]), wrapRequestHandler(getWeeklyRevenue))
-
-/**
- * @route GET /bill/revenue/monthly
- * @description Get total revenue for a specific month
- * @access Private
- * @author: AI Assistant
- */
-billRouter.get('/revenue/monthly', protect([UserRole.Admin, UserRole.Staff]), wrapRequestHandler(getMonthlyRevenue))
-
-/**
- * @route GET /bill/revenue/custom
- * @description Get total revenue for a custom date range
- * @access Private
- * @author: AI Assistant
- */
-billRouter.get('/revenue/custom', protect([UserRole.Admin, UserRole.Staff]), wrapRequestHandler(getCustomRangeRevenue))
-
-/**
- * @route GET /bill/revenue/bills
- * @description Get total revenue directly from bills collection with better timezone handling
- * @access Private
- * @author: AI Assistant
- */
-billRouter.get('/revenue/bills', protect([UserRole.Admin, UserRole.Staff]), wrapRequestHandler(getRevenueFromBills))
+billRouter.get('/revenue', protect([UserRole.Admin, UserRole.Staff]), wrapRequestHandler(getRevenueByRange))
 
 /**
  * @route GET /bill/details/:billId

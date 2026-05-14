@@ -276,6 +276,100 @@ export class BillService {
     return this.attachRevenueUserNames(filteredBills)
   }
 
+  /** Gộp các bill trùng scheduleId: ưu tiên đã thanh toán, sau đó bill mới nhất theo createdAt. */
+  private dedupeBillsByScheduleForRevenue(bills: IBill[]): IBill[] {
+    const uniqueBills = new Map<string, IBill>()
+    for (const bill of bills) {
+      const scheduleId = bill.scheduleId.toString()
+      if (!uniqueBills.has(scheduleId)) {
+        uniqueBills.set(scheduleId, bill)
+        continue
+      }
+      const existingBill = uniqueBills.get(scheduleId)!
+      let shouldReplace = false
+      if (bill.paymentMethod && !existingBill.paymentMethod) {
+        shouldReplace = true
+      } else if (
+        (!bill.paymentMethod && !existingBill.paymentMethod) ||
+        (bill.paymentMethod && existingBill.paymentMethod)
+      ) {
+        if (
+          bill.createdAt &&
+          existingBill.createdAt &&
+          new Date(bill.createdAt) > new Date(existingBill.createdAt)
+        ) {
+          shouldReplace = true
+        }
+      }
+      if (shouldReplace) {
+        uniqueBills.set(scheduleId, bill)
+      }
+    }
+    return Array.from(uniqueBills.values())
+  }
+
+  /**
+   * Doanh thu theo startTime của bill nằm trong [startDateObj, endDateObj] (inclusive).
+   * Các API tuần/tháng/khoảng tùy chỉnh dùng chung pipeline này để tránh trùng logic.
+   */
+  private async aggregateRevenueInStartTimeRange(
+    startDateObj: Date,
+    endDateObj: Date,
+    viewerUserId?: string,
+    options: { floorBillAmountsToThousand?: boolean } = {}
+  ): Promise<{ totalRevenue: number; bills: IBill[]; startDate: Date; endDate: Date }> {
+    const { floorBillAmountsToThousand = true } = options
+    const bills = await databaseService.bills
+      .find({
+        startTime: {
+          $gte: startDateObj,
+          $lte: endDateObj
+        }
+      })
+      .sort({ startTime: -1 })
+      .toArray()
+
+    if (bills.length === 0) {
+      return { totalRevenue: 0, bills: [], startDate: startDateObj, endDate: endDateObj }
+    }
+
+    const deduped = this.dedupeBillsByScheduleForRevenue(bills)
+    const finalBills = await this.prepareRevenueBills(deduped, viewerUserId)
+
+    if (floorBillAmountsToThousand) {
+      finalBills.forEach((bill) => {
+        bill.totalAmount = Math.floor(bill.totalAmount / 1000) * 1000
+      })
+    }
+
+    const totalRevenue = finalBills.reduce((sum, bill) => sum + bill.totalAmount, 0)
+    return {
+      totalRevenue,
+      bills: finalBills,
+      startDate: startDateObj,
+      endDate: endDateObj
+    }
+  }
+
+  /** Hai mốc ngày (VN): cả ngày đầu và ngày cuối đều tính trọn (startOfDay → endOfDay). */
+  private parseInclusiveVnDayRange(startDateStr: string, endDateStr: string): { start: Date; end: Date } {
+    const start = dayjs(startDateStr).tz('Asia/Ho_Chi_Minh').startOf('day')
+    const end = dayjs(endDateStr).tz('Asia/Ho_Chi_Minh').endOf('day')
+    if (!start.isValid() || !end.isValid()) {
+      throw new ErrorWithStatus({
+        message: 'Định dạng ngày không hợp lệ. Vui lòng sử dụng định dạng ISO date string',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
+    }
+    if (start.isAfter(end)) {
+      throw new ErrorWithStatus({
+        message: 'Ngày bắt đầu phải trước hoặc cùng ngày kết thúc',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
+    }
+    return { start: start.toDate(), end: end.toDate() }
+  }
+
   constructor() {
     this.initEscPos()
   }
@@ -1175,378 +1269,20 @@ export class BillService {
   }
 
   /**
-   * Get total revenue for a specific date
-   * @param date Date to get revenue for (format: ISO date string)
-   * @returns Object containing total revenue and bill details
+   * Doanh thu theo khoảng ngày (VN): startDate / endDate là chuỗi ISO; lọc theo startTime của bill, trọn cả ngày đầu và cuối.
    */
-  async getDailyRevenue(date: string, viewerUserId?: string): Promise<{ totalRevenue: number; bills: IBill[] }> {
-    try {
-      // Validate date format
-      if (!dayjs(date).isValid()) {
-        throw new ErrorWithStatus({
-          message: 'Invalid date format. Please use ISO date string format',
-          status: HTTP_STATUS_CODE.BAD_REQUEST
-        })
-      }
-
-      // FIX: Xử lý múi giờ nhất quán - chuyển đổi ngày về múi giờ Việt Nam trước khi tạo khoảng thời gian
-      const targetDate = dayjs(date).tz('Asia/Ho_Chi_Minh')
-
-      // Tạo khoảng thời gian cho ngày đó trong múi giờ Việt Nam
-      const startDateObj = targetDate.startOf('day').toDate()
-      const endDateObj = targetDate.endOf('day').toDate()
-
-      // FIX: Sử dụng startTime thay vì createdAt để tính doanh thu
-      // Bill được tính vào doanh thu của ngày mà session bắt đầu, không phải ngày tạo bill
-      // Ví dụ: Bill bắt đầu 23:30 ngày 01/01 và kết thúc 01:00 ngày 02/01
-      // thì bill đó vẫn tính vào doanh thu ngày 01/01
-      const bills = await databaseService.bills
-        .find({
-          startTime: {
-            $gte: startDateObj,
-            $lte: endDateObj
-          }
-        })
-        .sort({ startTime: -1 })
-        .toArray()
-
-      // Remove duplicates by scheduleId - keep paid bills or latest bill
-      const uniqueBills = new Map<string, IBill>()
-
-      for (const bill of bills) {
-        const scheduleId = bill.scheduleId.toString()
-
-        if (!uniqueBills.has(scheduleId)) {
-          // First bill for this scheduleId
-          uniqueBills.set(scheduleId, bill)
-        } else {
-          const existingBill = uniqueBills.get(scheduleId)!
-          let shouldReplace = false
-
-          // Priority 1: Bills with paymentMethod (paid) over bills without
-          if (bill.paymentMethod && !existingBill.paymentMethod) {
-            shouldReplace = true
-          }
-          // Priority 2: If both have same payment status, use latest createdAt
-          else if (
-            !!bill.paymentMethod === !!existingBill.paymentMethod &&
-            bill.createdAt &&
-            existingBill.createdAt &&
-            new Date(bill.createdAt) > new Date(existingBill.createdAt)
-          ) {
-            shouldReplace = true
-          }
-
-          if (shouldReplace) {
-            uniqueBills.set(scheduleId, bill)
-          }
-        }
-      }
-
-      const finalBills = await this.prepareRevenueBills(Array.from(uniqueBills.values()), viewerUserId)
-
-      // Simple calculation - just sum all totalAmount
-      const totalRevenue = finalBills.reduce((sum, bill) => sum + bill.totalAmount, 0)
-
-      return {
-        totalRevenue,
-        bills: finalBills
-      }
-    } catch (error) {
-      console.error('[DOANH THU] Lỗi khi lấy doanh thu:', error)
-      throw error
-    }
-  }
-
-  /**
-   * Get total revenue for a specific week
-   * @param date Any date within the week to get revenue for (format: ISO date string)
-   * @returns Object containing total revenue, bill details, and date range
-   */
-  async getWeeklyRevenue(
-    date: string,
-    viewerUserId?: string
-  ): Promise<{ totalRevenue: number; bills: any[]; startDate: Date; endDate: Date }> {
-    try {
-      const targetDate = dayjs(date).tz('Asia/Ho_Chi_Minh')
-      const startOfWeek = targetDate.startOf('week')
-      const endOfWeek = targetDate.endOf('week')
-
-      const startDate = startOfWeek.toDate()
-      const endDate = endOfWeek.toDate()
-
-      // FIX: Sử dụng startTime thay vì createdAt để tính doanh thu
-      // Bill được tính vào doanh thu của tuần mà session bắt đầu, không phải tuần tạo bill
-      const bills = await databaseService.bills
-        .find({
-          startTime: {
-            $gte: startDate,
-            $lte: endDate
-          }
-        })
-        .sort({ startTime: -1 })
-        .toArray()
-
-      if (bills.length === 0) {
-        return {
-          totalRevenue: 0,
-          bills: [],
-          startDate,
-          endDate
-        }
-      }
-
-      // Remove duplicates by scheduleId (prioritize paid bills, then latest createdAt)
-      const uniqueBills = new Map<string, IBill>()
-      for (const bill of bills) {
-        const scheduleId = bill.scheduleId.toString()
-
-        if (!uniqueBills.has(scheduleId)) {
-          // First bill for this scheduleId
-          uniqueBills.set(scheduleId, bill)
-        } else {
-          const existingBill = uniqueBills.get(scheduleId)!
-          let shouldReplace = false
-
-          // Priority 1: Bills with paymentMethod (paid) over bills without
-          if (bill.paymentMethod && !existingBill.paymentMethod) {
-            shouldReplace = true
-          }
-          // Priority 2: If both have paymentMethod or both don't have, use latest createdAt
-          else if (
-            (!bill.paymentMethod && !existingBill.paymentMethod) ||
-            (bill.paymentMethod && existingBill.paymentMethod)
-          ) {
-            if (
-              bill.createdAt &&
-              existingBill.createdAt &&
-              new Date(bill.createdAt) > new Date(existingBill.createdAt)
-            ) {
-              shouldReplace = true
-            }
-          }
-
-          if (shouldReplace) {
-            uniqueBills.set(scheduleId, bill)
-          }
-        }
-      }
-
-      const finalBills = await this.prepareRevenueBills(Array.from(uniqueBills.values()), viewerUserId)
-
-      // Làm tròn tổng tiền của từng hóa đơn
-      finalBills.forEach((bill) => {
-        bill.totalAmount = Math.floor(bill.totalAmount / 1000) * 1000
-      })
-
-      // Tính tổng doanh thu
-      const totalRevenue = finalBills.reduce((sum, bill) => sum + bill.totalAmount, 0)
-
-      return {
-        totalRevenue,
-        bills: finalBills as any,
-        startDate,
-        endDate
-      }
-    } catch (error) {
-      console.error('[DOANH THU] Lỗi khi tính doanh thu:', error)
-      throw error
-    }
-  }
-
-  /**
-   * Get total revenue for a specific month
-   * @param date Any date within the month to get revenue for (format: ISO date string)
-   * @returns Object containing total revenue, bill details, and date range
-   */
-  async getMonthlyRevenue(
-    date: string,
-    viewerUserId?: string
-  ): Promise<{ totalRevenue: number; bills: any[]; startDate: Date; endDate: Date }> {
-    try {
-      const targetDate = dayjs(date).tz('Asia/Ho_Chi_Minh')
-      const startOfMonth = targetDate.startOf('month')
-      const endOfMonth = targetDate.endOf('month')
-
-      const startDate = startOfMonth.toDate()
-      const endDate = endOfMonth.toDate()
-
-      // FIX: Sử dụng startTime thay vì createdAt để tính doanh thu
-      // Bill được tính vào doanh thu của tháng mà session bắt đầu, không phải tháng tạo bill
-      const bills = await databaseService.bills
-        .find({
-          startTime: {
-            $gte: startDate,
-            $lte: endDate
-          }
-        })
-        .sort({ startTime: -1 })
-        .toArray()
-
-      if (bills.length === 0) {
-        return {
-          totalRevenue: 0,
-          bills: [],
-          startDate,
-          endDate
-        }
-      }
-
-      // Remove duplicates by scheduleId (prioritize paid bills, then latest createdAt)
-      const uniqueBills = new Map<string, IBill>()
-      for (const bill of bills) {
-        const scheduleId = bill.scheduleId.toString()
-
-        if (!uniqueBills.has(scheduleId)) {
-          // First bill for this scheduleId
-          uniqueBills.set(scheduleId, bill)
-        } else {
-          const existingBill = uniqueBills.get(scheduleId)!
-          let shouldReplace = false
-
-          // Priority 1: Bills with paymentMethod (paid) over bills without
-          if (bill.paymentMethod && !existingBill.paymentMethod) {
-            shouldReplace = true
-          }
-          // Priority 2: If both have paymentMethod or both don't have, use latest createdAt
-          else if (
-            (!bill.paymentMethod && !existingBill.paymentMethod) ||
-            (bill.paymentMethod && existingBill.paymentMethod)
-          ) {
-            if (
-              bill.createdAt &&
-              existingBill.createdAt &&
-              new Date(bill.createdAt) > new Date(existingBill.createdAt)
-            ) {
-              shouldReplace = true
-            }
-          }
-
-          if (shouldReplace) {
-            uniqueBills.set(scheduleId, bill)
-          }
-        }
-      }
-
-      const finalBills = await this.prepareRevenueBills(Array.from(uniqueBills.values()), viewerUserId)
-
-      // Làm tròn tổng tiền của từng hóa đơn
-      finalBills.forEach((bill) => {
-        bill.totalAmount = Math.floor(bill.totalAmount / 1000) * 1000
-      })
-
-      // Tính tổng doanh thu
-      const totalRevenue = finalBills.reduce((sum, bill) => sum + bill.totalAmount, 0)
-
-      return {
-        totalRevenue,
-        bills: finalBills as any,
-        startDate,
-        endDate
-      }
-    } catch (error) {
-      console.error('[DOANH THU] Lỗi khi tính doanh thu:', error)
-      throw error
-    }
-  }
-
-  /**
-   * Get total revenue for a custom date range
-   * @param startDate Start date (format: ISO date string)
-   * @param endDate End date (format: ISO date string)
-   * @returns Object containing total revenue, bill details, and date range
-   */
-  async getRevenueByCustomRange(
+  async getRevenueByDateRange(
     startDate: string,
     endDate: string,
     viewerUserId?: string
   ): Promise<{ totalRevenue: number; bills: any[]; startDate: Date; endDate: Date }> {
     try {
-      const start = dayjs(startDate).tz('Asia/Ho_Chi_Minh').startOf('day')
-      const end = dayjs(endDate).tz('Asia/Ho_Chi_Minh').endOf('day')
-
-      const startDateObj = start.toDate()
-      const endDateObj = end.toDate()
-
-      if (start.isAfter(end)) {
-        throw new ErrorWithStatus({
-          message: 'Ngày bắt đầu phải trước ngày kết thúc',
-          status: HTTP_STATUS_CODE.BAD_REQUEST
-        })
-      }
-
-      // FIX: Sử dụng startTime thay vì createdAt để tính doanh thu
-      // Bill được tính vào doanh thu của khoảng thời gian mà session bắt đầu, không phải khoảng thời gian tạo bill
-      const bills = await databaseService.bills
-        .find({
-          startTime: {
-            $gte: startDateObj,
-            $lte: endDateObj
-          }
-        })
-        .sort({ startTime: -1 })
-        .toArray()
-
-      if (bills.length === 0) {
-        return {
-          totalRevenue: 0,
-          bills: [],
-          startDate: startDateObj,
-          endDate: endDateObj
-        }
-      }
-
-      // Remove duplicates by scheduleId (prioritize paid bills, then latest createdAt)
-      const uniqueBills = new Map<string, IBill>()
-      for (const bill of bills) {
-        const scheduleId = bill.scheduleId.toString()
-
-        if (!uniqueBills.has(scheduleId)) {
-          // First bill for this scheduleId
-          uniqueBills.set(scheduleId, bill)
-        } else {
-          const existingBill = uniqueBills.get(scheduleId)!
-          let shouldReplace = false
-
-          // Priority 1: Bills with paymentMethod (paid) over bills without
-          if (bill.paymentMethod && !existingBill.paymentMethod) {
-            shouldReplace = true
-          }
-          // Priority 2: If both have paymentMethod or both don't have, use latest createdAt
-          else if (
-            (!bill.paymentMethod && !existingBill.paymentMethod) ||
-            (bill.paymentMethod && existingBill.paymentMethod)
-          ) {
-            if (
-              bill.createdAt &&
-              existingBill.createdAt &&
-              new Date(bill.createdAt) > new Date(existingBill.createdAt)
-            ) {
-              shouldReplace = true
-            }
-          }
-
-          if (shouldReplace) {
-            uniqueBills.set(scheduleId, bill)
-          }
-        }
-      }
-
-      const finalBills = await this.prepareRevenueBills(Array.from(uniqueBills.values()), viewerUserId)
-
-      // Làm tròn tổng tiền của từng hóa đơn
-      finalBills.forEach((bill) => {
-        bill.totalAmount = Math.floor(bill.totalAmount / 1000) * 1000
-      })
-
-      // Tính tổng doanh thu
-      const totalRevenue = finalBills.reduce((sum, bill) => sum + bill.totalAmount, 0)
-
-      return {
-        totalRevenue,
-        bills: finalBills as any,
-        startDate: startDateObj,
-        endDate: endDateObj
+      const { start, end } = this.parseInclusiveVnDayRange(startDate, endDate)
+      return (await this.aggregateRevenueInStartTimeRange(start, end, viewerUserId)) as {
+        totalRevenue: number
+        bills: any[]
+        startDate: Date
+        endDate: Date
       }
     } catch (error) {
       console.error('[DOANH THU] Lỗi khi tính doanh thu:', error)
@@ -1720,168 +1456,6 @@ export class BillService {
       }
     } catch (error) {
       console.error('Lỗi khi dọn dẹp hóa đơn từ lịch chưa hoàn thành:', error)
-      throw error
-    }
-  }
-
-  /**
-   * Get total revenue directly from bills collection without checking room schedules
-   * @param dateType Type of date range: 'day', 'week', 'month', or 'custom'
-   * @param startDate Start date (required for all types, format: ISO date string)
-   * @param endDate End date (only required for 'custom' type, format: ISO date string)
-   * @returns Object containing total revenue and bill details
-   */
-  async getRevenueFromBillsCollection(
-    dateType: 'day' | 'week' | 'month' | 'custom',
-    startDate: string,
-    endDate?: string,
-    viewerUserId?: string
-  ): Promise<{
-    totalRevenue: number
-    bills: IBill[]
-    startDate: Date
-    endDate: Date
-    timeRange: string
-  }> {
-    try {
-      let start: dayjs.Dayjs
-      let end: dayjs.Dayjs
-      let timeRangeDescription: string
-
-      // Xác định khoảng thời gian dựa vào dateType
-      start = dayjs(startDate).tz('Asia/Ho_Chi_Minh')
-
-      switch (dateType) {
-        case 'day':
-          start = start.startOf('day')
-          end = start.endOf('day')
-          timeRangeDescription = `ngày ${start.format('DD/MM/YYYY')}`
-          break
-
-        case 'week':
-          start = start.startOf('week')
-          end = start.endOf('week')
-          timeRangeDescription = `tuần ${start.week()} năm ${start.year()} (${start.format('DD/MM')} - ${end.format('DD/MM/YYYY')})`
-          break
-
-        case 'month':
-          start = start.startOf('month')
-          end = start.endOf('month')
-          timeRangeDescription = `tháng ${start.format('MM/YYYY')}`
-          break
-
-        case 'custom':
-          if (!endDate) {
-            throw new ErrorWithStatus({
-              message: 'Cần cung cấp ngày kết thúc cho khoảng thời gian tùy chỉnh',
-              status: HTTP_STATUS_CODE.BAD_REQUEST
-            })
-          }
-          start = start.startOf('day')
-          end = dayjs(endDate).tz('Asia/Ho_Chi_Minh').endOf('day')
-          timeRangeDescription = `từ ${start.format('DD/MM/YYYY')} đến ${end.format('DD/MM/YYYY')}`
-
-          if (start.isAfter(end)) {
-            throw new ErrorWithStatus({
-              message: 'Ngày bắt đầu phải trước ngày kết thúc',
-              status: HTTP_STATUS_CODE.BAD_REQUEST
-            })
-          }
-          break
-      }
-
-      const startDateObj = start.toDate()
-      const endDateObj = end.toDate()
-
-      // FIX: Sử dụng startTime thay vì createdAt để tính doanh thu
-      // Bill được tính vào doanh thu của khoảng thời gian mà session bắt đầu, không phải khoảng thời gian tạo bill
-      // Ví dụ: Bill bắt đầu 23:30 ngày 01/01 và kết thúc 01:00 ngày 02/01
-      // thì bill đó vẫn tính vào doanh thu ngày 01/01
-      const bills = await databaseService.bills
-        .find({
-          startTime: {
-            $gte: startDateObj,
-            $lte: endDateObj
-          }
-        })
-        .sort({ startTime: -1 })
-        .toArray()
-
-      if (bills.length === 0) {
-        return {
-          totalRevenue: 0,
-          bills: [],
-          startDate: startDateObj,
-          endDate: endDateObj,
-          timeRange: timeRangeDescription
-        }
-      }
-
-      // Remove duplicates by scheduleId (prioritize paid bills, then latest createdAt)
-      const uniqueBills = new Map<string, IBill>()
-      for (const bill of bills) {
-        const scheduleId = bill.scheduleId.toString()
-
-        if (!uniqueBills.has(scheduleId)) {
-          // First bill for this scheduleId
-          uniqueBills.set(scheduleId, bill)
-        } else {
-          const existingBill = uniqueBills.get(scheduleId)!
-          let shouldReplace = false
-
-          // Priority 1: Bills with paymentMethod (paid) over bills without
-          if (bill.paymentMethod && !existingBill.paymentMethod) {
-            shouldReplace = true
-          }
-          // Priority 2: If both have paymentMethod or both don't have, use latest createdAt
-          else if (
-            (!bill.paymentMethod && !existingBill.paymentMethod) ||
-            (bill.paymentMethod && existingBill.paymentMethod)
-          ) {
-            if (
-              bill.createdAt &&
-              existingBill.createdAt &&
-              new Date(bill.createdAt) > new Date(existingBill.createdAt)
-            ) {
-              shouldReplace = true
-              console.log(
-                `[DOANH THU] Replacing older bill ${existingBill._id} with newer bill ${bill._id} for schedule ${scheduleId}`
-              )
-            }
-          }
-
-          if (shouldReplace) {
-            uniqueBills.set(scheduleId, bill)
-            console.log(
-              `[DOANH THU] Selected bill ${bill._id} (${bill.totalAmount}) over ${existingBill._id} (${existingBill.totalAmount})`
-            )
-          } else {
-            console.log(
-              `[DOANH THU] Keeping existing bill ${existingBill._id} (${existingBill.totalAmount}) over ${bill._id} (${bill.totalAmount})`
-            )
-          }
-        }
-      }
-
-      const finalBills = await this.prepareRevenueBills(Array.from(uniqueBills.values()), viewerUserId)
-
-      // Làm tròn tổng tiền của từng hóa đơn (nếu cần)
-      finalBills.forEach((bill) => {
-        bill.totalAmount = Math.floor(bill.totalAmount / 1000) * 1000
-      })
-
-      // Tính tổng doanh thu
-      const totalRevenue = finalBills.reduce((sum, bill) => sum + bill.totalAmount, 0)
-
-      return {
-        totalRevenue,
-        bills: finalBills,
-        startDate: startDateObj,
-        endDate: endDateObj,
-        timeRange: timeRangeDescription
-      }
-    } catch (error) {
-      console.error('[DOANH THU MỚI] Lỗi khi tính doanh thu:', error)
       throw error
     }
   }

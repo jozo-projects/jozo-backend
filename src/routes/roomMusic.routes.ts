@@ -15,6 +15,7 @@ import {
   removeAllSongsInQueue,
   removeSong,
   normalizeSongsLibrary,
+  pruneSongsNotOnYoutube,
   requestEndSessionPrintBill,
   saveSong,
   searchSongs,
@@ -53,6 +54,13 @@ roomMusicRouter.delete('/songs-collection/:videoId', wrapRequestHandler(deleteSo
  * @method POST
  */
 roomMusicRouter.post('/songs/normalize', wrapRequestHandler(normalizeSongsLibrary))
+
+/**
+ * @description Xóa khỏi DB các bài không còn trên YouTube (probe bằng yt-dlp). dry_run=1 để xem trước không xóa.
+ * @path /room-music/songs/prune-unavailable-youtube
+ * @method POST
+ */
+roomMusicRouter.post('/songs/prune-unavailable-youtube', wrapRequestHandler(pruneSongsNotOnYoutube))
 
 /**
  * @description Add song to queue

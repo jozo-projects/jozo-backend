@@ -1,8 +1,6 @@
 import dayjs from 'dayjs'
 import timezone from 'dayjs/plugin/timezone'
 import utc from 'dayjs/plugin/utc'
-import weekOfYear from 'dayjs/plugin/weekOfYear'
-import weekday from 'dayjs/plugin/weekday'
 import { Request, Response } from 'express'
 import { ObjectId } from 'mongodb'
 import { UserRole } from '~/constants/enum'
@@ -10,11 +8,21 @@ import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import billService from '~/services/bill.service'
 import databaseService from '~/services/database.service'
 
-// Extend dayjs with the required plugins
-dayjs.extend(weekOfYear)
-dayjs.extend(weekday)
 dayjs.extend(utc)
 dayjs.extend(timezone)
+
+/** Query string hoặc string[] từ Express → một chuỗi; rỗng coi như không gửi. */
+function pickQueryString(q: unknown): string | undefined {
+  if (q === undefined || q === null) {
+    return undefined
+  }
+  const raw = Array.isArray(q) ? q[0] : q
+  if (typeof raw !== 'string') {
+    return undefined
+  }
+  const t = raw.trim()
+  return t === '' ? undefined : t
+}
 
 const getRevenueViewerUserId = async (req: Request): Promise<string | undefined | null> => {
   const userId = req.decoded_authorization?.user_id
@@ -112,192 +120,22 @@ export const printBill = async (req: Request, res: Response) => {
 // }
 
 /**
- * Get total revenue for a specific date
- * @param req Request object containing date in query params
- * @param res Response object
- * @returns Total revenue and bill details for the specified date
+ * Doanh thu theo khoảng [startDate, endDate] (ISO, trọn ngày VN). Một ngày: gửi cùng giá trị cho cả hai.
  */
-export const getDailyRevenue = async (req: Request, res: Response) => {
-  const { date } = req.query
-
-  if (!date) {
-    return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
-      message: 'Date parameter is required (ISO date string format)'
-    })
-  }
-
-  try {
-    // Validate date format
-    if (!dayjs(date as string).isValid()) {
-      return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
-        message: 'Invalid date format. Please use ISO date string format'
-      })
-    }
-
-    // FIX: Thêm log để debug múi giờ
-    console.log(`[CONTROLLER] Ngày được truyền vào: ${date}`)
-    console.log(`[CONTROLLER] Ngày được parse (UTC): ${dayjs(date as string).format('YYYY-MM-DD HH:mm:ss')}`)
-    console.log(
-      `[CONTROLLER] Ngày được parse (VN): ${dayjs(date as string)
-        .tz('Asia/Ho_Chi_Minh')
-        .format('YYYY-MM-DD HH:mm:ss')}`
-    )
-
-    const viewerUserId = await getRevenueViewerUserId(req)
-    if (viewerUserId === null) {
-      return res.status(HTTP_STATUS_CODE.UNAUTHORIZED).json({ message: 'Unauthorized' })
-    }
-
-    const revenueData = await billService.getDailyRevenue(date as string, viewerUserId)
-
-    return res.status(HTTP_STATUS_CODE.OK).json({
-      message: 'Get daily revenue successfully',
-      result: {
-        date: date,
-        formattedDate: dayjs(date as string).format('DD/MM/YYYY'),
-        totalRevenue: revenueData.totalRevenue,
-        billCount: revenueData.bills.length,
-        bills: revenueData.bills
-      }
-    })
-  } catch (error: any) {
-    return res.status(HTTP_STATUS_CODE.INTERNAL_SERVER_ERROR).json({
-      message: 'Error getting daily revenue',
-      error: error.message || 'Unknown error'
-    })
-  }
-}
-
-/**
- * Get total revenue for a specific week
- * @param req Request object containing date in query params
- * @param res Response object
- * @returns Total revenue and bill details for the specified week
- */
-export const getWeeklyRevenue = async (req: Request, res: Response) => {
-  const { date } = req.query
-
-  if (!date) {
-    return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
-      message: 'Date parameter is required (ISO date string format)'
-    })
-  }
-
-  try {
-    // Validate date format
-    if (!dayjs(date as string).isValid()) {
-      return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
-        message: 'Invalid date format. Please use ISO date string format'
-      })
-    }
-
-    const viewerUserId = await getRevenueViewerUserId(req)
-    if (viewerUserId === null) {
-      return res.status(HTTP_STATUS_CODE.UNAUTHORIZED).json({ message: 'Unauthorized' })
-    }
-
-    const revenueData = await billService.getWeeklyRevenue(date as string, viewerUserId)
-    const startDateFormatted = dayjs(revenueData.startDate).format('DD/MM/YYYY')
-    const endDateFormatted = dayjs(revenueData.endDate).format('DD/MM/YYYY')
-    const weekNumber = dayjs(date as string).week()
-    const year = dayjs(date as string).year()
-
-    return res.status(HTTP_STATUS_CODE.OK).json({
-      message: 'Get weekly revenue successfully',
-      result: {
-        week: weekNumber,
-        year: year,
-        dateRange: `${startDateFormatted} - ${endDateFormatted}`,
-        startDate: revenueData.startDate,
-        endDate: revenueData.endDate,
-        totalRevenue: revenueData.totalRevenue,
-        billCount: revenueData.bills.length,
-        bills: revenueData.bills
-      }
-    })
-  } catch (error: any) {
-    return res.status(HTTP_STATUS_CODE.INTERNAL_SERVER_ERROR).json({
-      message: 'Error getting weekly revenue',
-      error: error.message || 'Unknown error'
-    })
-  }
-}
-
-/**
- * Get total revenue for a specific month
- * @param req Request object containing date in query params
- * @param res Response object
- * @returns Total revenue and bill details for the specified month
- */
-export const getMonthlyRevenue = async (req: Request, res: Response) => {
-  const { date } = req.query
-
-  if (!date) {
-    return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
-      message: 'Date parameter is required (ISO date string format)'
-    })
-  }
-
-  try {
-    // Validate date format
-    if (!dayjs(date as string).isValid()) {
-      return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
-        message: 'Invalid date format. Please use ISO date string format'
-      })
-    }
-
-    const viewerUserId = await getRevenueViewerUserId(req)
-    if (viewerUserId === null) {
-      return res.status(HTTP_STATUS_CODE.UNAUTHORIZED).json({ message: 'Unauthorized' })
-    }
-
-    const revenueData = await billService.getMonthlyRevenue(date as string, viewerUserId)
-    const monthName = dayjs(date as string).format('MMMM')
-    const year = dayjs(date as string).year()
-    const startDateFormatted = dayjs(revenueData.startDate).format('DD/MM/YYYY')
-    const endDateFormatted = dayjs(revenueData.endDate).format('DD/MM/YYYY')
-
-    return res.status(HTTP_STATUS_CODE.OK).json({
-      message: 'Get monthly revenue successfully',
-      result: {
-        month: monthName,
-        year: year,
-        dateRange: `${startDateFormatted} - ${endDateFormatted}`,
-        startDate: revenueData.startDate,
-        endDate: revenueData.endDate,
-        totalRevenue: revenueData.totalRevenue,
-        billCount: revenueData.bills.length,
-        bills: revenueData.bills
-      }
-    })
-  } catch (error: any) {
-    return res.status(HTTP_STATUS_CODE.INTERNAL_SERVER_ERROR).json({
-      message: 'Error getting monthly revenue',
-      error: error.message || 'Unknown error'
-    })
-  }
-}
-
-/**
- * Get total revenue for a custom date range
- * @param req Request object containing startDate and endDate in query params
- * @param res Response object
- * @returns Total revenue and bill details for the specified date range
- */
-export const getCustomRangeRevenue = async (req: Request, res: Response) => {
-  const { startDate, endDate } = req.query
+export const getRevenueByRange = async (req: Request, res: Response) => {
+  const startDate = pickQueryString(req.query.startDate)
+  const endDate = pickQueryString(req.query.endDate)
 
   if (!startDate || !endDate) {
     return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
-      message: 'startDate và endDate là bắt buộc (định dạng ISO date string)'
+      message: 'startDate và endDate là bắt buộc (chuỗi ISO).'
     })
   }
 
   try {
-    // Validate date format
-    if (!dayjs(startDate as string).isValid() || !dayjs(endDate as string).isValid()) {
+    if (!dayjs(startDate).isValid() || !dayjs(endDate).isValid()) {
       return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
-        message: 'Định dạng ngày không hợp lệ. Vui lòng sử dụng định dạng ISO date string'
+        message: 'Định dạng ngày không hợp lệ. Vui lòng dùng chuỗi ISO.'
       })
     }
 
@@ -306,91 +144,15 @@ export const getCustomRangeRevenue = async (req: Request, res: Response) => {
       return res.status(HTTP_STATUS_CODE.UNAUTHORIZED).json({ message: 'Unauthorized' })
     }
 
-    const revenueData = await billService.getRevenueByCustomRange(startDate as string, endDate as string, viewerUserId)
+    const revenueData = await billService.getRevenueByDateRange(startDate, endDate, viewerUserId)
     const startDateFormatted = dayjs(revenueData.startDate).format('DD/MM/YYYY')
     const endDateFormatted = dayjs(revenueData.endDate).format('DD/MM/YYYY')
 
     return res.status(HTTP_STATUS_CODE.OK).json({
       message: 'Lấy dữ liệu doanh thu thành công',
       result: {
+        timeRange: `${startDateFormatted} - ${endDateFormatted}`,
         dateRange: `${startDateFormatted} - ${endDateFormatted}`,
-        startDate: revenueData.startDate,
-        endDate: revenueData.endDate,
-        totalRevenue: revenueData.totalRevenue,
-        billCount: revenueData.bills.length,
-        bills: revenueData.bills
-      }
-    })
-  } catch (error: any) {
-    return res.status(error.status || HTTP_STATUS_CODE.INTERNAL_SERVER_ERROR).json({
-      message: error.message || 'Lỗi khi lấy dữ liệu doanh thu',
-      error: error.message || 'Unknown error'
-    })
-  }
-}
-
-/**
- * Get total revenue directly from bills collection (new method with better timezone handling)
- * @param req Request object containing dateType, startDate, and optional endDate in query params
- * @param res Response object
- * @returns Total revenue and bill details for the specified time range
- */
-export const getRevenueFromBills = async (req: Request, res: Response) => {
-  const { dateType, startDate, endDate } = req.query
-
-  if (!dateType || !startDate) {
-    return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
-      message: 'dateType và startDate là bắt buộc. endDate chỉ cần thiết cho dateType "custom"'
-    })
-  }
-
-  if (dateType === 'custom' && !endDate) {
-    return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
-      message: 'endDate là bắt buộc cho dateType "custom"'
-    })
-  }
-
-  try {
-    // Validate date format
-    if (!dayjs(startDate as string).isValid() || (endDate && !dayjs(endDate as string).isValid())) {
-      return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
-        message: 'Định dạng ngày không hợp lệ. Vui lòng sử dụng định dạng ISO date string'
-      })
-    }
-
-    // FIX: Thêm log để debug múi giờ
-    console.log(`[CONTROLLER MỚI] dateType: ${dateType}`)
-    console.log(`[CONTROLLER MỚI] startDate: ${startDate}`)
-    console.log(`[CONTROLLER MỚI] endDate: ${endDate}`)
-    console.log(
-      `[CONTROLLER MỚI] startDate (VN): ${dayjs(startDate as string)
-        .tz('Asia/Ho_Chi_Minh')
-        .format('YYYY-MM-DD HH:mm:ss')}`
-    )
-    if (endDate) {
-      console.log(
-        `[CONTROLLER MỚI] endDate (VN): ${dayjs(endDate as string)
-          .tz('Asia/Ho_Chi_Minh')
-          .format('YYYY-MM-DD HH:mm:ss')}`
-      )
-    }
-
-    const viewerUserId = await getRevenueViewerUserId(req)
-    if (viewerUserId === null) {
-      return res.status(HTTP_STATUS_CODE.UNAUTHORIZED).json({ message: 'Unauthorized' })
-    }
-
-    const revenueData = await billService.getRevenueFromBillsCollection(
-      dateType as 'day' | 'week' | 'month' | 'custom',
-      startDate as string,
-      endDate as string,
-      viewerUserId
-    )
-
-    return res.status(HTTP_STATUS_CODE.OK).json({
-      message: 'Lấy dữ liệu doanh thu thành công',
-      result: {
-        timeRange: revenueData.timeRange,
         startDate: revenueData.startDate,
         endDate: revenueData.endDate,
         totalRevenue: revenueData.totalRevenue,

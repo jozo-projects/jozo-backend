@@ -52,6 +52,61 @@ const getFastVideoInfo = async (videoId: string): Promise<VideoInfo | null> => {
   }
 }
 
+/** Kết quả probe: chỉ nên xóa DB khi `unavailable`; `unknown` = giữ lại (timeout, rate limit, lỗi mơ hồ) */
+export type YoutubeVideoPresence = 'available' | 'unavailable' | 'unknown'
+
+const YOUTUBE_METADATA_PROBE_TIMEOUT_MS = 12000
+
+/**
+ * Kiểm tra nhanh (yt-dlp dump JSON) xem video YouTube còn metadata hay đã gỡ/chặn.
+ * Dùng cho job dọn thư viện bài hát; không đảm bảo phân biệt được mọi lý do (chỉ “còn” / “hết” / “không chắc”).
+ */
+export const probeYoutubeVideoPresence = async (videoId: string): Promise<YoutubeVideoPresence> => {
+  const id = videoId?.trim()
+  if (!id) return 'unknown'
+
+  try {
+    await Promise.race([
+      youtubeDl(`https://www.youtube.com/watch?v=${id}`, {
+        ...baseOptions,
+        dumpSingleJson: true,
+        skipDownload: true,
+        noPlaylist: true
+      }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('__YOUTUBE_PROBE_TIMEOUT__')), YOUTUBE_METADATA_PROBE_TIMEOUT_MS)
+      )
+    ])
+    return 'available'
+  } catch (error: unknown) {
+    const stderr = typeof (error as { stderr?: string })?.stderr === 'string' ? (error as { stderr: string }).stderr : ''
+    const message = error instanceof Error ? error.message : String(error)
+    const msg = `${message}\n${stderr}`.toLowerCase()
+
+    if (msg.includes('__youtube_probe_timeout__')) {
+      return 'unknown'
+    }
+
+    if (/\b429\b|too many requests|rate.?limit/i.test(msg)) {
+      return 'unknown'
+    }
+
+    if (
+      /unavailable|removed|private video|copyright|blocked|terminated|not found|no longer available|members-only|video is private|this video has been deleted|no video formats|video unavailable/.test(
+        msg
+      )
+    ) {
+      return 'unavailable'
+    }
+
+    if (/http error 403|http error 404|http error 410|giving up after/.test(msg)) {
+      return 'unavailable'
+    }
+
+    return 'unknown'
+  }
+}
+
 export const getAudioUrl = async (videoId: string): Promise<string> => {
   try {
     if (!videoId) {

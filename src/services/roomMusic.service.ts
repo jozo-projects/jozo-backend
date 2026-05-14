@@ -653,13 +653,13 @@ class RoomMusicServices {
 
     // Validate pagination
     const pageNum = Math.max(1, page)
-    const limitNum = Math.min(Math.max(1, limit), 100) // Max 100 per page
+    const limitNum = options?.limit === undefined ? 50 : Math.max(1, limit)
     const skip = (pageNum - 1) * limitNum
 
     // Nếu có keyword, sử dụng search logic
     if (keyword) {
-      // Lấy đủ kết quả để paginate (tối đa 1000 để tránh quá tải)
-      const maxSearchLimit = Math.min(1000, pageNum * limitNum + limitNum)
+      // Lấy đủ kết quả để paginate (theo số trang × limit; trần rộng để thư viện lớn vẫn search được)
+      const maxSearchLimit = Math.min(200_000, pageNum * limitNum)
       const searchResults = await songService.searchSongs(keyword, maxSearchLimit)
 
       // Tính toán pagination

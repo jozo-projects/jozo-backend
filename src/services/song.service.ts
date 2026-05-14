@@ -1,6 +1,7 @@
 import { FindOneAndUpdateOptions, WithId } from 'mongodb'
 import { Song, SongSchema } from '~/models/schemas/Song.schema'
 import databaseService from './database.service'
+import { probeYoutubeVideoPresence } from './video.service'
 import { Logger } from '~/utils/logger'
 
 class SongService {
@@ -353,6 +354,93 @@ class SongService {
 
     this.logger.info(`Deleted song with video_id: ${video_id}`)
     return true
+  }
+
+  /**
+   * Quét toàn bộ thư viện songs (theo _id tăng dần): probe YouTube (yt-dlp);
+   * nếu báo gỡ/chặn rõ ràng thì xóa document. dry_run: không xóa.
+   * omitVideoIds: không gom danh sách video_id (payload nhỏ hơn khi có rất nhiều bài lỗi).
+   */
+  async pruneSongsNotOnYoutube(options?: {
+    concurrency?: number
+    batchSize?: number
+    dryRun?: boolean
+    omitVideoIds?: boolean
+  }): Promise<{
+    checked: number
+    skipped_unknown: number
+    unavailable_on_youtube: number
+    removed_from_db: number
+    dry_run: boolean
+    video_ids_removed_or_would_remove: string[]
+  }> {
+    const concurrency = Math.min(Math.max(options?.concurrency ?? 5, 1), 8)
+    const batchSize = Math.min(Math.max(options?.batchSize ?? 100, 1), 200)
+    const dryRun = Boolean(options?.dryRun)
+    const omitVideoIds = Boolean(options?.omitVideoIds)
+
+    const stats = {
+      checked: 0,
+      skipped_unknown: 0,
+      unavailable_on_youtube: 0,
+      removed_from_db: 0,
+      dry_run: dryRun,
+      video_ids_removed_or_would_remove: [] as string[]
+    }
+
+    const cursor = databaseService.songs.find({}, { projection: { video_id: 1 } }).sort({ _id: 1 })
+    let batch: string[] = []
+
+    const flushBatch = async () => {
+      if (!batch.length) return
+      const work = [...batch]
+      batch = []
+
+      const queue = [...work]
+      const worker = async () => {
+        while (queue.length) {
+          const video_id = queue.shift()
+          if (!video_id) continue
+
+          const presence = await probeYoutubeVideoPresence(video_id)
+          stats.checked++
+
+          if (stats.checked % 1000 === 0) {
+            this.logger.info(`pruneSongsNotOnYoutube progress: checked=${stats.checked}`)
+          }
+
+          if (presence === 'unavailable') {
+            stats.unavailable_on_youtube++
+            if (!omitVideoIds) {
+              stats.video_ids_removed_or_would_remove.push(video_id)
+            }
+            if (!dryRun && (await this.deleteSong(video_id))) {
+              stats.removed_from_db++
+            }
+          } else if (presence === 'unknown') {
+            stats.skipped_unknown++
+          }
+        }
+      }
+
+      await Promise.all(Array.from({ length: Math.min(concurrency, work.length) }, () => worker()))
+    }
+
+    for await (const doc of cursor) {
+      if (!doc.video_id) continue
+      batch.push(doc.video_id)
+      if (batch.length >= batchSize) {
+        await flushBatch()
+      }
+    }
+
+    await flushBatch()
+
+    this.logger.info(
+      `pruneSongsNotOnYoutube done: checked=${stats.checked}, unavailable=${stats.unavailable_on_youtube}, removed=${stats.removed_from_db}, unknown=${stats.skipped_unknown}, dry_run=${dryRun}`
+    )
+
+    return stats
   }
 
   /**
