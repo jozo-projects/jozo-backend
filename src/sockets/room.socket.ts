@@ -2,6 +2,7 @@
 import { Server, Socket } from 'socket.io'
 import redis from '~/services/redis.service'
 import { roomMusicServices, roomMusicEventEmitter } from '~/services/roomMusic.service'
+import { songPruneJobEventEmitter } from '~/services/songPruneJob.service'
 import { roomEventEmitter } from '~/services/room.service'
 
 interface CommandPayload {
@@ -57,6 +58,18 @@ export const RoomSocket = (io: Server) => {
   // Gift status thay đổi (ẩn/hiện nút mở quà trên FE)
   roomEventEmitter.on('gift_status_changed', ({ roomId, scheduleId, giftEnabled }) => {
     io.to(roomId).emit('gift_status_changed', { scheduleId, giftEnabled })
+  })
+
+  songPruneJobEventEmitter.on('progress', (job) => {
+    io.to('management').emit('song_prune_progress', job)
+  })
+
+  songPruneJobEventEmitter.on('finished', (job) => {
+    io.to('management').emit('song_prune_finished', job)
+  })
+
+  songPruneJobEventEmitter.on('started', (job) => {
+    io.to('management').emit('song_prune_started', job)
   })
 
   // Listen for roomMusic events

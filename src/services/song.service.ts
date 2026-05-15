@@ -1,8 +1,22 @@
 import { FindOneAndUpdateOptions, WithId } from 'mongodb'
 import { Song, SongSchema } from '~/models/schemas/Song.schema'
 import databaseService from './database.service'
+import { SongPruneAbortedError } from '~/errors/SongPruneAbortedError'
 import { probeYoutubeVideoPresence } from './video.service'
 import { Logger } from '~/utils/logger'
+
+export type SongPruneProgressPayload = {
+  total: number
+  checked: number
+  percent: number
+  removed_from_db: number
+  unavailable_on_youtube: number
+  skipped_unknown: number
+  elapsed_sec: number
+}
+
+// eslint-disable-next-line no-unused-vars -- callback type
+export type SongPruneOnProgressFn = (progress: SongPruneProgressPayload) => void
 
 class SongService {
   private readonly logger: Logger
@@ -341,7 +355,7 @@ class SongService {
     }))
   }
 
-  async deleteSong(video_id: string): Promise<boolean> {
+  async deleteSong(video_id: string, options?: { log?: boolean }): Promise<boolean> {
     if (!video_id) {
       throw new Error('Video ID is required')
     }
@@ -352,7 +366,9 @@ class SongService {
       return false
     }
 
-    this.logger.info(`Deleted song with video_id: ${video_id}`)
+    if (options?.log !== false) {
+      this.logger.info(`Deleted song with video_id: ${video_id}`)
+    }
     return true
   }
 
@@ -366,6 +382,8 @@ class SongService {
     batchSize?: number
     dryRun?: boolean
     omitVideoIds?: boolean
+    signal?: AbortSignal
+    onProgress?: SongPruneOnProgressFn
   }): Promise<{
     checked: number
     skipped_unknown: number
@@ -388,33 +406,76 @@ class SongService {
       video_ids_removed_or_would_remove: [] as string[]
     }
 
+    const total = await databaseService.songs.countDocuments({
+      video_id: { $exists: true, $nin: [''] }
+    })
+    const startedAt = Date.now()
+    const progressEvery = Math.min(1000, Math.max(100, Math.floor(total / 20) || 100))
+
+    this.logger.info(
+      `pruneSongsNotOnYoutube started: total=${total}, concurrency=${concurrency}, batch_size=${batchSize}, dry_run=${dryRun}`
+    )
+
+    options?.onProgress?.({
+      total,
+      checked: 0,
+      percent: 0,
+      removed_from_db: 0,
+      unavailable_on_youtube: 0,
+      skipped_unknown: 0,
+      elapsed_sec: 0
+    })
+
+    const reportProgress = (force = false) => {
+      if (!force && stats.checked > 0 && stats.checked % progressEvery !== 0) return
+      const percent = total > 0 ? Math.min(100, Math.round((stats.checked / total) * 1000) / 10) : 0
+      const elapsedSec = Math.round((Date.now() - startedAt) / 1000)
+      options?.onProgress?.({
+        total,
+        checked: stats.checked,
+        percent,
+        removed_from_db: stats.removed_from_db,
+        unavailable_on_youtube: stats.unavailable_on_youtube,
+        skipped_unknown: stats.skipped_unknown,
+        elapsed_sec: elapsedSec
+      })
+      this.logger.info(
+        `pruneSongsNotOnYoutube progress: ${stats.checked}/${total} (${percent}%), removed=${stats.removed_from_db}, unavailable=${stats.unavailable_on_youtube}, unknown=${stats.skipped_unknown}, elapsed=${elapsedSec}s`
+      )
+    }
+
+    const throwIfAborted = () => {
+      if (options?.signal?.aborted) {
+        throw new SongPruneAbortedError()
+      }
+    }
+
     const cursor = databaseService.songs.find({}, { projection: { video_id: 1 } }).sort({ _id: 1 })
     let batch: string[] = []
 
     const flushBatch = async () => {
       if (!batch.length) return
+      throwIfAborted()
       const work = [...batch]
       batch = []
 
       const queue = [...work]
       const worker = async () => {
         while (queue.length) {
+          throwIfAborted()
           const video_id = queue.shift()
           if (!video_id) continue
 
           const presence = await probeYoutubeVideoPresence(video_id)
           stats.checked++
-
-          if (stats.checked % 1000 === 0) {
-            this.logger.info(`pruneSongsNotOnYoutube progress: checked=${stats.checked}`)
-          }
+          reportProgress()
 
           if (presence === 'unavailable') {
             stats.unavailable_on_youtube++
             if (!omitVideoIds) {
               stats.video_ids_removed_or_would_remove.push(video_id)
             }
-            if (!dryRun && (await this.deleteSong(video_id))) {
+            if (!dryRun && (await this.deleteSong(video_id, { log: false }))) {
               stats.removed_from_db++
             }
           } else if (presence === 'unknown') {
@@ -426,21 +487,36 @@ class SongService {
       await Promise.all(Array.from({ length: Math.min(concurrency, work.length) }, () => worker()))
     }
 
-    for await (const doc of cursor) {
-      if (!doc.video_id) continue
-      batch.push(doc.video_id)
-      if (batch.length >= batchSize) {
-        await flushBatch()
+    try {
+      for await (const doc of cursor) {
+        throwIfAborted()
+        if (!doc.video_id) continue
+        batch.push(doc.video_id)
+        if (batch.length >= batchSize) {
+          await flushBatch()
+        }
       }
+
+      await flushBatch()
+      reportProgress(true)
+
+      const elapsedSec = Math.round((Date.now() - startedAt) / 1000)
+      this.logger.info(
+        `pruneSongsNotOnYoutube done: checked=${stats.checked}/${total}, unavailable=${stats.unavailable_on_youtube}, removed=${stats.removed_from_db}, unknown=${stats.skipped_unknown}, dry_run=${dryRun}, elapsed=${elapsedSec}s`
+      )
+
+      return stats
+    } catch (error) {
+      if (error instanceof SongPruneAbortedError) {
+        reportProgress(true)
+        const elapsedSec = Math.round((Date.now() - startedAt) / 1000)
+        this.logger.info(
+          `pruneSongsNotOnYoutube cancelled: checked=${stats.checked}/${total}, removed=${stats.removed_from_db}, elapsed=${elapsedSec}s`
+        )
+        throw error
+      }
+      throw error
     }
-
-    await flushBatch()
-
-    this.logger.info(
-      `pruneSongsNotOnYoutube done: checked=${stats.checked}, unavailable=${stats.unavailable_on_youtube}, removed=${stats.removed_from_db}, unknown=${stats.skipped_unknown}, dry_run=${dryRun}`
-    )
-
-    return stats
   }
 
   /**

@@ -10,6 +10,7 @@ import { VideoSchema } from '~/models/schemas/Video.schema'
 import redis from '~/services/redis.service'
 import { roomMusicServices } from '~/services/roomMusic.service'
 import { songService } from '~/services/song.service'
+import { songPruneJobService } from '~/services/songPruneJob.service'
 import serverService from '~/services/server.service'
 import { fetchVideoInfo } from '~/utils/common'
 
@@ -1116,18 +1117,58 @@ export const normalizeSongsLibrary = async (req: Request, res: Response, next: N
 }
 
 /**
+ * Trạng thái job quét/xóa bài YouTube (cho admin poll hoặc hiển thị lần chạy gần nhất).
+ * @path GET /room-music/songs/prune-unavailable-youtube/status
+ */
+/**
+ * Hủy job quét/xóa bài YouTube đang chạy (async).
+ * @path POST /room-music/songs/prune-unavailable-youtube/cancel
+ */
+export const cancelSongPruneJob = async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { cancelled, job, message } = songPruneJobService.cancel()
+
+    if (!cancelled) {
+      return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
+        message: message ?? 'Không thể hủy job',
+        job
+      })
+    }
+
+    return res.status(HTTP_STATUS_CODE.OK).json({
+      message: message ?? 'Đã gửi yêu cầu hủy job',
+      job
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+export const getSongPruneJobStatus = async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    return res.status(HTTP_STATUS_CODE.OK).json({
+      job: songPruneJobService.getStatus()
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+/**
  * Quét toàn bộ collection songs (~mọi kích thước), probe YouTube (yt-dlp); xóa document nếu video đã gỡ/chặn rõ ràng.
+ * @query async=1 — chạy nền, trả 202 + job (admin theo dõi qua GET status hoặc socket song_prune_*).
  * @query dry_run=1 — chỉ probe, không xóa. concurrency (1–8), batch_size (1–200), omit_ids=1 — không trả danh sách video_id (nhẹ hơn khi có rất nhiều bài lỗi).
  * @path POST /room-music/songs/prune-unavailable-youtube
  */
 export const pruneSongsNotOnYoutube = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { concurrency, batch_size, dry_run, omit_ids } = req.query
+    const { concurrency, batch_size, dry_run, omit_ids, async: asyncParam } = req.query
 
     const parsedConcurrency = concurrency !== undefined ? parseInt(String(concurrency), 10) : undefined
     const parsedBatch = batch_size !== undefined ? parseInt(String(batch_size), 10) : undefined
     const dryRun = dry_run === '1' || String(dry_run).toLowerCase() === 'true'
     const omitVideoIds = omit_ids === '1' || String(omit_ids).toLowerCase() === 'true'
+    const runAsync = asyncParam === '1' || String(asyncParam).toLowerCase() === 'true'
 
     if (parsedConcurrency !== undefined && (isNaN(parsedConcurrency) || parsedConcurrency < 1 || parsedConcurrency > 8)) {
       return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
@@ -1138,6 +1179,30 @@ export const pruneSongsNotOnYoutube = async (req: Request, res: Response, next: 
     if (parsedBatch !== undefined && (isNaN(parsedBatch) || parsedBatch < 1 || parsedBatch > 200)) {
       return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
         message: 'Tham số batch_size phải từ 1 đến 200'
+      })
+    }
+
+    if (runAsync) {
+      const { started, job, message } = songPruneJobService.start({
+        source: 'api',
+        concurrency: parsedConcurrency,
+        batchSize: parsedBatch,
+        dryRun,
+        omitVideoIds: omit_ids === undefined ? true : omitVideoIds
+      })
+
+      if (!started) {
+        return res.status(HTTP_STATUS_CODE.CONFLICT).json({
+          message: message ?? 'Job đang chạy',
+          job
+        })
+      }
+
+      return res.status(HTTP_STATUS_CODE.ACCEPTED).json({
+        message: dryRun
+          ? 'Đã bắt đầu dry-run quét thư viện (nền). Theo dõi qua GET .../status hoặc socket song_prune_progress.'
+          : 'Đã bắt đầu quét và xóa bài không còn trên YouTube (nền). Theo dõi qua GET .../status hoặc socket song_prune_progress.',
+        job
       })
     }
 

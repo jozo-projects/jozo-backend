@@ -1,5 +1,7 @@
 import { Router } from 'express'
+import { UserRole } from '~/constants/enum'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
+import { protect } from '~/middlewares/auth.middleware'
 import {
   addSong,
   addSongsToQueue,
@@ -14,6 +16,8 @@ import {
   playNextSong,
   removeAllSongsInQueue,
   removeSong,
+  cancelSongPruneJob,
+  getSongPruneJobStatus,
   normalizeSongsLibrary,
   pruneSongsNotOnYoutube,
   requestEndSessionPrintBill,
@@ -56,11 +60,37 @@ roomMusicRouter.delete('/songs-collection/:videoId', wrapRequestHandler(deleteSo
 roomMusicRouter.post('/songs/normalize', wrapRequestHandler(normalizeSongsLibrary))
 
 /**
- * @description Xóa khỏi DB các bài không còn trên YouTube (probe bằng yt-dlp). dry_run=1 để xem trước không xóa.
+ * @description Trạng thái job quét/xóa bài YouTube (admin).
+ * @path /room-music/songs/prune-unavailable-youtube/status
+ * @method GET
+ */
+roomMusicRouter.get(
+  '/songs/prune-unavailable-youtube/status',
+  protect([UserRole.Admin]),
+  wrapRequestHandler(getSongPruneJobStatus)
+)
+
+/**
+ * @description Hủy job quét/xóa bài YouTube đang chạy (admin).
+ * @path /room-music/songs/prune-unavailable-youtube/cancel
+ * @method POST
+ */
+roomMusicRouter.post(
+  '/songs/prune-unavailable-youtube/cancel',
+  protect([UserRole.Admin]),
+  wrapRequestHandler(cancelSongPruneJob)
+)
+
+/**
+ * @description Xóa khỏi DB các bài không còn trên YouTube (probe bằng yt-dlp). async=1 cho admin UI. dry_run=1 để xem trước không xóa.
  * @path /room-music/songs/prune-unavailable-youtube
  * @method POST
  */
-roomMusicRouter.post('/songs/prune-unavailable-youtube', wrapRequestHandler(pruneSongsNotOnYoutube))
+roomMusicRouter.post(
+  '/songs/prune-unavailable-youtube',
+  protect([UserRole.Admin]),
+  wrapRequestHandler(pruneSongsNotOnYoutube)
+)
 
 /**
  * @description Add song to queue
