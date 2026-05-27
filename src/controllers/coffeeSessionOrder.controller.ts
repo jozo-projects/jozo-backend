@@ -1,6 +1,10 @@
 import { Request, Response } from 'express'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
-import { ISetCoffeeSessionOrderRequestBody } from '~/models/requests/CoffeeSessionOrder.request'
+import {
+  IPrintCoffeeSessionOrderBatchRequestBody,
+  ISetCoffeeSessionOrderRequestBody
+} from '~/models/requests/CoffeeSessionOrder.request'
+import coffeeOrderPrintService from '~/services/coffeeOrderPrint.service'
 import coffeeOrderRealtimeService from '~/services/coffeeOrderRealtime.service'
 import coffeeSessionOrderService from '~/services/coffeeSessionOrder.service'
 import { toCompactCoffeeSessionOrderResponse } from '~/utils/coffeeSessionOrderResponse'
@@ -62,5 +66,19 @@ export const markCoffeeSessionOrderBatchServedController = async (req: Request, 
       batch: result.batch,
       aggregatedOrder: toCompactCoffeeSessionOrderResponse(result.order)
     }
+  })
+}
+
+export const printCoffeeSessionOrderBatchController = async (req: Request, res: Response) => {
+  const { printerId } = req.body as IPrintCoffeeSessionOrderBatchRequestBody
+  const result = await coffeeOrderPrintService.printCoffeeSessionOrderBatch(
+    req.params.coffeeSessionId,
+    req.params.batchId,
+    printerId
+  )
+
+  return res.status(HTTP_STATUS_CODE.OK).json({
+    message: 'Print coffee session order batch success',
+    result
   })
 }

@@ -32,6 +32,7 @@ import { EmployeeSalarySnapshot } from '~/models/schemas/EmployeeSalarySnapshot.
 import { EmployeeSalaryConfig } from '~/models/schemas/EmployeeSalaryConfig.schema'
 import { EmployeeSalarySpecialDay } from '~/models/schemas/EmployeeSalarySpecialDay.schema'
 dotenv.config()
+dotenv.config({ path: '.env.local', override: true })
 
 // Interface cho Client Booking
 interface IClientBooking {
@@ -53,7 +54,10 @@ const DB_PASSWORD = process.env.DB_PASSWORD
 const DB_NAME = process.env.DB_NAME
 const VPS_IP = process.env.VPS_IP
 
-const uri = `mongodb://${DB_USERNAME}:${DB_PASSWORD}@${VPS_IP}:27017/${DB_NAME}?authSource=admin`
+const uri =
+  DB_USERNAME && DB_PASSWORD
+    ? `mongodb://${DB_USERNAME}:${DB_PASSWORD}@${VPS_IP}:27017/${DB_NAME}?authSource=admin`
+    : `mongodb://${VPS_IP}:27017/${DB_NAME}`
 
 class DatabaseService {
   private client: MongoClient
@@ -64,13 +68,18 @@ class DatabaseService {
   }
 
   async connect() {
+    const isLocal = !DB_USERNAME || !DB_PASSWORD
+    const envLabel = isLocal ? '.env.local (LOCAL)' : '.env (VPS)'
+    const dbHost = isLocal ? 'localhost:27017' : `${VPS_IP}:27017`
+    console.log(`[ENV]  Using: ${envLabel}`)
+
     try {
       // Send a ping to confirm a successful connection
       await this.db.command({ ping: 1 })
-      console.log('Pinged your deployment. You successfully connected to MongoDB!')
+      console.log(`[DB]   Connected successfully!`)
       await this.db.collection('employee_salary_special_days').createIndex({ businessDate: 1 }, { unique: true })
     } catch (error) {
-      console.log('Can not Pinge your deployment. You failed connected to MongoDB!')
+      console.log(`[DB]   Connection FAILED to ${dbHost}!`)
       console.error(error)
     } finally {
       // Ensures that the client will close when you finish/error
