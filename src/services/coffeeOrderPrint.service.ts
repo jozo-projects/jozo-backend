@@ -210,8 +210,8 @@ class CoffeeOrderPrintService {
     const { tableName, batch, peopleCount, isBoardGameTicket, planSnapshot, includeBoardGameCharge } = context
     const lines: string[] = []
 
-    lines.push(this.padLine('Jozo Music Box', 'center'))
-    lines.push(this.padLine('PHIEU ORDER', 'center'))
+    lines.push(this.padLine('Jozo Board Game', 'center'))
+    lines.push(this.padLine('Hoa Don', 'center'))
     lines.push(this.divider())
     lines.push(this.padLine(`${tableName}`))
     lines.push(this.padLine(this.formatSubmittedAt(batch.submittedAt)))
