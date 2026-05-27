@@ -4,12 +4,14 @@ import {
   deleteCoffeeSessionOrderController,
   getCoffeeSessionOrderController,
   markCoffeeSessionOrderBatchServedController,
+  printCoffeeSessionOrderBatchController,
   setCoffeeSessionOrderController
 } from '~/controllers/coffeeSessionOrder.controller'
 import { protect } from '~/middlewares/auth.middleware'
 import {
   coffeeSessionOrderParamValidator,
   markCoffeeSessionOrderBatchServedValidator,
+  printCoffeeSessionOrderBatchValidator,
   setCoffeeSessionOrderValidator
 } from '~/middlewares/coffeeSessionOrder.middleware'
 import { wrapRequestHandler } from '~/utils/handlers'
@@ -41,6 +43,13 @@ coffeeSessionOrderRouter.patch(
   coffeeSessionOrderParamValidator,
   markCoffeeSessionOrderBatchServedValidator,
   wrapRequestHandler(markCoffeeSessionOrderBatchServedController)
+)
+coffeeSessionOrderRouter.post(
+  '/:coffeeSessionId/batches/:batchId/print',
+  protect([UserRole.Admin, UserRole.Staff]),
+  coffeeSessionOrderParamValidator,
+  printCoffeeSessionOrderBatchValidator,
+  wrapRequestHandler(printCoffeeSessionOrderBatchController)
 )
 
 export default coffeeSessionOrderRouter

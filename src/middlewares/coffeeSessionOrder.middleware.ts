@@ -46,3 +46,28 @@ export const markCoffeeSessionOrderBatchServedValidator = validate(
     }
   })
 )
+
+export const printCoffeeSessionOrderBatchValidator = validate(
+  checkSchema({
+    batchId: {
+      in: ['params'],
+      notEmpty: {
+        errorMessage: 'batchId is required'
+      },
+      isUUID: {
+        errorMessage: 'batchId must be a valid UUID'
+      }
+    },
+    printerId: {
+      in: ['body'],
+      optional: true,
+      isString: {
+        errorMessage: 'printerId must be a string'
+      },
+      trim: true,
+      notEmpty: {
+        errorMessage: 'printerId cannot be empty'
+      }
+    }
+  })
+)

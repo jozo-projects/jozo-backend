@@ -333,7 +333,7 @@ export function assertSelectionsMatchGroups(
   if (!groups?.length) {
     if (sel.length > 0) {
       throw new ErrorWithStatus({
-        message: `Món "${itemName}" (${itemId}) không hỗ trợ tuỳ chọn có cấu trúc — bỏ selections hoặc cấu hình customizationGroups trên menu`,
+        message: `Món "${itemName}" không hỗ trợ tuỳ chọn có cấu trúc — bỏ các lựa chọn trên menu`,
         status: HTTP_STATUS_CODE.BAD_REQUEST
       })
     }

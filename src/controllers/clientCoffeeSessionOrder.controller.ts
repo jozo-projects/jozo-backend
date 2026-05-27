@@ -1,6 +1,7 @@
 import { Request, Response } from 'express'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { ISubmitCoffeeSessionCartRequestBody } from '~/models/requests/ClientCoffeeSessionOrder.request'
+import coffeeOrderPrintService from '~/services/coffeeOrderPrint.service'
 import coffeeOrderRealtimeService from '~/services/coffeeOrderRealtime.service'
 import coffeeSessionOrderService from '~/services/coffeeSessionOrder.service'
 import {
@@ -40,6 +41,12 @@ export const submitCoffeeSessionCartController = async (
     createdBatch: compactCreatedBatch,
     submittedLineItems
   })
+
+  try {
+    await coffeeOrderPrintService.printBatchIfPresent(coffeeSessionId, createdBatch)
+  } catch (error) {
+    console.error('[submitCoffeeSessionCart] auto print failed:', error)
+  }
 
   return res.status(HTTP_STATUS_CODE.OK).json({
     message: 'Submit coffee session cart success',
