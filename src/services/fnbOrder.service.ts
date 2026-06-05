@@ -10,6 +10,7 @@ import {
   normalizeFnbOrder,
   orderFromSetPayload
 } from '~/utils/fnbOrderLines'
+import { resolveReportingMonthRange } from '~/utils/reportingPeriod'
 import databaseService from './database.service'
 import { assertOrderLinesMatchMenuCustomizations } from './fnbMenuCustomization.service'
 import fnbMenuItemService from './fnbMenuItem.service'
@@ -193,7 +194,7 @@ class FnbOrderService {
   /**
    * Lấy thống kê FNB theo khoảng thời gian (ngày/tuần/tháng) theo giờ Việt Nam.
    * @param period 'day' | 'week' | 'month'
-   * @param dateStr Ngày theo VN (YYYY-MM-DD). Nếu không truyền: day = hôm nay, week = tuần hiện tại, month = tháng hiện tại
+   * @param dateStr Ngày theo VN (YYYY-MM-DD). Nếu không truyền: day = hôm nay, week = tuần hiện tại, month = kỳ báo cáo hiện tại (ngày 6 → ngày 5 tháng sau)
    * @param category Lọc theo category: 'drink' | 'snack' (optional)
    * @param search Tìm theo tên item (optional, không phân biệt hoa thường)
    */
@@ -227,10 +228,12 @@ class FnbOrderService {
             : baseDate.subtract(baseDate.day() - 1, 'day').startOf('day')
         toDate = fromDate.add(6, 'day').endOf('day')
         break
-      case 'month':
-        fromDate = baseDate.startOf('month')
-        toDate = baseDate.endOf('month')
+      case 'month': {
+        const range = resolveReportingMonthRange(baseDate)
+        fromDate = range.fromDate
+        toDate = range.toDate
         break
+      }
       default:
         fromDate = baseDate.startOf('day')
         toDate = baseDate.endOf('day')

@@ -1076,7 +1076,7 @@ export const setAdminFnbOrder = async (req: Request, res: Response, next: NextFu
  * @description Thống kê FNB: số item bán được theo ngày/tuần/tháng (theo giờ Việt Nam)
  * @path GET /fnb-orders/stats
  * @query period: 'day' | 'week' | 'month'
- * @query date: YYYY-MM-DD (optional - ngày cụ thể; không gửi thì dùng hôm nay / tuần hiện tại / tháng hiện tại)
+ * @query date: YYYY-MM-DD (optional - ngày cụ thể; month = kỳ báo cáo chứa ngày đó, từ ngày 6 đến ngày 5 tháng sau)
  * @query category: 'drink' | 'snack' (optional - lọc theo loại)
  * @query search: string (optional - tìm theo tên item)
  */
