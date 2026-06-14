@@ -6,7 +6,7 @@ import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { AUTH_MESSAGES, USER_MESSAGES } from '~/constants/messages'
 import { ErrorWithStatus } from '~/models/Error'
 import databaseService from '~/services/database.service'
-import { hashPassword } from '~/utils/crypto'
+import { verifyPassword } from '~/utils/crypto'
 import { verifyToken } from '~/utils/jwt'
 import { validate } from '~/utils/validation'
 
@@ -75,10 +75,9 @@ export const checkLoginUserExists = async (req: Request, res: Response, next: Ne
       })
     }
 
-    // Bước 2: Băm mật khẩu người dùng nhập vào và so sánh với mật khẩu đã lưu
-    const hashedPassword = hashPassword(password)
+    const isPasswordValid = await verifyPassword(password, user.password)
 
-    if (user.password !== hashedPassword) {
+    if (!isPasswordValid) {
       throw new ErrorWithStatus({
         message: USER_MESSAGES.INVALID_LOGIN,
         status: HTTP_STATUS_CODE.UNAUTHORIZED
@@ -401,6 +400,13 @@ export const forgotPasswordValidator = validate(
     ['body']
   )
 )
+
+export const normalizeResetPasswordBody = (req: Request, _res: Response, next: NextFunction) => {
+  if (!req.body.forgot_password_token && typeof req.body.token === 'string') {
+    req.body.forgot_password_token = req.body.token
+  }
+  next()
+}
 
 export const resetPasswordValidator = validate(
   checkSchema(

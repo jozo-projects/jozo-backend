@@ -3,7 +3,7 @@ import { MembershipTier, TokenType } from '~/constants/enum'
 import { USER_MESSAGES } from '~/constants/messages'
 import { RegisterRequestBody, UpdateUserRequestBody, GetUsersQuery } from '~/models/requests/User.requests'
 import { User } from '~/models/schemas/User.schema'
-import { hashPassword } from '~/utils/crypto'
+import { hashPassword, verifyPassword } from '~/utils/crypto'
 import { signToken, verifyToken } from '~/utils/jwt'
 import databaseService from './database.service'
 import { sendResetPasswordEmail, sendWelcomeEmail } from './email.service'
@@ -248,8 +248,13 @@ class UsersServices {
   }
 
   async forgotPassword(email: string) {
-    // Tìm user theo email
-    const user = await databaseService.users.findOne({ email })
+    const normalizedEmail = email.trim()
+    // Tìm user theo email (không phân biệt hoa thường)
+    const user = await databaseService.users.findOne({
+      email: {
+        $regex: new RegExp(`^${normalizedEmail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i')
+      }
+    })
     if (!user) {
       throw new Error(USER_MESSAGES.EMAIL_NOT_FOUND)
     }
@@ -282,39 +287,45 @@ class UsersServices {
   }
 
   async resetPassword(forgotPasswordToken: string, newPassword: string) {
+    const normalizedToken = forgotPasswordToken.trim()
+
+    let decoded: { user_id?: string; token_type?: TokenType }
     try {
-      // Verify token
-      const decoded = (await verifyToken(forgotPasswordToken)) as any
-
-      // Tìm user theo token
-      const user = await databaseService.users.findOne({
-        _id: new ObjectId(decoded.user_id),
-        forgot_password_token: forgotPasswordToken
-      })
-
-      if (!user) {
-        throw new Error(USER_MESSAGES.INVALID_FORGOT_PASSWORD_TOKEN)
-      }
-
-      // Hash password mới
-      const hashedPassword = hashPassword(newPassword)
-
-      // Update password và xóa token
-      await databaseService.users.updateOne(
-        { _id: user._id },
-        {
-          $set: {
-            password: hashedPassword,
-            updated_at: new Date()
-          },
-          $unset: { forgot_password_token: '' }
-        }
-      )
-
-      return { message: USER_MESSAGES.RESET_PASSWORD_SUCCESS }
+      decoded = (await verifyToken(normalizedToken)) as { user_id?: string; token_type?: TokenType }
     } catch {
       throw new Error(USER_MESSAGES.INVALID_FORGOT_PASSWORD_TOKEN)
     }
+
+    if (decoded.token_type !== TokenType.ForgotPasswordToken || !decoded.user_id) {
+      throw new Error(USER_MESSAGES.INVALID_FORGOT_PASSWORD_TOKEN)
+    }
+
+    const user = await databaseService.users.findOne({
+      _id: new ObjectId(decoded.user_id)
+    })
+
+    if (!user || user.forgot_password_token !== normalizedToken) {
+      throw new Error(USER_MESSAGES.INVALID_FORGOT_PASSWORD_TOKEN)
+    }
+
+    const hashedPassword = hashPassword(newPassword)
+
+    const result = await databaseService.users.updateOne(
+      { _id: user._id, forgot_password_token: normalizedToken },
+      {
+        $set: {
+          password: hashedPassword,
+          updated_at: new Date()
+        },
+        $unset: { forgot_password_token: '' }
+      }
+    )
+
+    if (result.modifiedCount === 0) {
+      throw new Error(USER_MESSAGES.INVALID_FORGOT_PASSWORD_TOKEN)
+    }
+
+    return { message: USER_MESSAGES.RESET_PASSWORD_SUCCESS }
   }
 
   async changePassword(userId: string, oldPassword: string, newPassword: string) {
@@ -324,17 +335,15 @@ class UsersServices {
       throw new Error(USER_MESSAGES.USER_NOT_FOUND)
     }
 
-    // Verify old password
-    const hashedOldPassword = hashPassword(oldPassword)
-    if (user.password !== hashedOldPassword) {
+    const isOldPasswordValid = await verifyPassword(oldPassword, user.password)
+    if (!isOldPasswordValid) {
       throw new Error(USER_MESSAGES.OLD_PASSWORD_INCORRECT)
     }
 
     // Hash password mới
     const hashedNewPassword = hashPassword(newPassword)
 
-    // Update password
-    await databaseService.users.updateOne(
+    const result = await databaseService.users.updateOne(
       { _id: new ObjectId(userId) },
       {
         $set: {
@@ -343,6 +352,10 @@ class UsersServices {
         }
       }
     )
+
+    if (result.modifiedCount === 0) {
+      throw new Error(USER_MESSAGES.USER_NOT_FOUND)
+    }
 
     return { message: USER_MESSAGES.CHANGE_PASSWORD_SUCCESS }
   }

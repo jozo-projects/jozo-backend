@@ -202,7 +202,11 @@ export const removeSongFromQueue = async (req: Request, res: Response, next: Nex
 export const getVideosByBookingCode = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { bookingCode } = req.params
-    const result = await onlineBookingService.getVideosByBookingCode(bookingCode)
+    const { dateOfUse } = req.query
+    const result = await onlineBookingService.getVideosByBookingCode(
+      bookingCode,
+      typeof dateOfUse === 'string' ? dateOfUse : undefined
+    )
     res.status(HTTP_STATUS_CODE.OK).json({
       result,
       message: 'Get videos by booking code successfully'

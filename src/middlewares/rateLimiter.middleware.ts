@@ -7,7 +7,7 @@ interface RateLimitConfig {
   windowMs: number // Thời gian window tính bằng milliseconds
   max: number // Số lượng requests tối đa trong window
   message?: string // Custom message (optional)
-  keyGenerator?: (req: Request) => string // Custom key generator (optional)
+  keyGenerator?: (_req: Request) => string // Custom key generator (optional)
   skipSuccessfulRequests?: boolean // Chỉ đếm failed requests
   skipFailedRequests?: boolean // Chỉ đếm successful requests
 }
@@ -18,6 +18,8 @@ interface RateLimitInfo {
   resetTime: number
   total: number
 }
+
+const isRateLimitDisabled = () => process.env.RATE_LIMIT_DISABLED === 'true'
 
 /**
  * Sliding Window Rate Limiter sử dụng Redis
@@ -91,6 +93,10 @@ class RateLimiter {
    */
   createMiddleware(config: RateLimitConfig) {
     return async (req: Request, res: Response, next: NextFunction) => {
+      if (isRateLimitDisabled()) {
+        return next()
+      }
+
       // Generate key dựa vào IP, route, hoặc custom logic
       const defaultKeyGenerator = (req: Request) => {
         const identifier = req.ip || req.socket.remoteAddress || 'unknown'

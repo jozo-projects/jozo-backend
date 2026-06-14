@@ -6,7 +6,7 @@ import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { ErrorWithStatus } from '~/models/Error'
 import { IRoomScheduleRequestBody, IRoomScheduleRequestQuery } from '~/models/requests/RoomSchedule.request'
 import { BookingSource, RoomSchedule } from '~/models/schemas/RoomSchdedule.schema'
-import { generateUniqueBookingCode, parseDate } from '~/utils/common'
+import { generateUniqueBookingCode, parseDate, buildBookingCodeDuplicateFilter, getDateOfUseFromDate } from '~/utils/common'
 import databaseService from './database.service'
 import fnbOrderService from './fnbOrder.service'
 import redis from './redis.service'
@@ -212,10 +212,13 @@ class RoomScheduleService {
 
     // Nếu không có overlap, tiến hành tạo event mới
     // Sinh bookingCode nếu status là Booked
+    const dateOfUse = getDateOfUseFromDate(startTime)
     let bookingCode: string | undefined
     if (schedule.status === RoomScheduleStatus.Booked) {
       bookingCode = await generateUniqueBookingCode(async (code) => {
-        const existingSchedule = await databaseService.roomSchedule.findOne({ bookingCode: code })
+        const existingSchedule = await databaseService.roomSchedule.findOne(
+          buildBookingCodeDuplicateFilter(dateOfUse, code)
+        )
         return !!existingSchedule
       })
     }
@@ -230,7 +233,17 @@ class RoomScheduleService {
       schedule.note,
       schedule.source || BookingSource.Staff, // Sử dụng source được cung cấp hoặc mặc định là Staff
       schedule.applyFreeHourPromo,
-      bookingCode
+      bookingCode,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      dateOfUse
     )
 
     // Đánh dấu lịch có quà nếu admin/staff chọn
@@ -578,10 +591,13 @@ class RoomScheduleService {
       // Tạo room schedules cho từng time slot (hỗ trợ qua đêm, vd: 23:00-01:00)
       for (const timeSlot of booking.time_slots) {
         const { startTime, endTime } = this.parseTimeSlotWithOvernight(booking.booking_date, timeSlot, timeZone)
+        const dateOfUse = getDateOfUseFromDate(startTime)
 
         // Sinh bookingCode cho booking từ web customer
         const bookingCode = await generateUniqueBookingCode(async (code) => {
-          const existingSchedule = await databaseService.roomSchedule.findOne({ bookingCode: code })
+          const existingSchedule = await databaseService.roomSchedule.findOne(
+            buildBookingCodeDuplicateFilter(dateOfUse, code)
+          )
           return !!existingSchedule
         })
 
@@ -596,7 +612,17 @@ class RoomScheduleService {
           `Booking by ${booking.customer_name} (${booking.customer_phone})`, // note
           BookingSource.Customer, // đánh dấu nguồn đặt phòng là từ khách hàng
           false, // applyFreeHourPromo default off for booking from customer
-          bookingCode
+          bookingCode,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          dateOfUse
         )
 
         // Lưu trực tiếp vào database không qua hàm createSchedule
@@ -710,9 +736,13 @@ class RoomScheduleService {
           })
         }
 
+        const dateOfUse = getDateOfUseFromDate(startTime)
+
         // Sinh bookingCode cho auto booking từ web customer
         const bookingCode = await generateUniqueBookingCode(async (code) => {
-          const existingSchedule = await databaseService.roomSchedule.findOne({ bookingCode: code })
+          const existingSchedule = await databaseService.roomSchedule.findOne(
+            buildBookingCodeDuplicateFilter(dateOfUse, code)
+          )
           return !!existingSchedule
         })
 
@@ -727,7 +757,17 @@ class RoomScheduleService {
           `Booking by ${booking.customer_name} (${booking.customer_phone})`, // note
           BookingSource.Customer, // đánh dấu nguồn đặt phòng là từ khách hàng
           false, // applyFreeHourPromo default off for auto booking
-          bookingCode
+          bookingCode,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          dateOfUse
         )
 
         // Lưu trực tiếp vào database không qua hàm createSchedule

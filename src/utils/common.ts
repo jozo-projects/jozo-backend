@@ -1,7 +1,21 @@
 import multer from 'multer'
 import { randomInt } from 'crypto'
+import dayjs from 'dayjs'
+import timezone from 'dayjs/plugin/timezone'
+import utc from 'dayjs/plugin/utc'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { ErrorWithStatus } from '~/models/Error'
+
+dayjs.extend(utc)
+dayjs.extend(timezone)
+
+const VN_TIMEZONE = 'Asia/Ho_Chi_Minh'
+
+/** Dev: CLIENT_URL; prod: BASE_URL khi không set CLIENT_URL trên server */
+export function getClientUrl(): string | undefined {
+  const url = (process.env.CLIENT_URL || process.env.BASE_URL)?.replace(/\/$/, '')
+  return url || undefined
+}
 
 /**
  * Parses a date string and returns a Date object.
@@ -111,6 +125,64 @@ export function cleanOrderDetail(orderDetail: any) {
 export function generateBookingCode(min: number = 0, max: number = 10000): string {
   const code = randomInt(min, max) // sinh số ngẫu nhiên an toàn
   return code.toString().padStart(4, '0') // đảm bảo luôn 4 chữ số
+}
+
+/**
+ * Chuẩn hóa mã booking về dạng 4 chữ số (vd: "123" -> "0123")
+ */
+export function normalizeBookingCode(bookingCode: string): string {
+  const digits = bookingCode.replace(/\D/g, '')
+  if (!digits) {
+    throw new ErrorWithStatus({
+      message: 'Invalid booking code',
+      status: HTTP_STATUS_CODE.BAD_REQUEST
+    })
+  }
+  return digits.padStart(4, '0').slice(-4)
+}
+
+/**
+ * Lấy ngày sử dụng (YYYY-MM-DD) theo timezone Việt Nam
+ */
+export function getDateOfUseFromDate(date: Date): string {
+  return dayjs.tz(date, VN_TIMEZONE).format('YYYY-MM-DD')
+}
+
+/**
+ * Filter kiểm tra trùng mã booking trong cùng ngày (kể cả bản ghi legacy chưa có dateOfUse)
+ */
+export function buildBookingCodeDuplicateFilter(dateOfUse: string, bookingCode: string) {
+  const normalizedCode = normalizeBookingCode(bookingCode)
+  const dayStart = dayjs.tz(dateOfUse, 'YYYY-MM-DD', VN_TIMEZONE).startOf('day').toDate()
+  const dayEnd = dayjs.tz(dateOfUse, 'YYYY-MM-DD', VN_TIMEZONE).endOf('day').toDate()
+
+  return {
+    bookingCode: normalizedCode,
+    $or: [
+      { dateOfUse },
+      { dateOfUse: { $exists: false }, startTime: { $gte: dayStart, $lte: dayEnd } }
+    ]
+  }
+}
+
+/**
+ * Filter tra cứu mã booking theo ngày, hỗ trợ booking qua đêm và bản ghi legacy
+ */
+export function buildBookingCodeLookupFilter(bookingCode: string, dateOfUse: string) {
+  const normalizedCode = normalizeBookingCode(bookingCode)
+  const prevDateOfUse = dayjs.tz(dateOfUse, 'YYYY-MM-DD', VN_TIMEZONE).subtract(1, 'day').format('YYYY-MM-DD')
+  const dayStart = dayjs.tz(dateOfUse, 'YYYY-MM-DD', VN_TIMEZONE).startOf('day').toDate()
+  const dayEnd = dayjs.tz(dateOfUse, 'YYYY-MM-DD', VN_TIMEZONE).endOf('day').toDate()
+  const prevDayStart = dayjs.tz(prevDateOfUse, 'YYYY-MM-DD', VN_TIMEZONE).startOf('day').toDate()
+
+  return {
+    bookingCode: normalizedCode,
+    $or: [
+      { dateOfUse },
+      { dateOfUse: prevDateOfUse, endTime: { $gt: dayStart } },
+      { dateOfUse: { $exists: false }, startTime: { $gte: prevDayStart, $lte: dayEnd } }
+    ]
+  }
 }
 
 /**

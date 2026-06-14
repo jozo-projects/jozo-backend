@@ -11,6 +11,7 @@ import {
   logoutController,
   registerController,
   resetPasswordController,
+  resetPasswordRedirectController,
   updateUserController,
   getUserMembershipDetailController,
   grantUserPointsController
@@ -23,6 +24,7 @@ import {
   checkUserId,
   forgotPasswordValidator,
   loginValidator,
+  normalizeResetPasswordBody,
   registerValidator,
   resetPasswordValidator,
   updateUserValidator
@@ -93,13 +95,26 @@ usersRouter.post(
 )
 
 /**
+ * @description Redirect to frontend reset password page (from email link)
+ * @path /users/reset-password
+ * @method GET
+ * @query {token: string}
+ */
+usersRouter.get('/reset-password', wrapRequestHandler(resetPasswordRedirectController))
+
+/**
  * @description Reset password
  * @path /users/reset-password
  * @method POST
  * @body {forgot_password_token: string, password: string, confirm_password: string}
  * @author QuangDoo
  */
-usersRouter.post('/reset-password', resetPasswordValidator, wrapRequestHandler(resetPasswordController))
+usersRouter.post(
+  '/reset-password',
+  normalizeResetPasswordBody,
+  resetPasswordValidator,
+  wrapRequestHandler(resetPasswordController)
+)
 
 /**
  * @description Change password

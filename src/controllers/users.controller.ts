@@ -17,7 +17,7 @@ import { IUser } from '~/models/schemas/User.schema'
 import { uploadImageToCloudinary } from '~/services/cloudinary.service'
 import CloudinaryResponse from '~/models/CloudinaryResponse'
 import membershipService from '~/services/membership.service'
-
+import { getClientUrl } from '~/utils/common'
 /**
  * Register a new user
  * @description Register a new user using the native MongoDB driver
@@ -369,6 +369,34 @@ export const forgotPasswordController = async (req: Request, res: Response, next
 }
 
 /**
+ * Redirect to frontend reset password page
+ * @description Redirect from email link to client reset password page
+ * @path /users/reset-password
+ * @method GET
+ * @query {token: string}
+ */
+export const resetPasswordRedirectController = async (req: Request, res: Response) => {
+  const token = req.query.token
+
+  if (typeof token !== 'string' || !token.trim()) {
+    return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
+      message: USER_MESSAGES.INVALID_FORGOT_PASSWORD_TOKEN
+    })
+  }
+
+  const clientUrl = getClientUrl()
+  if (!clientUrl) {
+    return res.status(HTTP_STATUS_CODE.INTERNAL_SERVER_ERROR).json({
+      message: 'CLIENT_URL or BASE_URL is not configured'
+    })
+  }
+
+  const resetPageUrl = `${clientUrl}/reset-password?token=${encodeURIComponent(token.trim())}`
+
+  return res.redirect(302, resetPageUrl)
+}
+
+/**
  * Reset password
  * @description Reset password with token
  * @path /users/reset-password
@@ -378,7 +406,14 @@ export const forgotPasswordController = async (req: Request, res: Response, next
  */
 export const resetPasswordController = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { forgot_password_token, password, confirm_password } = req.body
+    const forgot_password_token = (req.body.forgot_password_token || req.body.token || '').trim()
+    const { password, confirm_password } = req.body
+
+    if (!forgot_password_token) {
+      return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
+        message: USER_MESSAGES.INVALID_FORGOT_PASSWORD_TOKEN
+      })
+    }
 
     // Kiểm tra password và confirm_password có khớp nhau không
     if (password !== confirm_password) {

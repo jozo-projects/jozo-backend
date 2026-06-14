@@ -7,7 +7,7 @@ import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { ErrorWithStatus } from '~/models/Error'
 import { RoomSchedule, BookingSource } from '~/models/schemas/RoomSchdedule.schema'
 import { AddSongRequestBody } from '~/models/requests/Song.request'
-import { generateUniqueBookingCode } from '~/utils/common'
+import { generateUniqueBookingCode, buildBookingCodeDuplicateFilter, buildBookingCodeLookupFilter, getDateOfUseFromDate, normalizeBookingCode } from '~/utils/common'
 import { parseClientRoomTypeString, roomTypeFieldToEnum } from '~/utils/roomType'
 import databaseService from './database.service'
 import { emitBookingNotification } from './room.service'
@@ -316,14 +316,12 @@ class OnlineBookingService {
       const mergedNote = customerNoteTrimmed ? `${autoNote} | ${customerNoteTrimmed}` : autoNote
 
       // Sinh mã booking 4 chữ số và dateOfUse
-      const dateOfUse = dayjs.tz(startTime, 'Asia/Ho_Chi_Minh').format('YYYY-MM-DD')
+      const dateOfUse = getDateOfUseFromDate(startTime)
       const bookingCode = await generateUniqueBookingCode(async (code) => {
-        // Kiểm tra mã đã tồn tại trong cùng ngày chưa
-        const existingSchedule = await databaseService.roomSchedule.findOne({
-          dateOfUse,
-          bookingCode: code
-        })
-        return !!existingSchedule // return true nếu trùng
+        const existingSchedule = await databaseService.roomSchedule.findOne(
+          buildBookingCodeDuplicateFilter(dateOfUse, code)
+        )
+        return !!existingSchedule
       })
 
       // Tạo RoomSchedule (sử dụng constructor ngắn gọn, set thêm field sau)
@@ -647,31 +645,34 @@ class OnlineBookingService {
         })
       }
 
-      // Lấy queueSongs hiện tại hoặc tạo mới
-      const currentQueueSongs = schedule.queueSongs || []
-
-      // Thêm song mới vào queue
-      let updatedQueueSongs: AddSongRequestBody[]
-
-      if (songData.position === 'top') {
-        // Thêm vào đầu queue
-        updatedQueueSongs = [songData, ...currentQueueSongs]
-      } else {
-        // Thêm vào cuối queue (mặc định)
-        updatedQueueSongs = [...currentQueueSongs, songData]
+      if (![RoomScheduleStatus.Booked, RoomScheduleStatus.InUse].includes(schedule.status)) {
+        throw new ErrorWithStatus({
+          message: 'Cannot add songs to a cancelled or finished booking',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
       }
 
-      // Cập nhật queueSongs
+      const pushPayload =
+        songData.position === 'top'
+          ? { queueSongs: { $each: [songData], $position: 0 } }
+          : { queueSongs: songData }
+
       await databaseService.roomSchedule.updateOne(
         { _id: new ObjectId(bookingId) },
         {
+          $push: pushPayload,
           $set: {
-            queueSongs: updatedQueueSongs,
             updatedAt: new Date(),
             updatedBy: 'customer'
           }
         }
       )
+
+      const updatedSchedule = await databaseService.roomSchedule.findOne({
+        _id: new ObjectId(bookingId)
+      })
+
+      const updatedQueueSongs = updatedSchedule?.queueSongs || []
 
       return {
         success: true,
@@ -762,18 +763,51 @@ class OnlineBookingService {
   /**
    * Get videos by booking code
    */
-  async getVideosByBookingCode(bookingCode: string): Promise<AddSongRequestBody[]> {
+  async getVideosByBookingCode(bookingCode: string, dateOfUse?: string): Promise<AddSongRequestBody[]> {
     try {
-      const schedule = await databaseService.roomSchedule.findOne({
-        bookingCode: bookingCode
-      })
+      const normalizedCode = normalizeBookingCode(bookingCode)
+      const now = new Date()
+      const targetDateOfUse = dateOfUse || dayjs.tz('Asia/Ho_Chi_Minh').format('YYYY-MM-DD')
+      const dateLookupFilter = buildBookingCodeLookupFilter(bookingCode, targetDateOfUse)
 
-      if (!schedule) {
+      // Khung giờ thực tế quanh thời điểm hiện tại — không phụ thuộc chuỗi dateOfUse
+      // (xử lý booking qua đêm, server UTC, lệch múi giờ)
+      const lookBack = dayjs(now).subtract(6, 'hour').toDate()
+      const lookAhead = dayjs(now).add(12, 'hour').toDate()
+
+      const schedules = await databaseService.roomSchedule
+        .find({
+          bookingCode: normalizedCode,
+          status: { $in: [RoomScheduleStatus.Booked, RoomScheduleStatus.InUse] },
+          $or: [
+            {
+              startTime: { $gte: lookBack, $lte: lookAhead },
+              $or: [{ endTime: { $gt: now } }, { endTime: null }, { endTime: { $exists: false } }]
+            },
+            ...dateLookupFilter.$or
+          ]
+        })
+        .toArray()
+
+      if (schedules.length === 0) {
         throw new ErrorWithStatus({
           message: 'Booking not found',
           status: HTTP_STATUS_CODE.NOT_FOUND
         })
       }
+
+      const inSession = schedules.find(
+        (schedule) =>
+          schedule.startTime <= now && (schedule.endTime === null || schedule.endTime === undefined || schedule.endTime > now)
+      )
+
+      const schedule =
+        inSession ||
+        schedules.sort((a, b) => {
+          const distanceA = Math.abs(a.startTime.getTime() - now.getTime())
+          const distanceB = Math.abs(b.startTime.getTime() - now.getTime())
+          return distanceA - distanceB
+        })[0]
 
       return schedule.queueSongs || []
     } catch (error) {

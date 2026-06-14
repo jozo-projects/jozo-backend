@@ -1,4 +1,5 @@
 import * as SibApiV3Sdk from '@getbrevo/brevo'
+import { getClientUrl } from '~/utils/common'
 
 // Initialize Brevo API client
 const apiInstance = new SibApiV3Sdk.TransactionalEmailsApi()
@@ -18,7 +19,7 @@ export const sendEmail = async (emailData: EmailData) => {
     sendSmtpEmail.subject = emailData.subject
     sendSmtpEmail.htmlContent = emailData.html
     sendSmtpEmail.sender = {
-      name: 'Your App Name',
+      name: 'Jozo',
       email: process.env.BREVO_FROM_EMAIL || 'noreply@yourdomain.com'
     }
     sendSmtpEmail.to = [
@@ -38,38 +39,57 @@ export const sendEmail = async (emailData: EmailData) => {
 }
 
 export const sendResetPasswordEmail = async (email: string, resetToken: string) => {
-  const resetLink = `${process.env.CLIENT_URL}/reset-password?token=${resetToken}`
+  const clientUrl = getClientUrl()
+  if (!clientUrl) {
+    throw new Error('CLIENT_URL or BASE_URL is not configured')
+  }
+
+  const resetLink = `${clientUrl}/reset-password?token=${encodeURIComponent(resetToken)}`
 
   const emailData: EmailData = {
     to: email,
-    subject: 'Reset Your Password',
+    subject: 'Jozo — Đặt lại mật khẩu',
     html: `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <h2 style="color: #333;">Reset Your Password</h2>
-        <p>Hello,</p>
-        <p>You have requested to reset your password. Click the button below to create a new password:</p>
-        <div style="text-align: center; margin: 30px 0;">
-          <a href="${resetLink}" 
-             style="background-color: #007bff; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">
-            Reset Password
-          </a>
-        </div>
-        <p>If the button doesn't work, copy and paste this link into your browser:</p>
-        <p style="word-break: break-all; color: #666;">${resetLink}</p>
-        <p>This link will expire in 15 minutes for security reasons.</p>
-        <p>If you didn't request this password reset, please ignore this email.</p>
-        <hr style="margin: 30px 0; border: none; border-top: 1px solid #eee;">
-        <p style="color: #666; font-size: 12px;">
-          This is an automated email. Please do not reply to this message.
-        </p>
-      </div>
-    `
+<!DOCTYPE html>
+<html lang="vi">
+<body style="margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f4f4f5;padding:40px 16px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:480px;background:#ffffff;border-radius:8px;padding:40px 32px;">
+          <tr>
+            <td>
+              <p style="margin:0 0 24px;font-size:20px;font-weight:600;color:#18181b;">Jozo</p>
+              <h1 style="margin:0 0 12px;font-size:18px;font-weight:600;color:#18181b;">Đặt lại mật khẩu</h1>
+              <p style="margin:0 0 28px;font-size:15px;line-height:1.6;color:#52525b;">
+                Nhấn nút bên dưới để tạo mật khẩu mới. Link có hiệu lực trong <strong>15 phút</strong>.
+              </p>
+              <a href="${resetLink}" style="display:inline-block;padding:12px 28px;font-size:15px;font-weight:500;color:#ffffff;background:#18181b;border-radius:6px;text-decoration:none;">
+                Đặt lại mật khẩu
+              </a>
+              <p style="margin:28px 0 0;font-size:13px;line-height:1.5;color:#a1a1aa;">
+                Không phải bạn? Bỏ qua email này — mật khẩu sẽ không thay đổi.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+    `.trim()
   }
 
   return sendEmail(emailData)
 }
 
 export const sendWelcomeEmail = async (email: string, name: string) => {
+  const clientUrl = getClientUrl()
+  if (!clientUrl) {
+    throw new Error('CLIENT_URL or BASE_URL is not configured')
+  }
+
   const emailData: EmailData = {
     to: email,
     subject: 'Welcome to Our Platform!',
@@ -79,7 +99,7 @@ export const sendWelcomeEmail = async (email: string, name: string) => {
         <p>Thank you for registering with us. Your account has been created successfully.</p>
         <p>You can now log in to your account and start using our services.</p>
         <div style="text-align: center; margin: 30px 0;">
-          <a href="${process.env.CLIENT_URL}/login" 
+          <a href="${clientUrl}/login" 
              style="background-color: #28a745; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">
             Login Now
           </a>
