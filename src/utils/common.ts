@@ -11,10 +11,30 @@ dayjs.extend(timezone)
 
 const VN_TIMEZONE = 'Asia/Ho_Chi_Minh'
 
-/** Dev: CLIENT_URL; prod: BASE_URL khi không set CLIENT_URL trên server */
+function normalizeUrl(url?: string): string | undefined {
+  const trimmed = url?.replace(/\/$/, '')
+  return trimmed || undefined
+}
+
+function isLocalhostUrl(url: string) {
+  return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(url)
+}
+
+/** Dev: CLIENT_URL; prod: BASE_URL (bỏ qua CLIENT_URL localhost nếu BASE_URL là prod) */
 export function getClientUrl(): string | undefined {
-  const url = (process.env.CLIENT_URL || process.env.BASE_URL)?.replace(/\/$/, '')
-  return url || undefined
+  const clientUrl = normalizeUrl(process.env.CLIENT_URL)
+  const baseUrl = normalizeUrl(process.env.BASE_URL)
+
+  if (process.env.NODE_ENV === 'production') {
+    return baseUrl || clientUrl
+  }
+
+  // Server prod hay quên xóa CLIENT_URL=localhost trong .env
+  if (clientUrl && baseUrl && isLocalhostUrl(clientUrl) && !isLocalhostUrl(baseUrl)) {
+    return baseUrl
+  }
+
+  return clientUrl || baseUrl
 }
 
 /**
