@@ -195,11 +195,9 @@ class FnbSalesMovementService {
         ])
         .toArray(),
       databaseService.bills
-        .aggregate<{ count?: number }>([
-          ...this.buildKaraokeBillsInRangeStages(from, to),
-          { $group: { _id: '$scheduleId' } },
-          { $count: 'count' }
-        ])
+        .aggregate<{
+          count?: number
+        }>([...this.buildKaraokeBillsInRangeStages(from, to), { $group: { _id: '$scheduleId' } }, { $count: 'count' }])
         .toArray()
     ])
 
