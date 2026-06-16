@@ -240,3 +240,19 @@ export const GAME_MESSAGES = {
   UPDATE_GAME_SUCCESS: 'Cập nhật game thành công',
   DELETE_GAME_SUCCESS: 'Xóa game thành công'
 } as const
+
+export const FNB_SHIFT_COUNT_MESSAGES = {
+  GET_ITEMS_TEMPLATE_SUCCESS: 'Lấy danh sách món kiểm kê thành công',
+  GET_SHIFT_COUNT_SUCCESS: 'Lấy kiểm kê FNB thành công',
+  UPSERT_SHIFT_COUNT_SUCCESS: 'Lưu kiểm kê FNB thành công',
+  LIST_SHIFT_COUNTS_SUCCESS: 'Lấy danh sách kiểm kê FNB thành công',
+  ONLY_TODAY_EDITABLE: 'Chỉ được nhập/sửa kiểm kê cho ngày hôm nay',
+  ITEMS_REQUIRED: 'Danh sách món kiểm kê không được rỗng',
+  INVALID_ITEM_ID: 'itemId không hợp lệ',
+  ITEM_NOT_FOUND: 'Không tìm thấy món trong menu',
+  INVALID_OPENING_COUNT: 'Số lượng đầu ca phải là số nguyên >= 0',
+  INVALID_CLOSING_COUNT: 'Số lượng kết ca phải là số nguyên >= 0',
+  OPENING_REQUIRED_BEFORE_CLOSING: 'Phải nhập đầu ca trước khi nhập kết ca cho món này',
+  INVALID_STAFF_ID: 'staffId không hợp lệ',
+  INVALID_DATE: 'Ngày không hợp lệ (YYYY-MM-DD)'
+} as const

@@ -6,6 +6,7 @@ import { ErrorWithStatus } from '~/models/Error'
 import { RoomScheduleStatus } from '~/constants/enum'
 import fnbOrderService from '~/services/fnbOrder.service'
 import fnbMenuItemService from '~/services/fnbMenuItem.service'
+import fnbSalesMovementService from '~/services/fnbSalesMovement.service'
 import databaseService from '~/services/database.service'
 import { roomMusicServices } from '~/services/roomMusic.service'
 import {
@@ -155,6 +156,13 @@ export const submitClientCart = async (req: Request, res: Response, next: NextFu
         }
       }
     }
+
+    await fnbSalesMovementService.logDeltas(
+      inventoryUpdates.map(({ itemId, delta }) => ({ itemId, delta })),
+      'karaoke',
+      currentSchedule._id.toString(),
+      'client-app'
+    )
 
     const result = await fnbOrderService.upsertFnbOrder(
       currentSchedule._id.toString(),
@@ -367,6 +375,13 @@ export const addClientFnbOrderItems = async (req: Request, res: Response, next: 
       }
     }
 
+    await fnbSalesMovementService.logDeltas(
+      inventoryUpdates.map(({ itemId, delta }) => ({ itemId, delta })),
+      'karaoke',
+      currentSchedule._id.toString(),
+      'client-app'
+    )
+
     // ADD mode: Cộng dồn số lượng
     const result = await fnbOrderService.upsertFnbOrder(
       currentSchedule._id.toString(),
@@ -567,6 +582,13 @@ export const removeClientFnbOrderItems = async (req: Request, res: Response, nex
         }
       }
     }
+
+    await fnbSalesMovementService.logDeltas(
+      inventoryUpdates.map(({ itemId, delta }) => ({ itemId, delta })),
+      'karaoke',
+      currentSchedule._id.toString(),
+      'client-app'
+    )
 
     // REMOVE mode: Giảm số lượng
     const result = await fnbOrderService.upsertFnbOrder(
@@ -777,6 +799,13 @@ export const setClientFnbOrder = async (req: Request, res: Response, next: NextF
         }
       }
     }
+
+    await fnbSalesMovementService.logDeltas(
+      inventoryUpdates.map(({ itemId, delta }) => ({ itemId, delta })),
+      'karaoke',
+      currentSchedule._id.toString(),
+      'client-app'
+    )
 
     // SET mode: Ghi đè toàn bộ order
     const result = await fnbOrderService.upsertFnbOrder(
@@ -1001,6 +1030,15 @@ export const upsertClientFnbOrderItem = async (req: Request, res: Response, next
           }
         )
       }
+    }
+
+    if (delta !== 0) {
+      await fnbSalesMovementService.logDeltas(
+        [{ itemId, delta }],
+        'karaoke',
+        currentSchedule._id.toString(),
+        createdBy
+      )
     }
 
     const nextOrder = setPlainLineQuantity(curNorm, itemId, cat, quantity)

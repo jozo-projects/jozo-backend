@@ -1067,7 +1067,7 @@ export class BillService {
       roomId: schedule.roomId,
       startTime: startTime, // Sử dụng startTime đã điều chỉnh
       endTime: validatedEndTime,
-      createdAt: schedule.createdAt,
+      createdAt: new Date(),
       createdBy: schedule.createdBy,
       note: schedule.note,
       items: timeSlotItems.map((item) => ({

@@ -6,6 +6,7 @@ import { ICreateFNBOrderRequestBody } from '~/models/requests/FNB.request'
 import { ErrorWithStatus } from '~/models/Error'
 import fnbOrderService from '~/services/fnbOrder.service'
 import fnbMenuItemService from '~/services/fnbMenuItem.service'
+import fnbSalesMovementService from '~/services/fnbSalesMovement.service'
 import databaseService from '~/services/database.service'
 import { BillService } from '~/services/bill.service'
 import { ObjectId } from 'mongodb'
@@ -201,6 +202,13 @@ export const upsertFnbOrder = async (req: Request, res: Response, next: NextFunc
         }
       }
     }
+
+    await fnbSalesMovementService.logDeltas(
+      inventoryUpdates.map(({ itemId, delta }) => ({ itemId, delta })),
+      'karaoke',
+      roomScheduleId,
+      createdBy
+    )
 
     const result = await fnbOrderService.upsertFnbOrder(roomScheduleId, order, createdBy)
     return res.status(HTTP_STATUS_CODE.OK).json({
@@ -484,6 +492,13 @@ export const completeOrder = async (req: Request, res: Response, next: NextFunct
       inventoryResults.push({ item: updatedItem, isVariant })
     }
 
+    await fnbSalesMovementService.logDeltas(
+      items.map(({ itemId, quantity }: { itemId: string; quantity: number }) => ({ itemId, delta: quantity })),
+      'karaoke',
+      roomScheduleId,
+      createdBy
+    )
+
     const lineRows: FNBOrderLine[] = []
     for (const { itemId, quantity } of items) {
       const row = inventoryResults.find((i) => i.item?._id?.toString() === itemId)
@@ -742,6 +757,10 @@ export const upsertOrderItem = async (req: Request, res: Response, next: NextFun
       console.log('Item has no inventory, skipping inventory update')
     }
 
+    if (delta !== 0) {
+      await fnbSalesMovementService.logDeltas([{ itemId, delta }], 'karaoke', roomScheduleId, createdBy)
+    }
+
     const nextOrder = setPlainLineQuantity(curNorm, itemId, cat, quantity)
     const result = await fnbOrderService.upsertFnbOrder(roomScheduleId, nextOrder, createdBy, 'set')
 
@@ -845,6 +864,13 @@ export const addAdminFnbOrderItems = async (req: Request, res: Response, next: N
       }
     }
 
+    await fnbSalesMovementService.logDeltas(
+      inventoryUpdates.map(({ itemId, delta }) => ({ itemId, delta })),
+      'karaoke',
+      roomScheduleId,
+      createdBy
+    )
+
     const result = await fnbOrderService.upsertFnbOrder(roomScheduleId, order, createdBy, 'add')
 
     // Validate that order was saved successfully
@@ -938,6 +964,13 @@ export const removeAdminFnbOrderItems = async (req: Request, res: Response, next
         }
       }
     }
+
+    await fnbSalesMovementService.logDeltas(
+      inventoryUpdates.map(({ itemId, delta }) => ({ itemId, delta })),
+      'karaoke',
+      roomScheduleId,
+      createdBy
+    )
 
     // REMOVE mode: Giảm số lượng
     const result = await fnbOrderService.upsertFnbOrder(roomScheduleId, order, createdBy, 'remove')
@@ -1051,6 +1084,13 @@ export const setAdminFnbOrder = async (req: Request, res: Response, next: NextFu
         }
       }
     }
+
+    await fnbSalesMovementService.logDeltas(
+      inventoryUpdates.map(({ itemId, delta }) => ({ itemId, delta })),
+      'karaoke',
+      roomScheduleId,
+      createdBy
+    )
 
     // SET mode: Ghi đè toàn bộ order
     const result = await fnbOrderService.upsertFnbOrder(roomScheduleId, order, createdBy, 'set')

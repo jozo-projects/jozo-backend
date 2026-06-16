@@ -24,6 +24,7 @@ import {
   resolveEffectiveCustomizationGroups
 } from './fnbMenuCustomization.service'
 import fnbMenuItemService from './fnbMenuItem.service'
+import fnbSalesMovementService from './fnbSalesMovement.service'
 
 class CoffeeSessionOrderService {
   private initialized = false
@@ -318,10 +319,15 @@ class CoffeeSessionOrderService {
     return false
   }
 
-  private async applyInventoryDelta(currentOrder: FNBOrder, nextOrder: FNBOrder) {
+  private async applyInventoryDelta(
+    currentOrder: FNBOrder,
+    nextOrder: FNBOrder,
+    context?: { coffeeSessionId: string; createdBy?: string; orderRef?: string }
+  ) {
     const currentItems = aggregateQuantitiesByItemId(currentOrder)
     const nextItems = aggregateQuantitiesByItemId(nextOrder)
     const itemIds = new Set([...Object.keys(currentItems), ...Object.keys(nextItems)])
+    const movementDeltas: Array<{ itemId: string; delta: number }> = []
 
     for (const itemId of itemIds) {
       const currentQuantity = currentItems[itemId] || 0
@@ -329,6 +335,7 @@ class CoffeeSessionOrderService {
       const delta = nextQuantity - currentQuantity
 
       if (delta === 0) continue
+      movementDeltas.push({ itemId, delta })
 
       const { item, isVariant } = await this.getMenuItem(itemId)
 
@@ -364,6 +371,16 @@ class CoffeeSessionOrderService {
           }
         )
       }
+    }
+
+    if (context && movementDeltas.length > 0) {
+      await fnbSalesMovementService.logDeltas(
+        movementDeltas,
+        'coffee',
+        context.coffeeSessionId,
+        context.createdBy,
+        context.orderRef
+      )
     }
   }
 
@@ -405,7 +422,10 @@ class CoffeeSessionOrderService {
     const currentOrder = ensuredOrder?.order ? this.buildNormalizedOrder(ensuredOrder.order) : emptyFnbOrder()
 
     await assertOrderLinesMatchMenuCustomizations(normalizedOrder)
-    await this.applyInventoryDelta(currentOrder, normalizedOrder)
+    await this.applyInventoryDelta(currentOrder, normalizedOrder, {
+      coffeeSessionId,
+      createdBy: userId
+    })
 
     const resetBatch = await this.buildBatchFromOrder(normalizedOrder, session, new Date(), 'pending', userId)
     const batches = orderHasPositiveLines(normalizedOrder) ? [resetBatch] : []
@@ -487,7 +507,6 @@ class CoffeeSessionOrderService {
     const existingOrder = existingDoc ? await this.backfillLegacyBatches(existingDoc, session, actorId) : null
     const currentOrder = existingOrder?.order ? this.buildNormalizedOrder(existingOrder.order) : emptyFnbOrder()
     const nextOrder = appendCartLines(currentOrder, normalizedCart).mergedOrder
-    await this.applyInventoryDelta(currentOrder, nextOrder)
 
     const quota = this.getDrinkBaseFreeQuota(session)
     const priorDrinkUnits = this.countDrinkUnits(currentOrder)
@@ -500,6 +519,11 @@ class CoffeeSessionOrderService {
       actorId,
       priorDrinkQuotaConsumedUnits
     )
+    await this.applyInventoryDelta(currentOrder, nextOrder, {
+      coffeeSessionId,
+      createdBy: actorId,
+      orderRef: createdBatch.batchId
+    })
     const batches = [...(existingOrder?.batches || []), createdBatch]
     const aggregatedOrder = this.buildAggregatedOrderFromBatches(batches)
     const { lineItems: aggregatedLineItems, orderTotals: aggregatedTotals } =
@@ -632,7 +656,9 @@ class CoffeeSessionOrderService {
 
     const session = await databaseService.coffeeSessions.findOne({ _id: new ObjectId(coffeeSessionId) })
     const ensuredOrder = session ? await this.backfillLegacyBatches(existingOrder, session) : existingOrder
-    await this.applyInventoryDelta(this.buildNormalizedOrder(ensuredOrder.order), emptyFnbOrder())
+    await this.applyInventoryDelta(this.buildNormalizedOrder(ensuredOrder.order), emptyFnbOrder(), {
+      coffeeSessionId
+    })
     await databaseService.coffeeSessionOrders.deleteOne({ coffeeSessionId: new ObjectId(coffeeSessionId) })
 
     return ensuredOrder

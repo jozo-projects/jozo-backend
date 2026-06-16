@@ -14,6 +14,7 @@ import { resolveReportingMonthRange } from '~/utils/reportingPeriod'
 import databaseService from './database.service'
 import { assertOrderLinesMatchMenuCustomizations } from './fnbMenuCustomization.service'
 import fnbMenuItemService from './fnbMenuItem.service'
+import fnbSalesMovementService from './fnbSalesMovement.service'
 
 dayjs.extend(utc)
 dayjs.extend(timezone)
@@ -193,6 +194,7 @@ class FnbOrderService {
 
   /**
    * Lấy thống kê FNB theo khoảng thời gian (ngày/tuần/tháng) theo giờ Việt Nam.
+   * Karaoke: lọc theo statsDate trên bill (createdAt lúc tạo bill, fallback endTime cho bill cũ).
    * @param period 'day' | 'week' | 'month'
    * @param dateStr Ngày theo VN (YYYY-MM-DD). Nếu không truyền: day = hôm nay, week = tuần hiện tại, month = kỳ báo cáo hiện tại (ngày 6 → ngày 5 tháng sau)
    * @param category Lọc theo category: 'drink' | 'snack' (optional)
@@ -242,100 +244,11 @@ class FnbOrderService {
     const fromUtc = fromDate.toDate()
     const toUtc = toDate.toDate()
 
-    // Mỗi roomScheduleId chỉ tính MỘT lần (lấy bản ghi completedAt mới nhất) để tránh trùng khi
-    // cùng đơn được ghi history nhiều lần (complete order + lưu bill).
-    const agg = await databaseService.fnbOrderHistory
-      .aggregate([
-        { $match: { completedAt: { $gte: fromUtc, $lte: toUtc } } },
-        { $sort: { roomScheduleId: 1, completedAt: -1 } },
-        {
-          $group: {
-            _id: '$roomScheduleId',
-            doc: { $first: '$$ROOT' }
-          }
-        },
-        { $replaceRoot: { newRoot: '$doc' } },
-        {
-          $addFields: {
-            fnbItemsForStats: {
-              $cond: [
-                { $gt: [{ $size: { $ifNull: ['$order.lines', []] } }, 0] },
-                {
-                  $map: {
-                    input: { $ifNull: ['$order.lines', []] },
-                    as: 'ln',
-                    in: {
-                      k: '$$ln.itemId',
-                      v: { $toInt: { $ifNull: ['$$ln.quantity', 0] } },
-                      cat: '$$ln.category'
-                    }
-                  }
-                },
-                {
-                  $concatArrays: [
-                    {
-                      $map: {
-                        input: { $objectToArray: { $ifNull: ['$order.drinks', {}] } },
-                        as: 'd',
-                        in: { k: '$$d.k', v: '$$d.v', cat: 'drink' }
-                      }
-                    },
-                    {
-                      $map: {
-                        input: { $objectToArray: { $ifNull: ['$order.snacks', {}] } },
-                        as: 's',
-                        in: { k: '$$s.k', v: '$$s.v', cat: 'snack' }
-                      }
-                    }
-                  ]
-                }
-              ]
-            }
-          }
-        },
-        { $match: { $expr: { $gt: [{ $size: '$fnbItemsForStats' }, 0] } } },
-        { $unwind: '$fnbItemsForStats' },
-        {
-          $group: {
-            _id: { itemId: '$fnbItemsForStats.k', category: '$fnbItemsForStats.cat' },
-            quantity: { $sum: '$fnbItemsForStats.v' }
-          }
-        },
-        {
-          $group: {
-            _id: null,
-            totalItemsSold: { $sum: '$quantity' },
-            items: { $push: { itemId: '$_id.itemId', category: '$_id.category', quantity: '$quantity' } }
-          }
-        },
-        { $project: { _id: 0, totalItemsSold: 1, items: 1 } }
-      ])
-      .toArray()
+    const karaokeStats = await fnbSalesMovementService.aggregateKaraokeStatsByRange(fromUtc, toUtc)
+    const ordersCount = karaokeStats.ordersCount
 
-    // Số đơn = số roomScheduleId khác nhau trong kỳ (đã dedupe ở trên)
-    const ordersCountAgg = await databaseService.fnbOrderHistory
-      .aggregate([
-        { $match: { completedAt: { $gte: fromUtc, $lte: toUtc } } },
-        { $group: { _id: '$roomScheduleId' } },
-        { $count: 'count' }
-      ])
-      .toArray()
-    const ordersCount = (ordersCountAgg[0] as { count?: number } | undefined)?.count ?? 0
-
-    let totalItemsSold = 0
-    const itemsByKey: Array<{ itemId: string; category: 'drink' | 'snack'; quantity: number }> = []
-
-    if (agg.length > 0 && agg[0]) {
-      const first = agg[0] as {
-        totalItemsSold?: number
-        ordersCount?: number
-        items?: Array<{ itemId: string; category: 'drink' | 'snack'; quantity: number }>
-      }
-      totalItemsSold = first.totalItemsSold ?? 0
-      if (Array.isArray(first.items)) {
-        itemsByKey.push(...first.items)
-      }
-    }
+    let totalItemsSold = karaokeStats.totalItemsSold
+    const itemsByKey = karaokeStats.items
 
     const itemsBreakdown: Array<{
       itemId: string
