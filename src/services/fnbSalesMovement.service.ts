@@ -140,23 +140,23 @@ class FnbSalesMovementService {
     ]
   }
 
-  private async aggregateKaraokeSoldByRange(from: Date, to: Date): Promise<Record<string, number>> {
-    const rows = await databaseService.bills
-      .aggregate<{ _id: string; quantity: number }>([
-        ...this.buildKaraokeBillsInRangeStages(from, to),
-        { $unwind: '$fnbItemsForStats' },
+  /** Kiểm kê FNB: net qty đã add/bớt trên đơn karaoke trong khoảng thời gian (fnb_sales_movements). */
+  private async aggregateKaraokeMovementsByRange(from: Date, to: Date): Promise<Record<string, number>> {
+    const rows = await databaseService.fnbSalesMovements
+      .aggregate<{ _id: ObjectId; quantity: number }>([
         {
-          $group: {
-            _id: '$fnbItemsForStats.k',
-            quantity: { $sum: '$fnbItemsForStats.v' }
+          $match: {
+            createdAt: { $gte: from, $lte: to },
+            source: 'karaoke'
           }
-        }
+        },
+        { $group: { _id: '$itemId', quantity: { $sum: '$delta' } } }
       ])
       .toArray()
 
     const result: Record<string, number> = {}
     for (const row of rows) {
-      result[row._id] = row.quantity
+      result[row._id.toString()] = row.quantity
     }
     return result
   }
@@ -254,15 +254,15 @@ class FnbSalesMovementService {
   }
 
   /**
-   * systemSold theo ngày VN = karaoke (bills) + coffee (batches submittedAt).
-   * Karaoke: lọc theo statsDate trên bill (createdAt lúc tạo bill, fallback endTime cho bill cũ), dedupe scheduleId.
+   * systemSold kiểm kê theo ngày VN = karaoke (fnb_sales_movements) + coffee (batches submittedAt).
+   * Karaoke: lúc add/bớt món trên đơn, không phụ thuộc bill đã hoàn tất.
    */
   async aggregateSystemSoldByDate(businessDate: string): Promise<Record<string, number>> {
     const from = dayjs.tz(businessDate, 'YYYY-MM-DD', VIETNAM_TZ).startOf('day').toDate()
     const to = dayjs.tz(businessDate, 'YYYY-MM-DD', VIETNAM_TZ).endOf('day').toDate()
 
     const [karaokeMap, coffeeMap] = await Promise.all([
-      this.aggregateKaraokeSoldByRange(from, to),
+      this.aggregateKaraokeMovementsByRange(from, to),
       this.aggregateCoffeeSoldByRange(from, to)
     ])
 

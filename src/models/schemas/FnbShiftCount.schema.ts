@@ -6,6 +6,7 @@ export interface FnbShiftCountLine {
   category: 'drink' | 'snack'
   openingCount: number
   closingCount?: number
+  midShiftAddition?: number
 }
 
 export interface FnbShiftCountReportLine extends FnbShiftCountLine {
@@ -41,6 +42,7 @@ export interface FnbShiftCountReportItem {
   category: 'drink' | 'snack'
   openingCount?: number
   closingCount?: number
+  midShiftAddition?: number
   physicalSold?: number
   systemSold: number
   variance?: number

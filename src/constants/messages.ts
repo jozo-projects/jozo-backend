@@ -252,6 +252,8 @@ export const FNB_SHIFT_COUNT_MESSAGES = {
   ITEM_NOT_FOUND: 'Không tìm thấy món trong menu',
   INVALID_OPENING_COUNT: 'Số lượng đầu ca phải là số nguyên >= 0',
   INVALID_CLOSING_COUNT: 'Số lượng kết ca phải là số nguyên >= 0',
+  INVALID_MID_SHIFT_ADDITION: 'Số lượng thêm giữa ca phải là số nguyên >= 0',
+  OPENING_REQUIRED_BEFORE_MID_SHIFT: 'Phải nhập đầu ca trước khi nhập thêm giữa ca cho món này',
   OPENING_REQUIRED_BEFORE_CLOSING: 'Phải nhập đầu ca trước khi nhập kết ca cho món này',
   INVALID_STAFF_ID: 'staffId không hợp lệ',
   INVALID_DATE: 'Ngày không hợp lệ (YYYY-MM-DD)'

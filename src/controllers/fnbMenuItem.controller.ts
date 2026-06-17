@@ -326,7 +326,7 @@ export const getAllMenuItems = async (req: Request, res: Response, next: NextFun
     if (category && Object.values(FnBCategory).includes(category as FnBCategory)) {
       result = await fnBMenuItemService.getMenuItemsByCategory(category as FnBCategory)
     } else {
-      result = await fnBMenuItemService.getAllMenuItems()
+      result = await fnBMenuItemService.getRootMenuItems()
     }
 
     // Parse variants nếu chúng là JSON string
@@ -578,7 +578,31 @@ export const deleteMenuItem = async (req: Request, res: Response, next: NextFunc
     const { id } = req.params
     const result = await fnBMenuItemService.deleteMenuItem(id)
     if (!result) return res.status(HttpStatusCode.NotFound).json({ message: 'Không tìm thấy menu item để xóa' })
-    return res.status(HttpStatusCode.Ok).json({ message: 'Xóa thành công', result })
+    return res.status(HttpStatusCode.Ok).json({
+      message: 'Xóa thành công',
+      result: {
+        deletedItem: result.item,
+        deletedVariantIds: result.deletedVariantIds,
+        deletedVariantCount: result.deletedVariantIds.length
+      }
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+// Dọn dữ liệu menu item (xóa orphan, chuẩn hóa parentId, bỏ field thừa)
+export const cleanupMenuItems = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const dryRun = req.body?.dryRun !== false && req.query.dryRun !== 'false'
+    const result = await fnBMenuItemService.cleanupMenuItems(dryRun)
+
+    return res.status(HttpStatusCode.Ok).json({
+      message: dryRun
+        ? 'Xem trước dọn dữ liệu menu thành công (chưa áp dụng). Gửi dryRun=false để thực thi.'
+        : 'Dọn dữ liệu menu thành công',
+      result
+    })
   } catch (error) {
     next(error)
   }

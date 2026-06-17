@@ -6,7 +6,8 @@ import {
   getAllMenuItems,
   updateMenuItem,
   deleteMenuItem,
-  updateVariantInventory
+  updateVariantInventory,
+  cleanupMenuItems
 } from '~/controllers/fnbMenuItem.controller'
 import { protect } from '~/middlewares/auth.middleware'
 import { upload } from '~/utils/common'
@@ -15,6 +16,7 @@ const fnbMenuItemRouter = Router()
 
 // Routes
 fnbMenuItemRouter.post('/', protect([UserRole.Admin]), upload.any(), createMenuItem)
+fnbMenuItemRouter.post('/cleanup', protect([UserRole.Admin]), cleanupMenuItems)
 fnbMenuItemRouter.get('/', getAllMenuItems)
 fnbMenuItemRouter.get('/:id', protect([UserRole.Admin]), getMenuItemById)
 

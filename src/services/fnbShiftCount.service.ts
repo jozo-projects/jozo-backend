@@ -163,6 +163,9 @@ class FnbShiftCountService {
       if (typeof saved?.closingCount === 'number') {
         reportItem.closingCount = saved.closingCount
       }
+      if (typeof saved?.midShiftAddition === 'number') {
+        reportItem.midShiftAddition = saved.midShiftAddition
+      }
 
       if (
         typeof reportItem.openingCount === 'number' &&
@@ -287,6 +290,26 @@ class FnbShiftCountService {
         }
 
         target.closingCount = closingCount
+      }
+
+      if (incoming.midShiftAddition !== undefined) {
+        const target = itemMap.get(incoming.itemId)
+        if (!target) {
+          throw new ErrorWithStatus({
+            message: FNB_SHIFT_COUNT_MESSAGES.OPENING_REQUIRED_BEFORE_MID_SHIFT,
+            status: HTTP_STATUS_CODE.BAD_REQUEST
+          })
+        }
+
+        const midShiftAddition = Math.floor(Number(incoming.midShiftAddition))
+        if (Number.isNaN(midShiftAddition) || midShiftAddition < 0) {
+          throw new ErrorWithStatus({
+            message: FNB_SHIFT_COUNT_MESSAGES.INVALID_MID_SHIFT_ADDITION,
+            status: HTTP_STATUS_CODE.BAD_REQUEST
+          })
+        }
+
+        target.midShiftAddition = midShiftAddition
       }
     }
 
