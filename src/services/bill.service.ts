@@ -12,6 +12,7 @@ import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { ErrorWithStatus } from '~/models/Error'
 import { IBill } from '~/models/schemas/Bill.schema'
 import { aggregateLinesToLegacyMaps, normalizeFnbOrder } from '~/utils/fnbOrderLines'
+import { normalizeVietnamPhone } from '~/utils/common'
 import databaseService from './database.service'
 import fnbMenuItemService from './fnbMenuItem.service'
 import fnbOrderService from './fnbOrder.service'
@@ -1842,6 +1843,10 @@ export class BillService {
         customerPhone = schedule.customerPhone
       }
 
+      if (customerPhone) {
+        customerPhone = normalizeVietnamPhone(customerPhone) || customerPhone.trim()
+      }
+
       // 5. Chuẩn bị bill để lưu
       const now = new Date()
       const billToSave: IBill = {
@@ -1864,6 +1869,7 @@ export class BillService {
       const membershipResult: {
         success: boolean
         user?: any
+        pointsEarned?: number
         error?: string
         skipped?: boolean
         reason?: string
@@ -1878,8 +1884,28 @@ export class BillService {
         membershipResult.skipped = true
         membershipResult.reason = 'Invoice đã được tích điểm rồi'
       } else if (billToSave.totalAmount <= 0) {
-        membershipResult.skipped = true
-        membershipResult.reason = 'Tổng tiền = 0, không tích điểm'
+        try {
+          const updatedUser = await membershipService.earnPointsByPhone({
+            phone_number: customerPhone,
+            totalAmount: 0,
+            source: require('~/constants/enum').RewardSource.Point,
+            meta: {
+              invoiceCode: billToSave.invoiceCode,
+              method: 'auto'
+            },
+            visitAt: billToSave.endTime || new Date()
+          })
+
+          const config = await membershipService.getConfig()
+          membershipResult.success = !!updatedUser
+          membershipResult.user = updatedUser
+          membershipResult.pointsEarned = 0
+          membershipResult.reason = `Đã ghi nhận streak; bill ${billToSave.totalAmount.toLocaleString('vi-VN')}đ chưa đủ ${config.currencyUnit.toLocaleString('vi-VN')}đ để cộng điểm`
+        } catch (error: any) {
+          console.error('Lỗi khi ghi nhận streak từ bill:', error)
+          membershipResult.success = false
+          membershipResult.error = error.message || 'Unknown error'
+        }
       } else {
         // Thực hiện tích điểm bằng phone_number
         try {
@@ -1894,8 +1920,17 @@ export class BillService {
             visitAt: billToSave.endTime || new Date()
           })
 
-          membershipResult.success = true
+          const config = await membershipService.getConfig()
+          const pointsEarned =
+            Math.floor(billToSave.totalAmount / config.currencyUnit) * config.pointPerCurrency
+
+          membershipResult.success = !!updatedUser
           membershipResult.user = updatedUser
+          membershipResult.pointsEarned = pointsEarned
+
+          if (updatedUser && pointsEarned <= 0) {
+            membershipResult.reason = `Đã ghi nhận streak; bill ${billToSave.totalAmount.toLocaleString('vi-VN')}đ chưa đủ ${config.currencyUnit.toLocaleString('vi-VN')}đ để cộng điểm`
+          }
         } catch (error: any) {
           console.error('Lỗi khi tích điểm tự động:', error)
           membershipResult.success = false

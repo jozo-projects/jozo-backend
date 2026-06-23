@@ -246,7 +246,7 @@ export const FNB_SHIFT_COUNT_MESSAGES = {
   GET_SHIFT_COUNT_SUCCESS: 'Lấy kiểm kê FNB thành công',
   UPSERT_SHIFT_COUNT_SUCCESS: 'Lưu kiểm kê FNB thành công',
   LIST_SHIFT_COUNTS_SUCCESS: 'Lấy danh sách kiểm kê FNB thành công',
-  ONLY_TODAY_EDITABLE: 'Chỉ được nhập/sửa kiểm kê cho ngày hôm nay',
+  ONLY_TODAY_EDITABLE: 'Chỉ được nhập/sửa kiểm kê cho ngày hôm nay (admin có thể sửa ngày trong quá khứ)',
   ITEMS_REQUIRED: 'Danh sách món kiểm kê không được rỗng',
   INVALID_ITEM_ID: 'itemId không hợp lệ',
   ITEM_NOT_FOUND: 'Không tìm thấy món trong menu',

@@ -34,6 +34,7 @@ fnbShiftCountRouter.put(
   '/',
   protect([UserRole.Staff, UserRole.Admin]),
   dateQueryValidator,
+  ensureAdminStaffQuery,
   upsertShiftCountValidator,
   upsertShiftCount
 )

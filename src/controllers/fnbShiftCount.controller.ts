@@ -37,7 +37,8 @@ export const getShiftCountByDate = async (req: Request, res: Response, next: Nex
     const user = staffId === requesterId ? requester : await usersServices.getUserById(staffId)
     const staffName = user?.name || user?.username
 
-    const result = await fnbShiftCountService.getByStaffAndDate(staffId, dateStr, staffName)
+    const isAdmin = requester?.role === UserRole.Admin
+    const result = await fnbShiftCountService.getByStaffAndDate(staffId, dateStr, staffName, isAdmin)
     return res.status(HTTP_STATUS_CODE.OK).json({
       message: FNB_SHIFT_COUNT_MESSAGES.GET_SHIFT_COUNT_SUCCESS,
       result
@@ -53,16 +54,24 @@ export const upsertShiftCount = async (
   next: NextFunction
 ) => {
   try {
-    const staffId = req.decoded_authorization?.user_id
-    if (!staffId) {
+    const requesterId = req.decoded_authorization?.user_id
+    if (!requesterId) {
       return res.status(HTTP_STATUS_CODE.UNAUTHORIZED).json({ message: 'Unauthorized' })
     }
 
     const dateStr = resolveShiftCountDate(req)
-    const user = await usersServices.getUserById(staffId)
+    const requester = await usersServices.getUserById(requesterId)
+    const isAdmin = requester?.role === UserRole.Admin
+
+    let staffId = requesterId
+    if (req.query.staffId && isAdmin) {
+      staffId = req.query.staffId as string
+    }
+
+    const user = staffId === requesterId ? requester : await usersServices.getUserById(staffId)
     const staffName = user?.name || user?.username
 
-    const result = await fnbShiftCountService.upsert(staffId, dateStr, req.body, staffName)
+    const result = await fnbShiftCountService.upsert(staffId, dateStr, req.body, staffName, isAdmin)
     return res.status(HTTP_STATUS_CODE.OK).json({
       message: FNB_SHIFT_COUNT_MESSAGES.UPSERT_SHIFT_COUNT_SUCCESS,
       result

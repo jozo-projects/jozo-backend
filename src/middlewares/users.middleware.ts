@@ -135,8 +135,8 @@ export const loginValidator = validate(
         isString: true,
         trim: true,
         isLength: {
-          options: { min: 6, max: 8 },
-          errorMessage: 'Password must be between 6 and 8 characters'
+          options: { min: 6, max: 16 },
+          errorMessage: 'Password must be between 6 and 16 characters'
         }
       }
     },
@@ -191,8 +191,8 @@ export const registerValidator = validate(
         isString: true,
         trim: true,
         isLength: {
-          options: { min: 6, max: 8 },
-          errorMessage: 'Password must be between 6 and 8 characters'
+          options: { min: 6, max: 16 },
+          errorMessage: 'Password must be between 6 and 16 characters'
         }
       },
       confirm_password: {
@@ -202,8 +202,8 @@ export const registerValidator = validate(
         isString: true,
         trim: true,
         isLength: {
-          options: { min: 6, max: 8 },
-          errorMessage: 'Password must be between 6 and 8 characters'
+          options: { min: 6, max: 16 },
+          errorMessage: 'Password must be between 6 and 16 characters'
         },
         custom: {
           options: (value: string, { req }) => {
@@ -425,8 +425,8 @@ export const resetPasswordValidator = validate(
         isString: true,
         trim: true,
         isLength: {
-          options: { min: 6, max: 8 },
-          errorMessage: 'Password must be between 6 and 8 characters'
+          options: { min: 6, max: 16 },
+          errorMessage: 'Password must be between 6 and 16 characters'
         }
       },
       confirm_password: {
@@ -436,8 +436,8 @@ export const resetPasswordValidator = validate(
         isString: true,
         trim: true,
         isLength: {
-          options: { min: 6, max: 8 },
-          errorMessage: 'Password must be between 6 and 8 characters'
+          options: { min: 6, max: 16 },
+          errorMessage: 'Password must be between 6 and 16 characters'
         },
         custom: {
           options: (value: string, { req }) => {
@@ -463,8 +463,8 @@ export const changePasswordValidator = validate(
         isString: true,
         trim: true,
         isLength: {
-          options: { min: 6, max: 8 },
-          errorMessage: 'Password must be between 6 and 8 characters'
+          options: { min: 6, max: 16 },
+          errorMessage: 'Password must be between 6 and 16 characters'
         }
       },
       password: {
@@ -474,8 +474,8 @@ export const changePasswordValidator = validate(
         isString: true,
         trim: true,
         isLength: {
-          options: { min: 6, max: 8 },
-          errorMessage: 'Password must be between 6 and 8 characters'
+          options: { min: 6, max: 16 },
+          errorMessage: 'Password must be between 6 and 16 characters'
         }
       },
       confirm_password: {
@@ -485,8 +485,8 @@ export const changePasswordValidator = validate(
         isString: true,
         trim: true,
         isLength: {
-          options: { min: 6, max: 8 },
-          errorMessage: 'Password must be between 6 and 8 characters'
+          options: { min: 6, max: 16 },
+          errorMessage: 'Password must be between 6 and 16 characters'
         },
         custom: {
           options: (value: string, { req }) => {

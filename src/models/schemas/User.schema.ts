@@ -4,6 +4,7 @@ import { MembershipTier, UserRole, UserVerifyStatus } from '~/constants/enum'
 export interface IUser {
   _id: ObjectId
   name: string
+  full_name?: string
   username: string // Thêm username field
   email?: string
   phone_number: string
@@ -45,6 +46,7 @@ export class User {
   username: string // Thêm username field
   email?: string
   name: string
+  full_name?: string
   phone_number: string
   date_of_birth: Date
   password: string
@@ -77,7 +79,8 @@ export class User {
     this._id = user._id
     this.username = user.username || ''
     this.email = user.email?.trim()
-    this.name = user.name || ''
+    this.name = user.name || user.full_name || ''
+    this.full_name = user.full_name || user.name || ''
     this.phone_number = user.phone_number || ''
     this.date_of_birth = user.date_of_birth || date
     this.password = user.password

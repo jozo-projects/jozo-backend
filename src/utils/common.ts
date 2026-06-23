@@ -150,6 +150,47 @@ export function generateBookingCode(min: number = 0, max: number = 10000): strin
 /**
  * Chuẩn hóa mã booking về dạng 4 chữ số (vd: "123" -> "0123")
  */
+/** Chuẩn hóa SĐT VN về dạng 0xxxxxxxxx */
+export function normalizeVietnamPhone(phone?: string | null): string | null {
+  if (!phone || typeof phone !== 'string') return null
+
+  const digits = phone.replace(/[\s\-().+]/g, '')
+  if (!digits) return null
+
+  if (digits.startsWith('84') && digits.length >= 11) {
+    return `0${digits.slice(2)}`
+  }
+
+  if (digits.startsWith('0')) {
+    return digits
+  }
+
+  return `0${digits}`
+}
+
+/** Các biến thể SĐT để tra user (0336…, 84336…, +84336…) */
+export function buildUserPhoneLookupFilter(phone: string): { $or: Array<Record<string, unknown>> } {
+  const normalized = normalizeVietnamPhone(phone)
+  const digits = (normalized || phone).replace(/\D/g, '')
+  const suffix = digits.startsWith('84') ? digits.slice(2) : digits.startsWith('0') ? digits.slice(1) : digits
+
+  const candidates = new Set<string>()
+  if (normalized) candidates.add(normalized)
+  if (digits) candidates.add(digits)
+  if (suffix) {
+    candidates.add(`0${suffix}`)
+    candidates.add(`84${suffix}`)
+    candidates.add(`+84${suffix}`)
+  }
+
+  return {
+    $or: [
+      ...Array.from(candidates).map((value) => ({ phone_number: value })),
+      { phone_number: { $regex: new RegExp(`${suffix}$`) } }
+    ]
+  }
+}
+
 export function normalizeBookingCode(bookingCode: string): string {
   const digits = bookingCode.replace(/\D/g, '')
   if (!digits) {

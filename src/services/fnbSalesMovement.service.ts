@@ -268,6 +268,30 @@ class FnbSalesMovementService {
 
     return this.mergeSoldMaps(karaokeMap, coffeeMap)
   }
+
+  /** systemSold theo ca nhân viên: lọc fnb_sales_movements theo createdBy trong ngày VN. */
+  async aggregateSystemSoldByStaffAndDate(staffId: string, businessDate: string): Promise<Record<string, number>> {
+    const from = dayjs.tz(businessDate, 'YYYY-MM-DD', VIETNAM_TZ).startOf('day').toDate()
+    const to = dayjs.tz(businessDate, 'YYYY-MM-DD', VIETNAM_TZ).endOf('day').toDate()
+
+    const rows = await databaseService.fnbSalesMovements
+      .aggregate<{ _id: ObjectId; quantity: number }>([
+        {
+          $match: {
+            createdAt: { $gte: from, $lte: to },
+            createdBy: staffId
+          }
+        },
+        { $group: { _id: '$itemId', quantity: { $sum: '$delta' } } }
+      ])
+      .toArray()
+
+    const result: Record<string, number> = {}
+    for (const row of rows) {
+      result[row._id.toString()] = row.quantity
+    }
+    return result
+  }
 }
 
 const fnbSalesMovementService = new FnbSalesMovementService()

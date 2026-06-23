@@ -157,13 +157,6 @@ export const submitClientCart = async (req: Request, res: Response, next: NextFu
       }
     }
 
-    await fnbSalesMovementService.logDeltas(
-      inventoryUpdates.map(({ itemId, delta }) => ({ itemId, delta })),
-      'karaoke',
-      currentSchedule._id.toString(),
-      'client-app'
-    )
-
     const result = await fnbOrderService.upsertFnbOrder(
       currentSchedule._id.toString(),
       mergedOrder,
@@ -182,6 +175,8 @@ export const submitClientCart = async (req: Request, res: Response, next: NextFu
     try {
       const orderNotificationData = {
         orderId: result._id?.toString() || 'unknown',
+        roomScheduleId: currentSchedule._id.toString(),
+        itemDeltas: inventoryUpdates.map(({ itemId, delta }) => ({ itemId, delta })),
         items: [] as Array<{
           itemId: string
           name: string

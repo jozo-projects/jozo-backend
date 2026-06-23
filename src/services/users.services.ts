@@ -117,6 +117,7 @@ class UsersServices {
     if (query.search) {
       filter.$or = [
         { name: { $regex: query.search, $options: 'i' } },
+        { full_name: { $regex: query.search, $options: 'i' } },
         { username: { $regex: query.search, $options: 'i' } },
         { email: { $regex: query.search, $options: 'i' } },
         { phone_number: { $regex: query.search, $options: 'i' } }

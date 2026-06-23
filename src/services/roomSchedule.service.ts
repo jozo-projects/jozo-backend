@@ -234,9 +234,9 @@ class RoomScheduleService {
       schedule.source || BookingSource.Staff, // Sử dụng source được cung cấp hoặc mặc định là Staff
       schedule.applyFreeHourPromo,
       bookingCode,
-      undefined,
-      undefined,
-      undefined,
+      schedule.customerName ?? undefined,
+      schedule.customerPhone ?? undefined,
+      schedule.customerEmail ?? undefined,
       undefined,
       undefined,
       undefined,
@@ -388,11 +388,20 @@ class RoomScheduleService {
       updateData.updatedBy = schedule.updatedBy
     }
 
-    if (schedule.note) {
+    if (schedule.note !== undefined) {
       updateData.note = schedule.note
     }
     if (schedule.giftEnabled !== undefined) {
       updateData.giftEnabled = !!schedule.giftEnabled
+    }
+    if (schedule.customerName !== undefined) {
+      updateData.customerName = schedule.customerName as string | undefined
+    }
+    if (schedule.customerPhone !== undefined) {
+      updateData.customerPhone = schedule.customerPhone as string | undefined
+    }
+    if (schedule.customerEmail !== undefined) {
+      updateData.customerEmail = schedule.customerEmail as string | undefined
     }
 
     const result = await databaseService.roomSchedule.updateOne({ _id: new ObjectId(id) }, updateOperations)

@@ -1,4 +1,5 @@
 import { Router } from 'express'
+import { UserRole } from '~/constants/enum'
 import {
   addItemsToOrder,
   cleanupDuplicateOrders,
@@ -19,6 +20,7 @@ import {
   removeAdminFnbOrderItems,
   setAdminFnbOrder
 } from '~/controllers/fnbOrder.controller'
+import { protect } from '~/middlewares/auth.middleware'
 import {
   addItemsToOrderValidator,
   checkFNBOrderIdValidator,
@@ -32,6 +34,7 @@ import {
 } from '~/middlewares/fnbOrder.middleware'
 
 const fnbOrderRouter = Router()
+const staffOrAdmin = protect([UserRole.Staff, UserRole.Admin])
 
 // ============================================
 // NEW SEMANTIC ACTIONS API (Recommended)
@@ -40,6 +43,7 @@ const fnbOrderRouter = Router()
 // ADD items to order (cộng dồn số lượng)
 fnbOrderRouter.post(
   '/:roomScheduleId/add',
+  staffOrAdmin,
   checkRoomScheduleIdValidator,
   checkRoomScheduleExists,
   addAdminFnbOrderItems
@@ -48,28 +52,35 @@ fnbOrderRouter.post(
 // REMOVE items from order (giảm số lượng)
 fnbOrderRouter.post(
   '/:roomScheduleId/remove',
+  staffOrAdmin,
   checkRoomScheduleIdValidator,
   checkRoomScheduleExists,
   removeAdminFnbOrderItems
 )
 
 // SET order (ghi đè toàn bộ order)
-fnbOrderRouter.put('/:roomScheduleId', checkRoomScheduleIdValidator, checkRoomScheduleExists, setAdminFnbOrder)
+fnbOrderRouter.put(
+  '/:roomScheduleId',
+  staffOrAdmin,
+  checkRoomScheduleIdValidator,
+  checkRoomScheduleExists,
+  setAdminFnbOrder
+)
 
 // ============================================
 // LEGACY ROUTES (Backward Compatibility)
 // ============================================
 
 // Legacy routes - deprecated but kept for backward compatibility
-fnbOrderRouter.post('/', createFNBOrderValidator, createFnbOrder)
+fnbOrderRouter.post('/', staffOrAdmin, createFNBOrderValidator, createFnbOrder)
 // Lưu ý: route /stats phải đứng TRƯỚC /:id để không bị match id = "stats" → Invalid id
 fnbOrderRouter.get('/stats', getFnbSalesStats)
 fnbOrderRouter.get('/:id', checkFNBOrderIdValidator, checkFNBOrderNotExists, getFnbOrderById)
-fnbOrderRouter.delete('/:id', checkFNBOrderIdValidator, checkFNBOrderNotExists, deleteFnbOrder)
-fnbOrderRouter.post('/upsert', upsertFnbOrderValidator, upsertFnbOrder)
-fnbOrderRouter.post('/upsert-item', upsertOrderItemValidator, upsertOrderItem)
-fnbOrderRouter.post('/complete', completeOrderValidator, completeOrder)
-fnbOrderRouter.post('/add-items', addItemsToOrderValidator, addItemsToOrder)
+fnbOrderRouter.delete('/:id', staffOrAdmin, checkFNBOrderIdValidator, checkFNBOrderNotExists, deleteFnbOrder)
+fnbOrderRouter.post('/upsert', staffOrAdmin, upsertFnbOrderValidator, upsertFnbOrder)
+fnbOrderRouter.post('/upsert-item', staffOrAdmin, upsertOrderItemValidator, upsertOrderItem)
+fnbOrderRouter.post('/complete', staffOrAdmin, completeOrderValidator, completeOrder)
+fnbOrderRouter.post('/add-items', staffOrAdmin, addItemsToOrderValidator, addItemsToOrder)
 
 // ============================================
 // QUERY & UTILITY ROUTES

@@ -24,6 +24,22 @@ export const createScheduleValidator = validate(
       notEmpty: {
         errorMessage: ROOM_SCHEDULE_MESSAGES.STATUS_REQUIRED
       }
+    },
+    customerName: {
+      optional: { options: { nullable: true, values: 'falsy' } },
+      isString: { errorMessage: 'customerName must be a string' },
+      trim: true
+    },
+    customerPhone: {
+      optional: { options: { nullable: true, values: 'falsy' } },
+      isString: { errorMessage: 'customerPhone must be a string' },
+      trim: true
+    },
+    customerEmail: {
+      optional: { options: { nullable: true, values: 'falsy' } },
+      isString: { errorMessage: 'customerEmail must be a string' },
+      trim: true,
+      isEmail: { errorMessage: 'customerEmail must be a valid email' }
     }
   })
 )
@@ -53,6 +69,22 @@ export const updateScheduleValidator = validate(
       notEmpty: {
         errorMessage: ROOM_SCHEDULE_MESSAGES.ROOM_ID_REQUIRED
       }
+    },
+    customerName: {
+      optional: { options: { nullable: true, values: 'falsy' } },
+      isString: { errorMessage: 'customerName must be a string' },
+      trim: true
+    },
+    customerPhone: {
+      optional: { options: { nullable: true, values: 'falsy' } },
+      isString: { errorMessage: 'customerPhone must be a string' },
+      trim: true
+    },
+    customerEmail: {
+      optional: { options: { nullable: true, values: 'falsy' } },
+      isString: { errorMessage: 'customerEmail must be a string' },
+      trim: true,
+      isEmail: { errorMessage: 'customerEmail must be a valid email' }
     }
   })
 )

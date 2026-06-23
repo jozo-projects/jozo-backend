@@ -238,7 +238,7 @@ export const getPendingGifts = async (req: Request, res: Response, next: NextFun
   try {
     const data = await membershipService.getPendingAndEligibleGifts(identifier)
     return res.status(HTTP_STATUS_CODE.OK).json({
-      message: 'Pending gifts',
+      message: 'Streak gifts',
       result: data
     })
   } catch (error) {
@@ -270,7 +270,7 @@ export const claimGift = async (req: Request, res: Response, next: NextFunction)
   try {
     const result = await membershipService.claimStreakGift(identifier, Number(streakCount), scheduleId, staffId)
     return res.status(HTTP_STATUS_CODE.OK).json({
-      message: 'Gift đã được phục vụ',
+      message: 'Quà streak đã được ghi nhận',
       result
     })
   } catch (error) {

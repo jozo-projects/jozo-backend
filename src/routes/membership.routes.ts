@@ -28,7 +28,10 @@ membershipRouter.post('/members/:id/points', protect([UserRole.Admin]), wrapRequ
 membershipRouter.get('/members/:id/streak', protect([UserRole.Admin]), wrapRequestHandler(getMemberStreak))
 membershipRouter.put('/members/:id/streak', protect([UserRole.Admin]), wrapRequestHandler(updateMemberStreak))
 membershipRouter.get('/members/:id/pending-gifts', protect([UserRole.Admin, UserRole.Staff]), wrapRequestHandler(getPendingGifts))
+membershipRouter.get('/members/:id/streak-gifts', protect([UserRole.Admin, UserRole.Staff]), wrapRequestHandler(getPendingGifts))
 membershipRouter.get('/pending-gifts', protect([UserRole.Admin, UserRole.Staff]), wrapRequestHandler(getPendingGifts))
+membershipRouter.get('/streak-gifts', protect([UserRole.Admin, UserRole.Staff]), wrapRequestHandler(getPendingGifts))
 membershipRouter.post('/claim-gift', protect([UserRole.Admin, UserRole.Staff]), wrapRequestHandler(claimGift))
+membershipRouter.post('/serve-streak-gift', protect([UserRole.Admin, UserRole.Staff]), wrapRequestHandler(claimGift))
 
 export default membershipRouter

@@ -22,6 +22,10 @@ import {
 import type { FNBOrder, FNBOrderLine } from '~/models/schemas/FNB.schema'
 import { cleanOrderDetail } from '../utils/common'
 
+function resolveFnbActorId(req: Request, fallback?: string): string {
+  return req.decoded_authorization?.user_id || fallback || 'system'
+}
+
 /** getBill bắt buộc actual start/end — hàm này lấy từ lịch (và now nếu lịch chưa có end) để gọi nội bộ */
 async function resolveActualTimesForBill(roomScheduleId: string): Promise<{ actualStartTime: string; actualEndTime: string }> {
   const schedule = await databaseService.roomSchedule.findOne({ _id: new ObjectId(roomScheduleId) })
@@ -52,8 +56,9 @@ export const createFnbOrder = async (
 ) => {
   try {
     const { roomScheduleId, order, createdBy } = req.body
+    const actorId = resolveFnbActorId(req, createdBy)
     // Sử dụng upsertFnbOrder thay vì createFnbOrder để tránh duplicate
-    const result = await fnbOrderService.upsertFnbOrder(roomScheduleId, order, createdBy)
+    const result = await fnbOrderService.upsertFnbOrder(roomScheduleId, order, actorId)
     return res.status(HTTP_STATUS_CODE.CREATED).json({
       message: FNB_MESSAGES.CREATE_FNB_ORDER_SUCCESS,
       result
@@ -126,6 +131,7 @@ export const getFnbOrdersByRoomSchedule = async (req: Request, res: Response, ne
 export const upsertFnbOrder = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { roomScheduleId, order, createdBy } = req.body
+    const actorId = resolveFnbActorId(req, createdBy)
 
     // Get current order to calculate delta
     const currentOrder = await fnbOrderService.getFnbOrdersByRoomSchedule(roomScheduleId)
@@ -207,10 +213,10 @@ export const upsertFnbOrder = async (req: Request, res: Response, next: NextFunc
       inventoryUpdates.map(({ itemId, delta }) => ({ itemId, delta })),
       'karaoke',
       roomScheduleId,
-      createdBy
+      actorId
     )
 
-    const result = await fnbOrderService.upsertFnbOrder(roomScheduleId, order, createdBy)
+    const result = await fnbOrderService.upsertFnbOrder(roomScheduleId, order, actorId)
     return res.status(HTTP_STATUS_CODE.OK).json({
       message: FNB_MESSAGES.UPSERT_FNB_ORDER_SUCCESS,
       result
@@ -250,9 +256,10 @@ export const getUpdatedBill = async (req: Request, res: Response, next: NextFunc
 export const addItemsToOrder = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { roomScheduleId, items, createdBy } = req.body
+    const actorId = resolveFnbActorId(req, createdBy)
 
     // Step 1: Check inventory availability
-    const inventoryResults = []
+    const inventoryResults: Array<{ itemId: string; quantity: number; item: any; isVariant: boolean }> = []
     for (const { itemId, quantity } of items) {
       // Tìm trong menu chính (fnb_menu collection) trước
       let item: any = await databaseService.fnbMenu.findOne({ _id: new ObjectId(itemId) })
@@ -279,8 +286,41 @@ export const addItemsToOrder = async (req: Request, res: Response, next: NextFun
         })
       }
 
-      inventoryResults.push({ item, isVariant })
+      inventoryResults.push({ itemId, quantity, item, isVariant })
     }
+
+    // Deduct inventory
+    for (const { itemId, quantity, item, isVariant } of inventoryResults) {
+      if (item.inventory) {
+        if (isVariant) {
+          await fnbMenuItemService.updateMenuItem(itemId, {
+            inventory: {
+              ...item.inventory,
+              quantity: item.inventory.quantity - quantity,
+              lastUpdated: new Date()
+            },
+            updatedAt: new Date()
+          })
+        } else {
+          await databaseService.fnbMenu.updateOne(
+            { _id: new ObjectId(itemId) },
+            {
+              $set: {
+                'inventory.quantity': item.inventory.quantity - quantity,
+                'inventory.lastUpdated': new Date()
+              }
+            }
+          )
+        }
+      }
+    }
+
+    await fnbSalesMovementService.logDeltas(
+      inventoryResults.map(({ itemId, quantity }) => ({ itemId, delta: quantity })),
+      'karaoke',
+      roomScheduleId,
+      actorId
+    )
 
     // Step 2: Get existing order or create new one
     let currentOrder = await fnbOrderService.getFnbOrdersByRoomSchedule(roomScheduleId)
@@ -292,7 +332,7 @@ export const addItemsToOrder = async (req: Request, res: Response, next: NextFun
     }
 
     for (const { itemId, quantity } of items) {
-      const item = inventoryResults.find((i) => i.item._id.toString() === itemId)
+      const item = inventoryResults.find((i) => i.itemId === itemId)
       if (item) {
         if (item.item.category === 'snack') {
           newItems.snacks[itemId] = quantity
@@ -302,7 +342,7 @@ export const addItemsToOrder = async (req: Request, res: Response, next: NextFun
       }
     }
 
-    const orderResult = await fnbOrderService.upsertFnbOrder(roomScheduleId, newItems, createdBy, 'add')
+    const orderResult = await fnbOrderService.upsertFnbOrder(roomScheduleId, newItems, actorId, 'add')
 
     // Step 4: Generate updated bill
     const billService = new BillService()
@@ -430,6 +470,7 @@ export const getBillDetails = async (req: Request, res: Response, next: NextFunc
 export const completeOrder = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { roomScheduleId, items, createdBy } = req.body
+    const actorId = resolveFnbActorId(req, createdBy)
 
     // Step 1: Deduct inventory
     const inventoryResults: Array<{ item: any; isVariant: boolean }> = []
@@ -496,7 +537,7 @@ export const completeOrder = async (req: Request, res: Response, next: NextFunct
       items.map(({ itemId, quantity }: { itemId: string; quantity: number }) => ({ itemId, delta: quantity })),
       'karaoke',
       roomScheduleId,
-      createdBy
+      actorId
     )
 
     const lineRows: FNBOrderLine[] = []
@@ -521,9 +562,9 @@ export const completeOrder = async (req: Request, res: Response, next: NextFunct
     }
 
     const order: FNBOrder = { lines: lineRows }
-    const orderResult = await fnbOrderService.upsertFnbOrder(roomScheduleId, order, createdBy, 'add')
+    const orderResult = await fnbOrderService.upsertFnbOrder(roomScheduleId, order, actorId, 'add')
 
-    const historyRecord = await fnbOrderService.saveOrderHistory(roomScheduleId, order, createdBy || 'system')
+    const historyRecord = await fnbOrderService.saveOrderHistory(roomScheduleId, order, actorId)
 
     // Step 4: Generate updated bill with new items
     const billService = new BillService()
@@ -672,9 +713,10 @@ export const ensureUniqueIndex = async (req: Request, res: Response, next: NextF
 export const upsertOrderItem = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { roomScheduleId, itemId, quantity, category, createdBy } = req.body
+    const actorId = resolveFnbActorId(req, createdBy)
 
     console.log('=== DEBUG UPSERT ORDER ITEM ===')
-    console.log('Request body:', { roomScheduleId, itemId, quantity, category, createdBy })
+    console.log('Request body:', { roomScheduleId, itemId, quantity, category, actorId })
 
     // Lấy order hiện tại
     let currentOrder = await fnbOrderService.getFnbOrdersByRoomSchedule(roomScheduleId)
@@ -683,7 +725,7 @@ export const upsertOrderItem = async (req: Request, res: Response, next: NextFun
     console.log('Current order:', currentOrder ? JSON.stringify(currentOrder, null, 2) : 'NULL')
 
     if (!currentOrder) {
-      currentOrder = await fnbOrderService.upsertFnbOrder(roomScheduleId, emptyFnbOrder(), createdBy, 'set')
+      currentOrder = await fnbOrderService.upsertFnbOrder(roomScheduleId, emptyFnbOrder(), actorId, 'set')
     }
 
     const curNorm = normalizeFnbOrder(currentOrder!.order)
@@ -758,11 +800,11 @@ export const upsertOrderItem = async (req: Request, res: Response, next: NextFun
     }
 
     if (delta !== 0) {
-      await fnbSalesMovementService.logDeltas([{ itemId, delta }], 'karaoke', roomScheduleId, createdBy)
+      await fnbSalesMovementService.logDeltas([{ itemId, delta }], 'karaoke', roomScheduleId, actorId)
     }
 
     const nextOrder = setPlainLineQuantity(curNorm, itemId, cat, quantity)
-    const result = await fnbOrderService.upsertFnbOrder(roomScheduleId, nextOrder, createdBy, 'set')
+    const result = await fnbOrderService.upsertFnbOrder(roomScheduleId, nextOrder, actorId, 'set')
 
     console.log('Upsert result:', result ? JSON.stringify(result, null, 2) : 'NULL')
     console.log('=== END DEBUG UPSERT ORDER ITEM ===')
@@ -789,6 +831,7 @@ export const addAdminFnbOrderItems = async (req: Request, res: Response, next: N
   try {
     const { roomScheduleId } = req.params
     const { order, createdBy } = req.body
+    const actorId = resolveFnbActorId(req, createdBy)
 
     // Validate roomScheduleId
     if (!ObjectId.isValid(roomScheduleId)) {
@@ -868,10 +911,10 @@ export const addAdminFnbOrderItems = async (req: Request, res: Response, next: N
       inventoryUpdates.map(({ itemId, delta }) => ({ itemId, delta })),
       'karaoke',
       roomScheduleId,
-      createdBy
+      actorId
     )
 
-    const result = await fnbOrderService.upsertFnbOrder(roomScheduleId, order, createdBy, 'add')
+    const result = await fnbOrderService.upsertFnbOrder(roomScheduleId, order, actorId, 'add')
 
     // Validate that order was saved successfully
     if (!result) {
@@ -899,6 +942,7 @@ export const removeAdminFnbOrderItems = async (req: Request, res: Response, next
   try {
     const { roomScheduleId } = req.params
     const { order, createdBy } = req.body
+    const actorId = resolveFnbActorId(req, createdBy)
 
     // Validate roomScheduleId
     if (!ObjectId.isValid(roomScheduleId)) {
@@ -969,11 +1013,11 @@ export const removeAdminFnbOrderItems = async (req: Request, res: Response, next
       inventoryUpdates.map(({ itemId, delta }) => ({ itemId, delta })),
       'karaoke',
       roomScheduleId,
-      createdBy
+      actorId
     )
 
     // REMOVE mode: Giảm số lượng
-    const result = await fnbOrderService.upsertFnbOrder(roomScheduleId, order, createdBy, 'remove')
+    const result = await fnbOrderService.upsertFnbOrder(roomScheduleId, order, actorId, 'remove')
 
     // Validate that order was saved successfully
     if (!result) {
@@ -1001,6 +1045,7 @@ export const setAdminFnbOrder = async (req: Request, res: Response, next: NextFu
   try {
     const { roomScheduleId } = req.params
     const { order, createdBy } = req.body
+    const actorId = resolveFnbActorId(req, createdBy)
 
     // Validate roomScheduleId
     if (!ObjectId.isValid(roomScheduleId)) {
@@ -1089,11 +1134,11 @@ export const setAdminFnbOrder = async (req: Request, res: Response, next: NextFu
       inventoryUpdates.map(({ itemId, delta }) => ({ itemId, delta })),
       'karaoke',
       roomScheduleId,
-      createdBy
+      actorId
     )
 
     // SET mode: Ghi đè toàn bộ order
-    const result = await fnbOrderService.upsertFnbOrder(roomScheduleId, order, createdBy, 'set')
+    const result = await fnbOrderService.upsertFnbOrder(roomScheduleId, order, actorId, 'set')
 
     // Validate that order was saved successfully
     if (!result) {

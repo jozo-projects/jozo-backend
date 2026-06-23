@@ -486,23 +486,42 @@ class RoomMusicServices {
    */
   async sendNewOrderNotificationToAdmin(
     roomId: string,
-    orderData: any
-  ): Promise<{ message: string; timestamp: number; orderData: any }> {
+    orderData: {
+      orderId: string
+      items: Array<{ itemId: string; name: string; quantity: number; price: number; note?: string }>
+      totalAmount: number
+      customerInfo: { roomName: string; roomScheduleId: string }
+      itemDeltas?: Array<{ itemId: string; delta: number }>
+      roomScheduleId?: string
+    }
+  ): Promise<{ message: string; timestamp: number; notificationId: string; orderData: any }> {
     try {
+      const notificationId = Date.now().toString()
+      const roomScheduleId = orderData.roomScheduleId || orderData.customerInfo?.roomScheduleId
+      const itemDeltas =
+        orderData.itemDeltas ??
+        orderData.items.map((item) => ({ itemId: item.itemId, delta: item.quantity }))
+
       const notification = {
         message: `Đơn hàng mới từ phòng ${roomId}`,
-        timestamp: Date.now(),
+        timestamp: Number(notificationId),
+        notificationId,
         orderData: {
           roomId,
+          notificationId,
           orderId: orderData.orderId,
+          roomScheduleId,
+          itemDeltas,
           items: orderData.items,
           totalAmount: orderData.totalAmount,
           customerInfo: orderData.customerInfo,
-          createdAt: new Date().toISOString()
+          createdAt: new Date().toISOString(),
+          servedAt: undefined as string | undefined,
+          servedBy: undefined as string | undefined
         }
       }
 
-      const redisKey = `room_${roomId}_new_order_${Date.now()}`
+      const redisKey = `room_${roomId}_new_order_${notificationId}`
       await this.cacheService.setex(redisKey, 24 * 60 * 60, JSON.stringify(notification))
       roomMusicEventEmitter.emit('admin_notification', {
         type: 'new_order',

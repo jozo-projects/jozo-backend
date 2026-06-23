@@ -13,12 +13,13 @@ import { User } from '~/models/schemas/User.schema'
 import { Gift } from '~/models/schemas/Gift.schema'
 import { ErrorWithStatus } from '~/models/Error'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
+import { buildUserPhoneLookupFilter, normalizeVietnamPhone } from '~/utils/common'
 import databaseService from './database.service'
 
 type EarnMeta = {
   invoiceCode?: string
   phone?: string
-  method?: 'auto' | 'self-claim' | 'admin'
+  method?: 'auto' | 'self-claim' | 'admin' | 'staff-served'
   reason?: string
   streakCount?: number
   giftId?: ObjectId
@@ -274,70 +275,6 @@ class MembershipService {
     return { user: updatedUser, tierChanged, previousTier, newTier }
   }
 
-  private async assignStreakGiftReward(userId: ObjectId, giftId: ObjectId, streakCount: number) {
-    // Check gift first for better error message
-    const gift = await databaseService.gifts.findOne({ _id: giftId })
-
-    if (!gift) {
-      throw new ErrorWithStatus({
-        message: `Gift không tồn tại (giftId: ${giftId.toString()})`,
-        status: HTTP_STATUS_CODE.NOT_FOUND
-      })
-    }
-
-    if (!gift.isActive) {
-      throw new ErrorWithStatus({
-        message: `Gift "${gift.name}" không còn active`,
-        status: HTTP_STATUS_CODE.BAD_REQUEST
-      })
-    }
-
-    if (gift.remainingQuantity <= 0) {
-      throw new ErrorWithStatus({
-        message: `Gift "${gift.name}" đã hết hàng (remainingQuantity: ${gift.remainingQuantity})`,
-        status: HTTP_STATUS_CODE.BAD_REQUEST
-      })
-    }
-
-    const updatedGiftResult = await databaseService.gifts.findOneAndUpdate(
-      { _id: giftId, isActive: true, remainingQuantity: { $gt: 0 } },
-      {
-        $inc: { remainingQuantity: -1 },
-        $set: { updatedAt: new Date() }
-      },
-      { returnDocument: 'after' }
-    )
-
-    // Handle both ModifyResult.value and direct document return
-    const updatedGift = ((updatedGiftResult as unknown as ModifyResult<Gift>)?.value ||
-      updatedGiftResult) as Gift | null
-
-    if (!updatedGift || !updatedGift._id) {
-      throw new ErrorWithStatus({
-        message: 'Không thể trừ tồn kho gift (race condition)',
-        status: HTTP_STATUS_CODE.CONFLICT
-      })
-    }
-
-    await this.addRewardHistory(
-      userId,
-      0,
-      RewardSource.Streak,
-      {
-        method: 'auto',
-        streakCount,
-        giftId: updatedGift._id,
-        giftName: updatedGift.name,
-        giftType: updatedGift.type,
-        giftImage: updatedGift.image
-      },
-      'gift',
-      'assigned'
-    )
-
-    return updatedGift
-  }
-
   private async awardTierBenefits(userId: ObjectId, tier: string, config: IMembershipConfig) {
     const benefits = config.tierBenefits?.[tier] || []
     if (!benefits.length) return
@@ -383,6 +320,55 @@ class MembershipService {
     }
   }
 
+  /** Cộng bonusPoints cho các mốc streak đã đạt nhưng chưa được thưởng điểm. */
+  private async awardStreakBonusPointsUpTo(
+    userId: ObjectId,
+    upToCount: number,
+    streakRewards: IStreakReward[]
+  ): Promise<User | null> {
+    const rewards = this.normalizeStreakRewards(streakRewards)
+    let latestUser: User | null = null
+
+    for (const reward of rewards) {
+      if (reward.count > upToCount || reward.bonusPoints <= 0) continue
+
+      const alreadyClaimedPoints = await databaseService.rewardHistories.findOne({
+        userId,
+        source: RewardSource.Streak,
+        'meta.streakCount': reward.count,
+        points: { $gt: 0 }
+      })
+
+      if (alreadyClaimedPoints) continue
+
+      const { tierChanged, newTier, user } = await this.updateUserPoints(
+        userId,
+        reward.bonusPoints,
+        await this.getTierThresholds()
+      )
+      latestUser = user
+
+      await this.addRewardHistory(userId, reward.bonusPoints, RewardSource.Streak, {
+        method: 'auto',
+        streakCount: reward.count
+      })
+
+      if (tierChanged && newTier) {
+        try {
+          await this.awardTierBenefits(userId, newTier, await this.loadConfig())
+        } catch (error) {
+          console.error('Không thể gán quyền lợi tier từ streak', error)
+        }
+      }
+    }
+
+    if (!latestUser) {
+      latestUser = (await databaseService.users.findOne({ _id: userId })) as unknown as User | null
+    }
+
+    return latestUser
+  }
+
   private async updateStreak(userId: ObjectId, visitAt: Date, windowDays: number, streakRewards: IStreakReward[]) {
     const rewards = this.normalizeStreakRewards(streakRewards)
     const now = visitAt
@@ -419,47 +405,14 @@ class MembershipService {
       await databaseService.streaks.insertOne(newStreak)
     }
 
-    // Check tất cả mốc <= nextCount chưa được claim
+    await this.awardStreakBonusPointsUpTo(userId, nextCount, rewards)
+
+    // ❌ KHÔNG TỰ ĐỘNG ASSIGN GIFT — staff claim qua claimStreakGift()
     for (const reward of rewards) {
-      if (reward.count <= nextCount) {
-        // ✅ TỰ ĐỘNG CỘNG ĐIỂM THƯỞNG (nếu có)
-        if (reward.bonusPoints > 0) {
-          // Check đã cộng điểm thưởng chưa
-          const alreadyClaimedPoints = await databaseService.rewardHistories.findOne({
-            userId,
-            source: RewardSource.Streak,
-            'meta.streakCount': reward.count,
-            points: { $gt: 0 } // Chỉ check record có điểm (không phải gift)
-          })
-
-          if (!alreadyClaimedPoints) {
-            const { tierChanged, newTier } = await this.updateUserPoints(
-              userId,
-              reward.bonusPoints,
-              await this.getTierThresholds()
-            )
-            await this.addRewardHistory(userId, reward.bonusPoints, RewardSource.Streak, {
-              method: 'auto',
-              streakCount: reward.count
-            })
-
-            if (tierChanged && newTier) {
-              try {
-                await this.awardTierBenefits(userId, newTier, await this.loadConfig())
-              } catch (error) {
-                console.error('Không thể gán quyền lợi tier từ streak', error)
-              }
-            }
-          }
-        }
-
-        // ❌ KHÔNG TỰ ĐỘNG ASSIGN GIFT
-        // Gift phải được staff/admin manually claim qua API claimStreakGift()
-        if (reward.giftId) {
-          console.log(
-            `User ${userId.toString()} đủ điều kiện nhận gift cho streak ${reward.count}, cần staff/admin claim`
-          )
-        }
+      if (reward.count <= nextCount && reward.giftId) {
+        console.log(
+          `User ${userId.toString()} đủ điều kiện nhận gift cho streak ${reward.count}, cần staff/admin claim`
+        )
       }
     }
   }
@@ -467,6 +420,13 @@ class MembershipService {
   private async getTierThresholds(): Promise<Record<string, number>> {
     const config = await this.loadConfig()
     return config.tierThresholds
+  }
+
+  private async findUserByPhone(phone: string): Promise<User | null> {
+    const normalized = normalizeVietnamPhone(phone)
+    if (!normalized) return null
+
+    return (await databaseService.users.findOne(buildUserPhoneLookupFilter(normalized))) as unknown as User | null
   }
 
   async earnPointsForUser(options: {
@@ -478,15 +438,16 @@ class MembershipService {
   }) {
     const config = await this.loadConfig()
     const points = this.computeBasePoints(options.totalAmount, config)
-    if (points <= 0) return null
+    let user: User | null = null
+    let tierChanged = false
+    let newTier: string | undefined
 
-    const { user, tierChanged, newTier } = await this.updateUserPoints(options.userId, points, config.tierThresholds)
-    await this.addRewardHistory(options.userId, points, options.source || RewardSource.Point, options.meta)
-
-    if (user) {
-      const windowDays = config.streak?.windowDays ?? 14
-      const streakRewards = config.streak?.rewards ?? []
-      await this.updateStreak(options.userId, options.visitAt ?? new Date(), windowDays, streakRewards)
+    if (points > 0) {
+      const result = await this.updateUserPoints(options.userId, points, config.tierThresholds)
+      user = result.user
+      tierChanged = result.tierChanged
+      newTier = result.newTier
+      await this.addRewardHistory(options.userId, points, options.source || RewardSource.Point, options.meta)
 
       if (tierChanged && newTier) {
         try {
@@ -495,6 +456,18 @@ class MembershipService {
           console.error('Không thể gán quyền lợi tier', error)
         }
       }
+    } else {
+      user = (await databaseService.users.findOne({ _id: options.userId })) as unknown as User | null
+      // Ghi nhận visit (0 điểm) để tránh xử lý trùng invoice khi bill không đủ mức tích điểm
+      if (user && options.meta?.invoiceCode) {
+        await this.addRewardHistory(options.userId, 0, options.source || RewardSource.Point, options.meta)
+      }
+    }
+
+    if (user) {
+      const windowDays = config.streak?.windowDays ?? 14
+      const streakRewards = config.streak?.rewards ?? []
+      await this.updateStreak(options.userId, options.visitAt ?? new Date(), windowDays, streakRewards)
     }
 
     return user
@@ -512,26 +485,23 @@ class MembershipService {
     meta?: EarnMeta
     visitAt?: Date
   }) {
-    // Tìm user theo phone_number
-    const user = (await databaseService.users.findOne({
-      phone_number: options.phone_number
-    })) as unknown as User | null
+    const normalizedPhone = normalizeVietnamPhone(options.phone_number)
+    const user = await this.findUserByPhone(options.phone_number)
 
     if (!user || !user._id) {
       throw new ErrorWithStatus({
-        message: `Không tìm thấy user với số điện thoại ${options.phone_number}`,
+        message: `Không tìm thấy user với số điện thoại ${normalizedPhone || options.phone_number}`,
         status: HTTP_STATUS_CODE.NOT_FOUND
       })
     }
 
-    // Gọi method earnPointsForUser với userId
     return this.earnPointsForUser({
       userId: user._id as ObjectId,
       totalAmount: options.totalAmount,
       source: options.source,
       meta: {
         ...options.meta,
-        phone: options.phone_number // Lưu phone vào meta để trace
+        phone: normalizedPhone || options.phone_number
       },
       visitAt: options.visitAt
     })
@@ -557,7 +527,8 @@ class MembershipService {
       throw new Error('Không tìm thấy hóa đơn')
     }
 
-    const user = (await databaseService.users.findOne({ phone_number: phone })) as unknown as User | null
+    const normalizedPhone = normalizeVietnamPhone(phone)
+    const user = await this.findUserByPhone(phone)
     if (!user || !user._id) {
       throw new Error('Không tìm thấy người dùng với số điện thoại này')
     }
@@ -566,7 +537,7 @@ class MembershipService {
       userId: user._id as ObjectId,
       totalAmount: bill.totalAmount || 0,
       source: RewardSource.Point,
-      meta: { invoiceCode, phone, method: 'self-claim' },
+      meta: { invoiceCode, phone: normalizedPhone || phone, method: 'self-claim' },
       visitAt: bill.endTime ? new Date(bill.endTime) : new Date()
     })
 
@@ -656,18 +627,41 @@ class MembershipService {
         return result
       })
 
-    // Separate pending gifts (assigned but not claimed)
-    const pendingGifts = allRewardsFromHistory
-      .filter((record) => record.rewardType === 'gift' && record.giftStatus === 'assigned')
-      .map((record) => ({
-        rewardHistoryId: record._id?.toString(),
-        streakCount: record.meta?.streakCount,
-        giftId: record.meta?.giftId?.toString(),
-        giftName: record.meta?.giftName,
-        giftType: record.meta?.giftType,
-        giftImage: record.meta?.giftImage,
-        assignedAt: record.createdAt
-      }))
+    // Separate available streak gifts (đủ mốc, chưa phục vụ)
+    const claimedGiftStreakCounts = new Set(
+      allRewardsFromHistory
+        .filter(
+          (record) =>
+            record.rewardType === 'gift' &&
+            (record.giftStatus === 'claimed' || record.giftStatus === undefined)
+        )
+        .map((record) => Number(record.meta?.streakCount))
+        .filter((count) => !Number.isNaN(count))
+    )
+
+    const currentStreakCount = streakInfo.count
+    const availableGifts = []
+
+    for (const reward of config.streak?.rewards || []) {
+      const rewardCount = Number(reward.count)
+      if (!reward.giftId || rewardCount > currentStreakCount || claimedGiftStreakCounts.has(rewardCount)) {
+        continue
+      }
+
+      const giftObjectId =
+        reward.giftId instanceof ObjectId ? reward.giftId : new ObjectId(String(reward.giftId))
+      const giftDoc = await databaseService.gifts.findOne({ _id: giftObjectId })
+      if (giftDoc?.isActive) {
+        availableGifts.push({
+          streakCount: rewardCount,
+          giftId: giftObjectId.toString(),
+          giftName: giftDoc.name,
+          giftType: giftDoc.type,
+          giftImage: giftDoc.image,
+          bonusPoints: reward.bonusPoints || 0
+        })
+      }
+    }
 
     return {
       user,
@@ -675,7 +669,7 @@ class MembershipService {
       progress: nextTier,
       streak: streakInfo,
       claimedRewards,
-      pendingGifts
+      availableGifts
     }
   }
 
@@ -688,6 +682,7 @@ class MembershipService {
       const keyword = options.search.trim()
       filter.$or = [
         { name: { $regex: keyword, $options: 'i' } },
+        { full_name: { $regex: keyword, $options: 'i' } },
         { phone_number: { $regex: keyword, $options: 'i' } },
         { username: { $regex: keyword, $options: 'i' } }
       ]
@@ -906,6 +901,12 @@ class MembershipService {
       })
 
       await databaseService.streaks.insertOne(newStreak)
+
+      if (newCount > 0) {
+        const streakRewards = config.streak?.rewards ?? []
+        await this.awardStreakBonusPointsUpTo(userObjectId, newCount, streakRewards)
+      }
+
       return {
         message: 'Đã tạo streak mới',
         streak: newStreak
@@ -916,8 +917,9 @@ class MembershipService {
       throw new ErrorWithStatus({ message: 'Thiếu count', status: 400 })
     }
 
+    const newCount = Math.max(0, payload.count)
     const updateDoc: Partial<Streak> = {
-      count: Math.max(0, payload.count),
+      count: newCount,
       updatedAt: new Date()
     }
 
@@ -925,21 +927,36 @@ class MembershipService {
 
     const updated = (await databaseService.streaks.findOne({ _id: current._id })) as unknown as Streak | null
 
+    if (newCount > 0) {
+      const streakRewards = config.streak?.rewards ?? []
+      await this.awardStreakBonusPointsUpTo(userObjectId, newCount, streakRewards)
+    }
+
     return {
       message: 'Đã cập nhật streak',
       streak: updated
     }
   }
 
+  /** Quà streak cho staff: dựa trên mốc config + streak hiện tại, staff tự chuẩn bị và mark served. */
   async getPendingAndEligibleGifts(userIdOrPhone: string) {
-    // Support both userId and phone_number
+    const userProjection = {
+      password: 0,
+      email_verify_token: 0,
+      forgot_password_token: 0
+    }
+
     let user: User | null = null
 
     if (ObjectId.isValid(userIdOrPhone)) {
-      user = (await databaseService.users.findOne({ _id: new ObjectId(userIdOrPhone) })) as unknown as User | null
+      user = (await databaseService.users.findOne(
+        { _id: new ObjectId(userIdOrPhone) },
+        { projection: userProjection }
+      )) as unknown as User | null
     } else {
-      // Assume it's a phone number
-      user = (await databaseService.users.findOne({ phone_number: userIdOrPhone })) as unknown as User | null
+      user = (await databaseService.users.findOne(buildUserPhoneLookupFilter(userIdOrPhone), {
+        projection: userProjection
+      })) as unknown as User | null
     }
 
     if (!user || !user._id) {
@@ -951,85 +968,100 @@ class MembershipService {
 
     const userObjectId = user._id
     const config = await this.loadConfig()
+    const streak = (await databaseService.streaks.findOne({ userId: userObjectId })) as unknown as Streak | null
+    const currentCount = streak?.count || 0
 
-    // 1. Get pending gifts (assigned from previous visits, not claimed)
-    const pendingRewards = await databaseService.rewardHistories
+    const claimedGiftRecords = await databaseService.rewardHistories
       .find({
         userId: userObjectId,
         source: RewardSource.Streak,
         rewardType: 'gift',
-        giftStatus: 'assigned'
+        $or: [{ giftStatus: 'claimed' }, { giftStatus: { $exists: false } }]
       })
       .toArray()
 
-    const pending = pendingRewards.map((record) => ({
-      rewardHistoryId: record._id?.toString(),
-      giftId: record.meta?.giftId?.toString(),
-      giftName: record.meta?.giftName,
-      giftType: record.meta?.giftType,
-      giftImage: record.meta?.giftImage,
-      streakCount: record.meta?.streakCount,
-      assignedAt: record.createdAt
-    }))
+    const claimedStreakCounts = new Set(
+      claimedGiftRecords.map((record) => Number(record.meta?.streakCount)).filter((count) => !Number.isNaN(count))
+    )
 
-    // 2. Get current streak & check eligible mốc not yet assigned
-    const streak = (await databaseService.streaks.findOne({ userId: userObjectId })) as unknown as Streak | null
-    const currentCount = streak?.count || 0
-
-    const eligibleRewards = config.streak?.rewards || []
-    const eligible = []
-
-    for (const reward of eligibleRewards) {
+    const streakRewards = []
+    for (const reward of config.streak?.rewards || []) {
       const rewardCount = Number(reward.count)
-      if (!reward.giftId || rewardCount > currentCount) continue
+      const isReached = rewardCount <= currentCount
+      const isClaimed = claimedStreakCounts.has(rewardCount)
 
-      // Chuẩn hóa giftId (config từ DB có thể là string)
-      const giftObjectId = reward.giftId instanceof ObjectId ? reward.giftId : new ObjectId(String(reward.giftId))
+      let gift: {
+        giftId: string
+        giftName: string
+        giftType: string
+        giftImage?: string
+      } | null = null
 
-      // Check if gift đã được assigned chưa (chỉ check gift, không check điểm)
-      const alreadyAssigned = await databaseService.rewardHistories.findOne({
-        userId: userObjectId,
-        source: RewardSource.Streak,
-        'meta.streakCount': rewardCount,
-        rewardType: 'gift'
-      })
-
-      if (!alreadyAssigned) {
+      if (reward.giftId) {
+        const giftObjectId =
+          reward.giftId instanceof ObjectId ? reward.giftId : new ObjectId(String(reward.giftId))
         const giftDoc = await databaseService.gifts.findOne({ _id: giftObjectId })
-        if (giftDoc && giftDoc.isActive && giftDoc.remainingQuantity > 0) {
-          eligible.push({
-            streakCount: rewardCount,
+        if (giftDoc?.isActive) {
+          gift = {
             giftId: giftObjectId.toString(),
             giftName: giftDoc.name,
             giftType: giftDoc.type,
-            giftImage: giftDoc.image,
-            bonusPoints: reward.bonusPoints || 0
-          })
+            giftImage: giftDoc.image
+          }
         }
       }
+
+      streakRewards.push({
+        streakCount: rewardCount,
+        bonusPoints: reward.bonusPoints || 0,
+        gift,
+        isReached,
+        isClaimed
+      })
     }
 
-    // Get user info for display
+    const availableGifts = streakRewards
+      .filter((reward) => reward.gift && reward.isReached && !reward.isClaimed)
+      .map((reward) => ({
+        streakCount: reward.streakCount,
+        giftId: reward.gift!.giftId,
+        giftName: reward.gift!.giftName,
+        giftType: reward.gift!.giftType,
+        giftImage: reward.gift!.giftImage,
+        bonusPoints: reward.bonusPoints
+      }))
+
+    const tierThresholds = config.tierThresholds || {}
+    const progress = this.getNextTierInfo(user.lifetimePoint || 0, tierThresholds)
+
     const userInfo = {
       userId: user._id.toString(),
-      name: user.name,
+      name: user.full_name ?? user.name ?? null,
+      username: user.username ?? null,
+      email: user.email ?? null,
       phone_number: user.phone_number,
+      date_of_birth: user.date_of_birth ?? null,
+      avatar: user.avatar ?? null,
       tier: user.tier,
       availablePoint: user.availablePoint || 0,
-      streakCount: currentCount
+      lifetimePoint: user.lifetimePoint || 0,
+      totalPoint: user.totalPoint || 0,
+      streakCount: currentCount,
+      streakIsActive: streak ? dayjs().valueOf() <= dayjs(streak.expiredAt).valueOf() : false,
+      progress
     }
 
-    return { user: userInfo, pending, eligible }
+    return { user: userInfo, streakRewards, availableGifts }
   }
 
+  /** Staff xác nhận đã đưa quà streak cho khách — không trừ tồn kho, chỉ ghi nhận. */
   async claimStreakGift(userIdOrPhone: string, streakCount: number, scheduleId: string, staffId: string) {
-    // Support both userId and phone_number
     let user: User | null = null
 
     if (ObjectId.isValid(userIdOrPhone)) {
       user = (await databaseService.users.findOne({ _id: new ObjectId(userIdOrPhone) })) as unknown as User | null
     } else {
-      user = (await databaseService.users.findOne({ phone_number: userIdOrPhone })) as unknown as User | null
+      user = await this.findUserByPhone(userIdOrPhone)
     }
 
     if (!user || !user._id) {
@@ -1043,73 +1075,105 @@ class MembershipService {
     const scheduleObjectId = new ObjectId(scheduleId)
     const staffObjectId = new ObjectId(staffId)
 
-    // Check if already assigned
-    let rewardHistory = await databaseService.rewardHistories.findOne({
-      userId: userObjectId,
-      source: RewardSource.Streak,
-      'meta.streakCount': streakCount
-    })
-
-    // If not assigned yet, assign it first
-    if (!rewardHistory) {
-      const config = await this.loadConfig()
-      const reward = config.streak?.rewards.find((r) => Number(r.count) === streakCount)
-
-      if (!reward || !reward.giftId) {
-        throw new ErrorWithStatus({
-          message: 'Không tìm thấy reward config cho mốc này',
-          status: HTTP_STATUS_CODE.NOT_FOUND
-        })
-      }
-
-      const giftObjectId = reward.giftId instanceof ObjectId ? reward.giftId : new ObjectId(String(reward.giftId))
-      await this.assignStreakGiftReward(userObjectId, giftObjectId, streakCount)
-
-      // Get the newly created reward
-      rewardHistory = await databaseService.rewardHistories.findOne({
-        userId: userObjectId,
-        source: RewardSource.Streak,
-        'meta.streakCount': streakCount,
-        giftStatus: 'assigned'
+    const schedule = await databaseService.roomSchedule.findOne({ _id: scheduleObjectId })
+    if (!schedule) {
+      throw new ErrorWithStatus({
+        message: 'Không tìm thấy lịch phòng',
+        status: HTTP_STATUS_CODE.NOT_FOUND
       })
-
-      if (!rewardHistory || !rewardHistory._id) {
-        throw new ErrorWithStatus({
-          message: 'Không thể tạo reward',
-          status: HTTP_STATUS_CODE.INTERNAL_SERVER_ERROR
-        })
-      }
     }
 
-    // Check if already claimed
-    if (rewardHistory.giftStatus === 'claimed') {
+    const streak = (await databaseService.streaks.findOne({ userId: userObjectId })) as unknown as Streak | null
+    const currentCount = streak?.count || 0
+    if (currentCount < streakCount) {
       throw new ErrorWithStatus({
-        message: 'Gift đã được phục vụ rồi',
+        message: `Khách chưa đủ streak (hiện tại: ${currentCount}, cần: ${streakCount})`,
         status: HTTP_STATUS_CODE.BAD_REQUEST
       })
     }
 
-    // Update RewardHistory: assigned → claimed
-    const rewardResult = await databaseService.rewardHistories.findOneAndUpdate(
-      { _id: rewardHistory._id, giftStatus: 'assigned' },
-      {
-        $set: {
-          giftStatus: 'claimed',
-          claimedBy: staffObjectId,
-          giftClaimedAt: new Date(),
-          scheduleId: scheduleObjectId
-        }
-      },
-      { returnDocument: 'after' }
-    )
-
-    // Handle both ModifyResult.value and direct document return
-    const updatedReward = ((rewardResult as unknown as ModifyResult<RewardHistory>)?.value ||
-      rewardResult) as RewardHistory | null
-
-    if (!updatedReward || !updatedReward._id) {
+    const config = await this.loadConfig()
+    const reward = config.streak?.rewards.find((r) => Number(r.count) === streakCount)
+    if (!reward?.giftId) {
       throw new ErrorWithStatus({
-        message: 'Không thể claim gift',
+        message: 'Không tìm thấy quà streak cho mốc này',
+        status: HTTP_STATUS_CODE.NOT_FOUND
+      })
+    }
+
+    const giftObjectId = reward.giftId instanceof ObjectId ? reward.giftId : new ObjectId(String(reward.giftId))
+    const giftDoc = await databaseService.gifts.findOne({ _id: giftObjectId })
+    if (!giftDoc?.isActive) {
+      throw new ErrorWithStatus({
+        message: 'Quà streak không còn active',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
+    }
+
+    const existingReward = await databaseService.rewardHistories.findOne({
+      userId: userObjectId,
+      source: RewardSource.Streak,
+      'meta.streakCount': streakCount,
+      rewardType: 'gift'
+    })
+
+    const isAlreadyClaimed =
+      existingReward &&
+      (existingReward.giftStatus === 'claimed' || existingReward.giftStatus === undefined)
+
+    if (isAlreadyClaimed) {
+      throw new ErrorWithStatus({
+        message: 'Quà streak đã được phục vụ rồi',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
+    }
+
+    const servedAt = new Date()
+    let updatedReward: RewardHistory | null = null
+
+    if (existingReward?._id && existingReward.giftStatus === 'assigned') {
+      const rewardResult = await databaseService.rewardHistories.findOneAndUpdate(
+        { _id: existingReward._id, giftStatus: 'assigned' },
+        {
+          $set: {
+            giftStatus: 'claimed',
+            claimedBy: staffObjectId,
+            giftClaimedAt: servedAt,
+            scheduleId: scheduleObjectId
+          }
+        },
+        { returnDocument: 'after' }
+      )
+      updatedReward = ((rewardResult as unknown as ModifyResult<RewardHistory>)?.value ||
+        rewardResult) as RewardHistory | null
+    } else {
+      const history = new RewardHistory({
+        userId: userObjectId,
+        points: 0,
+        source: RewardSource.Streak,
+        rewardType: 'gift',
+        usedAt: servedAt,
+        meta: {
+          method: 'staff-served',
+          streakCount,
+          giftId: giftDoc._id,
+          giftName: giftDoc.name,
+          giftType: giftDoc.type,
+          giftImage: giftDoc.image
+        },
+        createdAt: servedAt,
+        giftStatus: 'claimed',
+        claimedBy: staffObjectId,
+        giftClaimedAt: servedAt,
+        scheduleId: scheduleObjectId
+      })
+      const insertResult = await databaseService.rewardHistories.insertOne(history)
+      updatedReward = { ...history, _id: insertResult.insertedId }
+    }
+
+    if (!updatedReward?._id) {
+      throw new ErrorWithStatus({
+        message: 'Không thể ghi nhận quà streak',
         status: HTTP_STATUS_CODE.BAD_REQUEST
       })
     }
@@ -1136,7 +1200,43 @@ class MembershipService {
       }
     ])
 
-    return updatedReward
+    const bonusPoints = Number(reward.bonusPoints) || 0
+    let bonusPointsAwarded = 0
+
+    const existingBonus = await databaseService.rewardHistories.findOne({
+      userId: userObjectId,
+      source: RewardSource.Streak,
+      'meta.streakCount': streakCount,
+      points: { $gt: 0 }
+    })
+
+    if (existingBonus) {
+      bonusPointsAwarded = existingBonus.points
+    } else if (bonusPoints > 0) {
+      const userAfterBonus = await this.awardStreakBonusPointsUpTo(
+        userObjectId,
+        streakCount,
+        config.streak?.rewards ?? []
+      )
+      if (userAfterBonus) {
+        user = userAfterBonus
+        bonusPointsAwarded = bonusPoints
+      }
+    }
+
+    return {
+      reward: updatedReward,
+      bonusPointsAwarded,
+      user: user
+        ? {
+            userId: userObjectId.toString(),
+            totalPoint: user.totalPoint || 0,
+            availablePoint: user.availablePoint || 0,
+            lifetimePoint: user.lifetimePoint || 0,
+            tier: user.tier
+          }
+        : null
+    }
   }
 }
 

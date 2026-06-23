@@ -179,13 +179,21 @@ export const solveRequestController = async (req: Request, res: Response, next: 
  */
 export const solveOrderController = async (req: Request, res: Response, next: NextFunction) => {
   const { roomId, orderId } = req.params
+  const actorId = req.decoded_authorization?.user_id
+
+  if (!actorId) {
+    return res.status(HTTP_STATUS_CODE.UNAUTHORIZED).json({ message: 'Unauthorized' })
+  }
 
   try {
-    await roomServices.solveOrder(roomId, orderId)
-    res.status(HTTP_STATUS_CODE.OK).json({ 
+    const result = await roomServices.solveOrder(roomId, orderId, actorId)
+    res.status(HTTP_STATUS_CODE.OK).json({
       message: 'Order marked as served successfully',
       roomId,
-      orderId
+      orderId,
+      servedBy: result.servedBy,
+      servedAt: result.servedAt,
+      itemCount: result.itemCount
     })
   } catch (error) {
     next(error)

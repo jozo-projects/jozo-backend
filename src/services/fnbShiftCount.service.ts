@@ -32,8 +32,11 @@ class FnbShiftCountService {
     return dayjs.tz(dateStr, 'YYYY-MM-DD', VIETNAM_TZ).startOf('day').toDate()
   }
 
-  isEditableDate(dateStr: string): boolean {
-    return dateStr === this.getTodayDateStr()
+  isEditableDate(dateStr: string, isAdmin = false): boolean {
+    const today = this.getTodayDateStr()
+    if (dateStr === today) return true
+    if (isAdmin && dateStr < today) return true
+    return false
   }
 
   private normalizeCategory(value: unknown): 'drink' | 'snack' {
@@ -121,10 +124,11 @@ class FnbShiftCountService {
     doc: IFnbShiftCount | null,
     businessDate: string,
     staffId: string,
-    staffName?: string
+    staffName?: string,
+    isAdmin = false
   ): Promise<FnbShiftCountResponse> {
-    const systemSoldMap = await fnbSalesMovementService.aggregateSystemSoldByDate(businessDate)
-    const editable = this.isEditableDate(businessDate)
+    const systemSoldMap = await fnbSalesMovementService.aggregateSystemSoldByStaffAndDate(staffId, businessDate)
+    const editable = this.isEditableDate(businessDate, isAdmin)
 
     const savedMap = new Map<string, FnbShiftCountLine>()
     for (const line of doc?.items ?? []) {
@@ -198,7 +202,8 @@ class FnbShiftCountService {
   async getByStaffAndDate(
     staffId: string,
     dateStr: string,
-    staffName?: string
+    staffName?: string,
+    isAdmin = false
   ): Promise<FnbShiftCountResponse> {
     const businessDate = this.parseBusinessDate(dateStr)
     const doc = await databaseService.fnbShiftCounts.findOne({
@@ -206,16 +211,17 @@ class FnbShiftCountService {
       businessDate
     })
 
-    return this.buildReport(doc, dateStr, staffId, doc?.staffName ?? staffName)
+    return this.buildReport(doc, dateStr, staffId, doc?.staffName ?? staffName, isAdmin)
   }
 
   async upsert(
     staffId: string,
     dateStr: string,
     payload: { items: IUpsertFnbShiftCountItem[]; note?: string },
-    staffName?: string
+    staffName?: string,
+    isAdmin = false
   ): Promise<FnbShiftCountResponse> {
-    if (!this.isEditableDate(dateStr)) {
+    if (!this.isEditableDate(dateStr, isAdmin)) {
       throw new ErrorWithStatus({
         message: FNB_SHIFT_COUNT_MESSAGES.ONLY_TODAY_EDITABLE,
         status: HTTP_STATUS_CODE.FORBIDDEN
@@ -340,7 +346,7 @@ class FnbShiftCountService {
       })
     }
 
-    return this.getByStaffAndDate(staffId, dateStr, staffName)
+    return this.getByStaffAndDate(staffId, dateStr, staffName, isAdmin)
   }
 
   async listForAdmin(filters: {
@@ -388,7 +394,8 @@ class FnbShiftCountService {
           doc,
           dayjs(doc.businessDate).tz(VIETNAM_TZ).format('YYYY-MM-DD'),
           doc.staffId.toString(),
-          doc.staffName
+          doc.staffName,
+          true
         )
       )
     )

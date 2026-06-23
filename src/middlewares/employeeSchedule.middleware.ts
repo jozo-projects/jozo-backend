@@ -149,16 +149,6 @@ export const adminCreateScheduleValidator = validate(
       },
       isISO8601: {
         errorMessage: EMPLOYEE_SCHEDULE_MESSAGES.INVALID_DATE
-      },
-      custom: {
-        options: (value: string) => {
-          const inputDate = dayjs(value).startOf('day')
-          const today = dayjs().startOf('day')
-          if (inputDate.isBefore(today)) {
-            throw new Error(EMPLOYEE_SCHEDULE_MESSAGES.DATE_IN_PAST)
-          }
-          return true
-        }
       }
     },
     shifts: {

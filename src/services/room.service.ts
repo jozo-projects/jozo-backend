@@ -3,7 +3,11 @@ import databaseService from './database.service'
 import { IRoom, Room } from '~/models/schemas/Room.schema'
 import { ObjectId } from 'mongodb'
 import { ROOM_MESSAGES } from '~/constants/messages'
+import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
+import { ErrorWithStatus } from '~/models/Error'
 import redis from './redis.service'
+import fnbSalesMovementService from './fnbSalesMovement.service'
+import { roomMusicEventEmitter } from './roomMusic.service'
 import { EventEmitter } from 'events'
 
 export const roomEventEmitter = new EventEmitter()
@@ -111,19 +115,115 @@ class RoomServices {
     return true
   }
 
-  async solveOrder(roomId: string, orderId: string) {
-    // delete order notification in redis
-    const orderNotificationKey = `room_${roomId}_new_order_${orderId}`
-    await redis.del(orderNotificationKey)
-
-    // Also delete any order notifications with timestamp pattern
-    const pattern = `room_${roomId}_new_order_*`
-    const keys = await redis.keys(pattern)
-    if (keys.length > 0) {
-      await redis.del(...keys)
+  private async findOrderNotificationKey(roomId: string, orderId: string): Promise<string | null> {
+    const directKey = `room_${roomId}_new_order_${orderId}`
+    if (await redis.exists(directKey)) {
+      return directKey
     }
 
-    return true
+    const pattern = `room_${roomId}_new_order_*`
+    const keys = await redis.keys(pattern)
+    for (const key of keys) {
+      const raw = await redis.get(key)
+      if (!raw) continue
+      try {
+        const parsed = JSON.parse(raw) as {
+          notificationId?: string
+          orderData?: { orderId?: string; notificationId?: string; servedAt?: string }
+        }
+        if (
+          parsed.orderData?.orderId === orderId ||
+          parsed.notificationId === orderId ||
+          parsed.orderData?.notificationId === orderId
+        ) {
+          return key
+        }
+      } catch {
+        continue
+      }
+    }
+
+    return null
+  }
+
+  async solveOrder(
+    roomId: string,
+    orderId: string,
+    actorId: string
+  ): Promise<{ servedBy: string; servedAt: Date; itemCount: number }> {
+    const notificationKey = await this.findOrderNotificationKey(roomId, orderId)
+    if (!notificationKey) {
+      throw new ErrorWithStatus({
+        message: 'Order notification not found or already served',
+        status: HTTP_STATUS_CODE.NOT_FOUND
+      })
+    }
+
+    const raw = await redis.get(notificationKey)
+    if (!raw) {
+      throw new ErrorWithStatus({
+        message: 'Order notification not found or already served',
+        status: HTTP_STATUS_CODE.NOT_FOUND
+      })
+    }
+
+    const notification = JSON.parse(raw) as {
+      notificationId?: string
+      orderData?: {
+        orderId?: string
+        roomScheduleId?: string
+        itemDeltas?: Array<{ itemId: string; delta: number }>
+        items?: Array<{ itemId: string; quantity: number }>
+        servedAt?: string
+        customerInfo?: { roomScheduleId?: string }
+      }
+    }
+
+    if (notification.orderData?.servedAt) {
+      return {
+        servedBy: actorId,
+        servedAt: new Date(notification.orderData.servedAt),
+        itemCount: 0
+      }
+    }
+
+    const roomScheduleId =
+      notification.orderData?.roomScheduleId || notification.orderData?.customerInfo?.roomScheduleId
+    if (!roomScheduleId) {
+      throw new ErrorWithStatus({
+        message: 'Missing room schedule in order notification',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
+    }
+
+    const deltas =
+      notification.orderData?.itemDeltas ??
+      (notification.orderData?.items ?? []).map((item) => ({
+        itemId: item.itemId,
+        delta: item.quantity
+      }))
+
+    if (deltas.length > 0) {
+      await fnbSalesMovementService.logDeltas(deltas, 'karaoke', roomScheduleId, actorId)
+    }
+
+    const servedAt = new Date()
+    await redis.del(notificationKey)
+
+    roomMusicEventEmitter.emit('admin_notification', {
+      type: 'order_served',
+      roomId,
+      notificationId: notification.notificationId,
+      orderId: notification.orderData?.orderId,
+      servedBy: actorId,
+      servedAt: servedAt.toISOString()
+    })
+
+    return {
+      servedBy: actorId,
+      servedAt,
+      itemCount: deltas.length
+    }
   }
 
   async turnOffVideos() {
