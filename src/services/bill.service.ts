@@ -576,6 +576,11 @@ export class BillService {
         status: HTTP_STATUS_CODE.NOT_FOUND
       })
     }
+
+    // Ưu tiên roomType được chốt riêng trên schedule (snapshot lúc tạo) để không bị ảnh hưởng
+    // khi phòng vật lý bị đổi roomType bởi schedule khác. Fallback về roomType hiện tại của phòng
+    // cho các schedule cũ chưa có field này.
+    const effectiveRoomType = schedule.roomType ?? room?.roomType
     const dayType = await this.determineDayType(dayjs.utc(schedule.startTime).tz('Asia/Ho_Chi_Minh').toDate())
 
     // Tính tổng snack và drinks để kiểm tra điều kiện áp dụng freeHourPromotion
@@ -892,7 +897,7 @@ export class BillService {
     for (const timeSlotInfo of roomSlotsToCharge) {
       const { slot, overlapStart, overlapEnd } = timeSlotInfo
 
-      const priceEntry = slot.prices.find((p: any) => p.room_type === room?.roomType)
+      const priceEntry = slot.prices.find((p: any) => p.room_type === effectiveRoomType)
       if (!priceEntry) continue
 
       const localOverlapStart = dayjs(overlapStart).tz('Asia/Ho_Chi_Minh')
@@ -1022,12 +1027,12 @@ export class BillService {
         shouldApplyPromotion = appliesToRooms.some((room) => room === roomIdStr)
       }
       // For specific room type
-      else if (appliesTo === 'room_type' && room?.roomType) {
+      else if (appliesTo === 'room_type' && effectiveRoomType) {
         const appliesToRoomTypes = Array.isArray(activePromotion.appliesTo)
           ? activePromotion.appliesTo
           : [activePromotion.appliesTo]
 
-        const roomTypeIdStr = room.roomType.toString()
+        const roomTypeIdStr = effectiveRoomType.toString()
         shouldApplyPromotion = appliesToRoomTypes.some((type) => type === roomTypeIdStr)
       }
 
@@ -1066,6 +1071,7 @@ export class BillService {
     const bill: IBill = {
       scheduleId: schedule._id,
       roomId: schedule.roomId,
+      roomType: effectiveRoomType,
       startTime: startTime, // Sử dụng startTime đã điều chỉnh
       endTime: validatedEndTime,
       createdAt: new Date(),
@@ -1800,6 +1806,7 @@ export class BillService {
     membership: {
       success: boolean
       user?: any
+      pointsEarned?: number
       error?: string
       skipped?: boolean
       reason?: string
@@ -1877,37 +1884,20 @@ export class BillService {
         success: false
       }
 
+      const config = await membershipService.getConfig()
+      const pointsEarned = await membershipService.computePointsForAmount(billToSave.totalAmount)
+
       if (!customerPhone) {
         membershipResult.skipped = true
         membershipResult.reason = 'Không có phone_number trong bill hoặc schedule'
       } else if (existingRewardHistory) {
         membershipResult.skipped = true
         membershipResult.reason = 'Invoice đã được tích điểm rồi'
-      } else if (billToSave.totalAmount <= 0) {
-        try {
-          const updatedUser = await membershipService.earnPointsByPhone({
-            phone_number: customerPhone,
-            totalAmount: 0,
-            source: require('~/constants/enum').RewardSource.Point,
-            meta: {
-              invoiceCode: billToSave.invoiceCode,
-              method: 'auto'
-            },
-            visitAt: billToSave.endTime || new Date()
-          })
-
-          const config = await membershipService.getConfig()
-          membershipResult.success = !!updatedUser
-          membershipResult.user = updatedUser
-          membershipResult.pointsEarned = 0
-          membershipResult.reason = `Đã ghi nhận streak; bill ${billToSave.totalAmount.toLocaleString('vi-VN')}đ chưa đủ ${config.currencyUnit.toLocaleString('vi-VN')}đ để cộng điểm`
-        } catch (error: any) {
-          console.error('Lỗi khi ghi nhận streak từ bill:', error)
-          membershipResult.success = false
-          membershipResult.error = error.message || 'Unknown error'
-        }
+      } else if (pointsEarned <= 0) {
+        membershipResult.skipped = true
+        membershipResult.pointsEarned = 0
+        membershipResult.reason = `Bill ${billToSave.totalAmount.toLocaleString('vi-VN')}đ chưa đủ ${config.currencyUnit.toLocaleString('vi-VN')}đ để tích điểm`
       } else {
-        // Thực hiện tích điểm bằng phone_number
         try {
           const updatedUser = await membershipService.earnPointsByPhone({
             phone_number: customerPhone,
@@ -1920,17 +1910,9 @@ export class BillService {
             visitAt: billToSave.endTime || new Date()
           })
 
-          const config = await membershipService.getConfig()
-          const pointsEarned =
-            Math.floor(billToSave.totalAmount / config.currencyUnit) * config.pointPerCurrency
-
           membershipResult.success = !!updatedUser
           membershipResult.user = updatedUser
           membershipResult.pointsEarned = pointsEarned
-
-          if (updatedUser && pointsEarned <= 0) {
-            membershipResult.reason = `Đã ghi nhận streak; bill ${billToSave.totalAmount.toLocaleString('vi-VN')}đ chưa đủ ${config.currencyUnit.toLocaleString('vi-VN')}đ để cộng điểm`
-          }
         } catch (error: any) {
           console.error('Lỗi khi tích điểm tự động:', error)
           membershipResult.success = false

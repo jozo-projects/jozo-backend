@@ -33,6 +33,14 @@ export const RoomSocket = (io: Server) => {
     io.to(roomId).emit('queue_updated', queue)
   })
 
+  roomEventEmitter.on('now_playing', ({ roomId, nowPlaying }) => {
+    if (nowPlaying === null) {
+      io.to(roomId).emit('now_playing_cleared')
+      return
+    }
+    io.to(roomId).emit('now_playing', nowPlaying)
+  })
+
   roomEventEmitter.on('videos_turned_off', ({ roomId }) => {
     io.to(roomId).emit('videos_turned_off', { status: 'off' })
   })

@@ -11,3 +11,7 @@ export interface AddSongRequestBody {
   headers?: Record<string, string>
   required_headers?: Record<string, string>
 }
+
+export interface MoveQueueRequestBody {
+  targetRoomId: string
+}

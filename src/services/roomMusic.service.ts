@@ -7,11 +7,13 @@ import { ObjectId } from 'mongodb'
 import ytdl from 'youtube-dl-exec'
 import { RoomScheduleStatus } from '~/constants/enum'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
+import { SONG_QUEUE_MESSAGES } from '~/constants/messages'
 import { ErrorWithStatus } from '~/models/Error'
 import { AddSongRequestBody } from '~/models/requests/Song.request'
 import { CacheService } from '~/services/cache.service'
 import billService from '~/services/bill.service'
 import databaseService from '~/services/database.service'
+import { roomEventEmitter } from '~/services/room.service'
 import redis from '~/services/redis.service'
 import { SearchService } from '~/services/search.service'
 import { historyService } from '~/services/songHistory.service'
@@ -715,6 +717,99 @@ class RoomMusicServices {
         hasNextPage: skip + limitNum < total,
         hasPrevPage: pageNum > 1
       }
+    }
+  }
+
+  private normalizeSongForQueue(song: AddSongRequestBody & Record<string, unknown>): AddSongRequestBody {
+    const { timestamp, currentTime, isPlaying, position, ...rest } = song
+    return rest as AddSongRequestBody
+  }
+
+  async moveQueueBetweenRooms(
+    sourceRoomId: string,
+    targetRoomId: string
+  ): Promise<{
+    movedCount: number
+    sourceRoomId: string
+    targetRoomId: string
+    targetQueue: AddSongRequestBody[]
+  }> {
+    if (sourceRoomId === targetRoomId) {
+      throw new ErrorWithStatus({
+        message: SONG_QUEUE_MESSAGES.MOVE_QUEUE_SAME_ROOM,
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
+    }
+
+    const sourceRoomIndex = Number(sourceRoomId)
+    const targetRoomIndex = Number(targetRoomId)
+    if (Number.isNaN(sourceRoomIndex) || Number.isNaN(targetRoomIndex)) {
+      throw new ErrorWithStatus({
+        message: SONG_QUEUE_MESSAGES.MOVE_QUEUE_ROOM_NOT_FOUND,
+        status: HTTP_STATUS_CODE.NOT_FOUND
+      })
+    }
+
+    const [sourceRoom, targetRoom] = await Promise.all([
+      databaseService.rooms.findOne({ roomId: sourceRoomIndex }),
+      databaseService.rooms.findOne({ roomId: targetRoomIndex })
+    ])
+
+    if (!sourceRoom || !targetRoom) {
+      throw new ErrorWithStatus({
+        message: SONG_QUEUE_MESSAGES.MOVE_QUEUE_ROOM_NOT_FOUND,
+        status: HTTP_STATUS_CODE.NOT_FOUND
+      })
+    }
+
+    const sourceQueueKey = `room_${sourceRoomId}_queue`
+    const sourceNowPlayingKey = `room_${sourceRoomId}_now_playing`
+    const targetQueueKey = `room_${targetRoomId}_queue`
+
+    const [nowPlayingRaw, queueRaw] = await Promise.all([
+      redis.get(sourceNowPlayingKey),
+      redis.lrange(sourceQueueKey, 0, -1)
+    ])
+
+    const nowPlaying = nowPlayingRaw ? JSON.parse(nowPlayingRaw) : null
+    const sourceQueue = queueRaw.map((item: string) => JSON.parse(item))
+
+    const songsToMove: AddSongRequestBody[] = []
+    if (nowPlaying) {
+      songsToMove.push(this.normalizeSongForQueue(nowPlaying))
+    }
+    songsToMove.push(...sourceQueue.map((song) => this.normalizeSongForQueue(song)))
+
+    if (songsToMove.length === 0) {
+      const targetQueue = (await redis.lrange(targetQueueKey, 0, -1)).map((item: string) => JSON.parse(item))
+      return {
+        movedCount: 0,
+        sourceRoomId,
+        targetRoomId,
+        targetQueue
+      }
+    }
+
+    await redis.rpush(targetQueueKey, ...songsToMove.map((song) => JSON.stringify(song)))
+
+    await Promise.all([
+      redis.del(sourceQueueKey),
+      redis.del(sourceNowPlayingKey),
+      redis.del(`room_${sourceRoomId}_playback`),
+      redis.del(`room_${sourceRoomId}_current_time`)
+    ])
+
+    const targetQueue = (await redis.lrange(targetQueueKey, 0, -1)).map((item: string) => JSON.parse(item))
+
+    roomEventEmitter.emit('queue_updated', { roomId: sourceRoomId, queue: [] })
+    roomEventEmitter.emit('now_playing', { roomId: sourceRoomId, nowPlaying: null })
+    roomEventEmitter.emit('queue_updated', { roomId: targetRoomId, queue: targetQueue })
+
+    return {
+      movedCount: songsToMove.length,
+      sourceRoomId,
+      targetRoomId,
+      targetQueue
     }
   }
 }

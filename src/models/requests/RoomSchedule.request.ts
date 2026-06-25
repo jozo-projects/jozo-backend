@@ -1,4 +1,4 @@
-import { RoomScheduleStatus } from '~/constants/enum'
+import { RoomScheduleStatus, RoomType } from '~/constants/enum'
 import { BookingSource } from '~/models/schemas/RoomSchdedule.schema'
 
 export interface IRoomScheduleRequestQuery {
@@ -13,6 +13,8 @@ export interface IRoomScheduleRequestBody {
   startTime: string
   endTime?: string
   status: RoomScheduleStatus
+  // Loại phòng (size) áp dụng riêng cho schedule này. Nếu không truyền sẽ snapshot từ roomType hiện tại của phòng.
+  roomType?: RoomType
   createdBy?: string
   updatedBy?: string
   note?: string

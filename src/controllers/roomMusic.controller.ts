@@ -5,7 +5,7 @@ import { randomUUID } from 'crypto'
 import { searchYoutube } from '~/services/youtubeSearch.service'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { SONG_QUEUE_MESSAGES } from '~/constants/messages'
-import { AddSongRequestBody } from '~/models/requests/Song.request'
+import { AddSongRequestBody, MoveQueueRequestBody } from '~/models/requests/Song.request'
 import { VideoSchema } from '~/models/schemas/Video.schema'
 import redis from '~/services/redis.service'
 import { roomMusicServices } from '~/services/roomMusic.service'
@@ -288,6 +288,31 @@ export const getSongsInQueue = async (req: Request, res: Response, next: NextFun
         nowPlaying,
         queue
       }
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+/**
+ * @description Move now playing + queue from source room to target room
+ * @path /room-music/:sourceRoomId/move-queue
+ * @method POST
+ * @body { targetRoomId: string }
+ */
+export const moveQueueBetweenRooms = async (
+  req: Request<ParamsDictionary, any, MoveQueueRequestBody>,
+  res: Response,
+  next: NextFunction
+) => {
+  const { sourceRoomId } = req.params
+  const { targetRoomId } = req.body
+
+  try {
+    const result = await roomMusicServices.moveQueueBetweenRooms(sourceRoomId, targetRoomId)
+    res.status(HTTP_STATUS_CODE.OK).json({
+      message: SONG_QUEUE_MESSAGES.MOVE_QUEUE_SUCCESS,
+      result
     })
   } catch (error) {
     next(error)

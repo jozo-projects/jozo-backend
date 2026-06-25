@@ -58,6 +58,10 @@ export class RoomSchedule {
   giftEnabled?: boolean
   applyFreeHourPromo?: boolean
 
+  // Loại phòng (size) được chốt riêng cho schedule này tại thời điểm tạo.
+  // Dùng để tính tiền độc lập, không bị ảnh hưởng khi phòng vật lý đổi roomType về sau.
+  roomType?: RoomType
+
   // 🆕 Mã booking 4 chữ số cho khách hàng (dễ nhớ, dễ tra cứu)
   bookingCode?: string // Mã 4 chữ số (0000-9999) - unique trong cùng ngày
   dateOfUse?: string // Ngày sử dụng (YYYY-MM-DD) - kết hợp với bookingCode để đảm bảo unique

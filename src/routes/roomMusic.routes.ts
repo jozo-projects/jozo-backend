@@ -12,6 +12,7 @@ import {
   getSongsInCollection,
   getSongsInQueue,
   getVideoInfo,
+  moveQueueBetweenRooms,
   playChosenSong,
   playNextSong,
   removeAllSongsInQueue,
@@ -143,6 +144,18 @@ roomMusicRouter.post('/:roomId/play-next-song', wrapRequestHandler(playNextSong)
  * @author [Your Name]
  */
 roomMusicRouter.post('/:roomId/play-chosen-song', wrapRequestHandler(playChosenSong)) // Phát bài hát được chọn
+
+/**
+ * @description Move now playing + queue to another room
+ * @path /room-music/:sourceRoomId/move-queue
+ * @method POST
+ * @body { targetRoomId: string }
+ */
+roomMusicRouter.post(
+  '/:sourceRoomId/move-queue',
+  protect([UserRole.Admin, UserRole.Staff]),
+  wrapRequestHandler(moveQueueBetweenRooms)
+)
 
 /**
  * @description Get songs in queue

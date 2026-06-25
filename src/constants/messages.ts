@@ -93,7 +93,10 @@ export const SONG_QUEUE_MESSAGES = {
   ADD_SONGS_TO_QUEUE_SUCCESS: 'Add songs to queue success',
   SAVE_SONG_SUCCESS: 'Save song success',
   DELETE_SONG_SUCCESS: 'Delete song success',
-  SONG_NOT_FOUND: 'Song not found'
+  SONG_NOT_FOUND: 'Song not found',
+  MOVE_QUEUE_SUCCESS: 'Move queue success',
+  MOVE_QUEUE_SAME_ROOM: 'Source and target room must be different',
+  MOVE_QUEUE_ROOM_NOT_FOUND: 'Room not found'
 } as const
 
 export const Price_MESSAGES = {

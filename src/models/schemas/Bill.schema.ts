@@ -1,5 +1,6 @@
 // src/models/Bill.ts
 import { ObjectId } from 'mongodb'
+import { RoomType } from '~/constants/enum'
 import { GiftBundleItem, GiftType } from '~/models/schemas/Gift.schema'
 import type { FNBOrderLine } from '~/models/schemas/FNB.schema'
 
@@ -7,6 +8,7 @@ export interface IBill {
   _id?: ObjectId
   scheduleId: ObjectId | string
   roomId: ObjectId | string
+  roomType?: RoomType | string
   items: Array<{
     description: string
     price: number

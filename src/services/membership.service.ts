@@ -141,6 +141,16 @@ class MembershipService {
     return unitBlock * config.pointPerCurrency
   }
 
+  async computePointsForAmount(totalAmount: number): Promise<number> {
+    const config = await this.loadConfig()
+    return this.computeBasePoints(totalAmount, config)
+  }
+
+  private async isInvoiceAlreadyProcessed(invoiceCode: string): Promise<boolean> {
+    const existing = await databaseService.rewardHistories.findOne({ 'meta.invoiceCode': invoiceCode })
+    return !!existing
+  }
+
   private normalizeStreakRewards(rewards: IStreakReward[] = [], options?: { strict?: boolean }): IStreakReward[] {
     const strict = options?.strict ?? false
 
@@ -438,29 +448,23 @@ class MembershipService {
   }) {
     const config = await this.loadConfig()
     const points = this.computeBasePoints(options.totalAmount, config)
-    let user: User | null = null
-    let tierChanged = false
-    let newTier: string | undefined
 
-    if (points > 0) {
-      const result = await this.updateUserPoints(options.userId, points, config.tierThresholds)
-      user = result.user
-      tierChanged = result.tierChanged
-      newTier = result.newTier
-      await this.addRewardHistory(options.userId, points, options.source || RewardSource.Point, options.meta)
+    if (points <= 0) {
+      return (await databaseService.users.findOne({ _id: options.userId })) as unknown as User | null
+    }
 
-      if (tierChanged && newTier) {
-        try {
-          await this.awardTierBenefits(options.userId, newTier, config)
-        } catch (error) {
-          console.error('Không thể gán quyền lợi tier', error)
-        }
-      }
-    } else {
-      user = (await databaseService.users.findOne({ _id: options.userId })) as unknown as User | null
-      // Ghi nhận visit (0 điểm) để tránh xử lý trùng invoice khi bill không đủ mức tích điểm
-      if (user && options.meta?.invoiceCode) {
-        await this.addRewardHistory(options.userId, 0, options.source || RewardSource.Point, options.meta)
+    const { user, tierChanged, newTier } = await this.updateUserPoints(
+      options.userId,
+      points,
+      config.tierThresholds
+    )
+    await this.addRewardHistory(options.userId, points, options.source || RewardSource.Point, options.meta)
+
+    if (tierChanged && newTier) {
+      try {
+        await this.awardTierBenefits(options.userId, newTier, config)
+      } catch (error) {
+        console.error('Không thể gán quyền lợi tier', error)
       }
     }
 
@@ -515,22 +519,48 @@ class MembershipService {
     const claimCount = await databaseService.rewardHistories.countDocuments({
       'meta.phone': phone,
       createdAt: { $gte: startOfDay, $lte: endOfDay },
-      source: RewardSource.Point
+      source: RewardSource.Point,
+      points: { $gt: 0 }
     })
     const limit = config.dailySelfClaimLimitPerPhone ?? 1
     if (claimCount >= limit) {
-      throw new Error('Số điện thoại đã tự tích điểm hôm nay')
+      throw new ErrorWithStatus({
+        message: 'Số điện thoại đã tự tích điểm hôm nay',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
+    }
+
+    if (await this.isInvoiceAlreadyProcessed(invoiceCode)) {
+      throw new ErrorWithStatus({
+        message: 'Hóa đơn đã được tích điểm',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
     }
 
     const bill = await databaseService.bills.findOne({ invoiceCode })
     if (!bill) {
-      throw new Error('Không tìm thấy hóa đơn')
+      throw new ErrorWithStatus({
+        message: 'Không tìm thấy hóa đơn',
+        status: HTTP_STATUS_CODE.NOT_FOUND
+      })
+    }
+
+    const billAmount = bill.totalAmount || 0
+    const points = this.computeBasePoints(billAmount, config)
+    if (points <= 0) {
+      throw new ErrorWithStatus({
+        message: `Hóa đơn ${billAmount.toLocaleString('vi-VN')}đ chưa đủ ${config.currencyUnit.toLocaleString('vi-VN')}đ để tích điểm`,
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
     }
 
     const normalizedPhone = normalizeVietnamPhone(phone)
     const user = await this.findUserByPhone(phone)
     if (!user || !user._id) {
-      throw new Error('Không tìm thấy người dùng với số điện thoại này')
+      throw new ErrorWithStatus({
+        message: 'Không tìm thấy người dùng với số điện thoại này',
+        status: HTTP_STATUS_CODE.NOT_FOUND
+      })
     }
 
     const updatedUser = await this.earnPointsForUser({

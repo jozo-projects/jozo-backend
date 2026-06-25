@@ -680,8 +680,8 @@ export const saveBill = async (req: Request, res: Response) => {
 
     // Tạo response message dựa trên kết quả membership
     let message = 'Bill saved successfully'
-    if (result.membership.success) {
-      message += ' and membership points added'
+    if (result.membership.success && (result.membership.pointsEarned ?? 0) > 0) {
+      message += ` and ${result.membership.pointsEarned} membership point(s) added`
     } else if (result.membership.skipped) {
       message += ` (membership skipped: ${result.membership.reason})`
     } else if (result.membership.error) {

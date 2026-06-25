@@ -11,6 +11,7 @@ import databaseService from './database.service'
 import fnbOrderService from './fnbOrder.service'
 import redis from './redis.service'
 import { roomEventEmitter } from './room.service'
+import { roomMusicServices } from './roomMusic.service'
 
 type ClientBooking = {
   _id?: string | ObjectId
@@ -250,6 +251,15 @@ class RoomScheduleService {
     const giftEnabled = schedule.giftEnabled ?? false
     scheduleData.giftEnabled = !!giftEnabled
 
+    // Chốt roomType riêng cho schedule: ưu tiên giá trị FE truyền, nếu không thì snapshot từ phòng hiện tại.
+    // Nhờ vậy schedule giữ nguyên size dù phòng vật lý bị đổi roomType bởi schedule khác.
+    if (schedule.roomType) {
+      scheduleData.roomType = schedule.roomType
+    } else {
+      const room = await databaseService.rooms.findOne({ _id: scheduleData.roomId })
+      scheduleData.roomType = (room?.roomType as RoomType | undefined) ?? undefined
+    }
+
     const result = await databaseService.roomSchedule.insertOne(scheduleData)
 
     // Emit thông báo gift cho đúng roomIndex nếu giftEnabled
@@ -388,6 +398,9 @@ class RoomScheduleService {
       updateData.updatedBy = schedule.updatedBy
     }
 
+    if (schedule.roomType !== undefined) {
+      updateData.roomType = schedule.roomType
+    }
     if (schedule.note !== undefined) {
       updateData.note = schedule.note
     }
@@ -437,6 +450,18 @@ class RoomScheduleService {
         this.clearRoomCache(currentSchedule.roomId.toString()),
         this.clearRoomCache(schedule.newRoomId)
       ])
+
+      try {
+        const [fromRoom, toRoom] = await Promise.all([
+          databaseService.rooms.findOne({ _id: currentSchedule.roomId }),
+          databaseService.rooms.findOne({ _id: new ObjectId(schedule.newRoomId) })
+        ])
+        if (fromRoom?.roomId != null && toRoom?.roomId != null) {
+          await roomMusicServices.moveQueueBetweenRooms(String(fromRoom.roomId), String(toRoom.roomId))
+        }
+      } catch (error) {
+        console.error('Failed to move song queue when changing room:', error)
+      }
     }
 
     return result.modifiedCount
@@ -634,6 +659,9 @@ class RoomScheduleService {
           dateOfUse
         )
 
+        // Chốt roomType riêng cho schedule theo size khách đặt
+        newSchedule.roomType = roomType
+
         // Lưu trực tiếp vào database không qua hàm createSchedule
         const result = await databaseService.roomSchedule.insertOne(newSchedule)
         createdScheduleIds.push(result.insertedId)
@@ -778,6 +806,9 @@ class RoomScheduleService {
           undefined,
           dateOfUse
         )
+
+        // Chốt roomType riêng cho schedule theo size khách đặt
+        newSchedule.roomType = roomType
 
         // Lưu trực tiếp vào database không qua hàm createSchedule
         const result = await databaseService.roomSchedule.insertOne(newSchedule)

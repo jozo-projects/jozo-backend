@@ -55,8 +55,8 @@ export class MembershipConfig {
   constructor(config?: Partial<IMembershipConfig>) {
     const now = new Date()
     this._id = config?._id
-    this.currencyUnit = config?.currencyUnit ?? 100000 // 100k VND
-    this.pointPerCurrency = config?.pointPerCurrency ?? 10 // 10 điểm / 100k
+    this.currencyUnit = config?.currencyUnit ?? 10000 // 10k VND
+    this.pointPerCurrency = config?.pointPerCurrency ?? 1 // 1 điểm / 10k
     this.tierThresholds =
       config?.tierThresholds ??
       ({
