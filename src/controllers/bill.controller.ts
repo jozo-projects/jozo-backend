@@ -5,7 +5,7 @@ import { Request, Response } from 'express'
 import { ObjectId } from 'mongodb'
 import { UserRole } from '~/constants/enum'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
-import billService from '~/services/bill.service'
+import billService, { resolveBillRoomType } from '~/services/bill.service'
 import databaseService from '~/services/database.service'
 
 dayjs.extend(utc)
@@ -340,7 +340,7 @@ export const getBillById = async (req: Request, res: Response) => {
     const formattedBill = {
       ...bill,
       roomName: room?.roomName || 'Unknown Room',
-      roomType: room?.roomType || 'Unknown Type',
+      roomType: resolveBillRoomType(bill, schedule ?? undefined, room ?? undefined),
       customerName: schedule?.note || '',
       formattedStartTime: dayjs(bill.startTime).tz('Asia/Ho_Chi_Minh').format('DD/MM/YYYY HH:mm'),
       formattedEndTime: dayjs(bill.endTime).tz('Asia/Ho_Chi_Minh').format('DD/MM/YYYY HH:mm'),
@@ -436,7 +436,7 @@ export const getBillsByRoomId = async (req: Request, res: Response) => {
           scheduleId: bill.scheduleId instanceof ObjectId ? bill.scheduleId : new ObjectId(bill.scheduleId),
           roomId: bill.roomId instanceof ObjectId ? bill.roomId : new ObjectId(bill.roomId),
           roomName: room?.roomName || 'Unknown Room',
-          roomType: room?.roomType || 'Unknown Type',
+          roomType: resolveBillRoomType(bill, schedule ?? undefined, room ?? undefined),
           customerName: schedule?.note || '',
           startTime: bill.startTime,
           endTime: bill.endTime,
@@ -562,7 +562,7 @@ export const getAllBills = async (req: Request, res: Response) => {
           scheduleId: bill.scheduleId instanceof ObjectId ? bill.scheduleId : new ObjectId(bill.scheduleId),
           roomId: bill.roomId instanceof ObjectId ? bill.roomId : new ObjectId(bill.roomId),
           roomName: room?.roomName || 'Unknown Room',
-          roomType: room?.roomType || 'Unknown Type',
+          roomType: resolveBillRoomType(bill, schedule ?? undefined, room ?? undefined),
           customerName: schedule?.note || '',
           startTime: bill.startTime,
           endTime: bill.endTime,

@@ -7,7 +7,7 @@ import isSameOrBefore from 'dayjs/plugin/isSameOrBefore'
 import timezone from 'dayjs/plugin/timezone'
 import utc from 'dayjs/plugin/utc'
 import { ObjectId } from 'mongodb'
-import { DayType, RoomScheduleStatus } from '~/constants/enum'
+import { DayType, RoomScheduleStatus, RoomType } from '~/constants/enum'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { ErrorWithStatus } from '~/models/Error'
 import { IBill } from '~/models/schemas/Bill.schema'
@@ -184,6 +184,15 @@ class TextPrinter {
   getText(): string {
     return this.content.join('\n') + '\n'
   }
+}
+
+/** Loại phòng trên bill: ưu tiên snapshot trên bill → schedule → phòng vật lý (legacy). */
+export function resolveBillRoomType(
+  bill?: { roomType?: RoomType | string },
+  schedule?: { roomType?: RoomType | string },
+  room?: { roomType?: RoomType | string }
+): string {
+  return bill?.roomType ?? schedule?.roomType ?? room?.roomType ?? 'Unknown Type'
 }
 
 /** Express query/body đôi khi là string | string[]; chuỗi rỗng coi như không gửi — tránh rơi nhánh schedule.endTime khi admin đã truyền ISO. */
@@ -1770,6 +1779,12 @@ export class BillService {
         _id: new ObjectId(billData.scheduleId)
       })
 
+      const room = await databaseService.rooms.findOne({
+        _id: new ObjectId(billData.roomId)
+      })
+
+      const resolvedRoomType = billData.roomType ?? schedule?.roomType ?? room?.roomType
+
       // 4. Lấy phone_number từ bill hoặc schedule
       let customerPhone = billData.customerPhone
 
@@ -1788,6 +1803,7 @@ export class BillService {
         _id: billData._id ? new ObjectId(billData._id) : new ObjectId(),
         scheduleId: new ObjectId(billData.scheduleId),
         roomId: new ObjectId(billData.roomId),
+        roomType: resolvedRoomType,
         createdAt: billData.createdAt ? new Date(billData.createdAt) : now,
         createdBy: billData.createdBy || schedule?.createdBy,
         completedBy: billData.completedBy || billData.fnbOrder?.completedBy,
