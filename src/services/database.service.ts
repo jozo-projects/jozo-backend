@@ -31,7 +31,7 @@ import { IGame } from '~/models/schemas/Game.schema'
 import { EmployeeSalarySnapshot } from '~/models/schemas/EmployeeSalarySnapshot.schema'
 import { EmployeeSalaryConfig } from '~/models/schemas/EmployeeSalaryConfig.schema'
 import { EmployeeSalarySpecialDay } from '~/models/schemas/EmployeeSalarySpecialDay.schema'
-import { IFnbShiftCount } from '~/models/schemas/FnbShiftCount.schema'
+import { IFnbShiftCount, IFnbShiftCountDayItemMeta } from '~/models/schemas/FnbShiftCount.schema'
 import { IFnbSalesMovement } from '~/models/schemas/FnbSalesMovement.schema'
 dotenv.config()
 dotenv.config({ path: '.env.local', override: true })
@@ -80,7 +80,19 @@ class DatabaseService {
       await this.db.command({ ping: 1 })
       console.log(`[DB]   Connected successfully!`)
       await this.db.collection('employee_salary_special_days').createIndex({ businessDate: 1 }, { unique: true })
-      await this.db.collection('fnb_shift_counts').createIndex({ staffId: 1, businessDate: 1 }, { unique: true })
+      await this.db
+        .collection('fnb_shift_counts')
+        .dropIndex('staffId_1_businessDate_1')
+        .catch(() => undefined)
+      await this.db
+        .collection('fnb_shift_counts')
+        .createIndex(
+          { businessDate: 1, shiftNo: 1 },
+          { unique: true, partialFilterExpression: { shiftNo: { $exists: true } } }
+        )
+      await this.db
+        .collection('fnb_shift_count_day_items')
+        .createIndex({ businessDate: 1, itemId: 1 }, { unique: true })
       await this.db.collection('fnb_sales_movements').createIndex({ itemId: 1, createdAt: 1 })
       await this.db.collection('fnb_sales_movements').createIndex({ createdAt: 1 })
       await this.db.collection('fnb_sales_movements').createIndex({ createdBy: 1, createdAt: 1 })
@@ -223,6 +235,10 @@ class DatabaseService {
 
   get fnbShiftCounts(): Collection<IFnbShiftCount> {
     return this.db.collection('fnb_shift_counts')
+  }
+
+  get fnbShiftCountDayItems(): Collection<IFnbShiftCountDayItemMeta> {
+    return this.db.collection('fnb_shift_count_day_items')
   }
 
   get fnbSalesMovements(): Collection<IFnbSalesMovement> {

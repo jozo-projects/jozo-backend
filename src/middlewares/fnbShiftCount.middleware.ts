@@ -1,10 +1,6 @@
-import { NextFunction, Request, Response } from 'express'
+import { Request } from 'express'
 import { checkSchema } from 'express-validator'
-import { UserRole } from '~/constants/enum'
-import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { FNB_SHIFT_COUNT_MESSAGES } from '~/constants/messages'
-import { ErrorWithStatus } from '~/models/Error'
-import { usersServices } from '~/services/users.services'
 import { validate } from '~/utils/validation'
 import dayjs from 'dayjs'
 import customParseFormat from 'dayjs/plugin/customParseFormat'
@@ -40,7 +36,54 @@ export const dateQueryValidator = validate(
   )
 )
 
+export const shiftNoParamValidator = validate(
+  checkSchema({
+    shiftNo: {
+      in: ['params'],
+      isInt: { options: { min: 1, max: 3 } },
+      toInt: true,
+      errorMessage: FNB_SHIFT_COUNT_MESSAGES.INVALID_SHIFT_NO
+    }
+  })
+)
+
 export const upsertShiftCountValidator = validate(
+  checkSchema({
+    shiftNo: {
+      in: ['params'],
+      isInt: { options: { min: 1, max: 3 } },
+      toInt: true,
+      errorMessage: FNB_SHIFT_COUNT_MESSAGES.INVALID_SHIFT_NO
+    },
+    items: {
+      isArray: { options: { min: 1 } },
+      errorMessage: FNB_SHIFT_COUNT_MESSAGES.ITEMS_REQUIRED
+    },
+    'items.*.itemId': {
+      isString: true,
+      notEmpty: true,
+      errorMessage: FNB_SHIFT_COUNT_MESSAGES.INVALID_ITEM_ID
+    },
+    'items.*.openingCount': {
+      optional: true,
+      isInt: { options: { min: 0 } },
+      toInt: true,
+      errorMessage: FNB_SHIFT_COUNT_MESSAGES.INVALID_OPENING_COUNT
+    },
+    'items.*.closingCount': {
+      optional: true,
+      isInt: { options: { min: 0 } },
+      toInt: true,
+      errorMessage: FNB_SHIFT_COUNT_MESSAGES.INVALID_CLOSING_COUNT
+    },
+    note: {
+      optional: true,
+      isString: true
+    }
+  })
+)
+
+export const updateShiftCountDayItemsValidator = validate(
   checkSchema({
     items: {
       isArray: { options: { min: 1 } },
@@ -51,7 +94,13 @@ export const upsertShiftCountValidator = validate(
       notEmpty: true,
       errorMessage: FNB_SHIFT_COUNT_MESSAGES.INVALID_ITEM_ID
     },
-    note: {
+    'items.*.totalStockIn': {
+      optional: true,
+      isInt: { options: { min: 0 } },
+      toInt: true,
+      errorMessage: FNB_SHIFT_COUNT_MESSAGES.INVALID_STOCK_IN
+    },
+    'items.*.note': {
       optional: true,
       isString: true
     }
@@ -87,11 +136,6 @@ export const listShiftCountsValidator = validate(
           }
         }
       },
-      staffId: {
-        in: ['query'],
-        optional: true,
-        isString: true
-      },
       page: {
         in: ['query'],
         optional: true,
@@ -113,33 +157,4 @@ export const resolveShiftCountDate = (req: Request): string => {
   const date = typeof req.query.date === 'string' ? req.query.date : undefined
   if (date) return date
   return dayjs().tz(VIETNAM_TZ).format('YYYY-MM-DD')
-}
-
-export const ensureAdminStaffQuery = async (req: Request, _res: Response, next: NextFunction) => {
-  const staffId = typeof req.query.staffId === 'string' ? req.query.staffId : undefined
-  if (!staffId) {
-    return next()
-  }
-
-  const requesterId = req.decoded_authorization?.user_id
-  if (!requesterId) {
-    return next(
-      new ErrorWithStatus({
-        message: FNB_SHIFT_COUNT_MESSAGES.INVALID_STAFF_ID,
-        status: HTTP_STATUS_CODE.UNAUTHORIZED
-      })
-    )
-  }
-
-  const requester = await usersServices.getUserById(requesterId)
-  if (requester?.role !== UserRole.Admin) {
-    return next(
-      new ErrorWithStatus({
-        message: FNB_SHIFT_COUNT_MESSAGES.INVALID_STAFF_ID,
-        status: HTTP_STATUS_CODE.FORBIDDEN
-      })
-    )
-  }
-
-  next()
 }

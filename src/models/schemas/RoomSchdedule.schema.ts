@@ -56,7 +56,6 @@ export class RoomSchedule {
   note?: string
   source?: BookingSource
   giftEnabled?: boolean
-  applyFreeHourPromo?: boolean
 
   // Loại phòng (size) được chốt riêng cho schedule này tại thời điểm tạo.
   // Dùng để tính tiền độc lập, không bị ảnh hưởng khi phòng vật lý đổi roomType về sau.
@@ -101,7 +100,6 @@ export class RoomSchedule {
     updatedBy?: string,
     note?: string,
     source?: BookingSource,
-    applyFreeHourPromo?: boolean,
     bookingCode?: string,
     customerName?: string,
     customerPhone?: string,
@@ -126,7 +124,6 @@ export class RoomSchedule {
     this.updatedBy = updatedBy || 'system'
     this.note = note
     this.source = source || BookingSource.Staff
-    this.applyFreeHourPromo = applyFreeHourPromo || false
 
     // Mã booking 4 chữ số
     this.bookingCode = bookingCode

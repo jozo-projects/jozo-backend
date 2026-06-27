@@ -517,8 +517,7 @@ export class BillService {
     actualEndTime?: string | string[],
     paymentMethod?: string,
     promotionId?: string,
-    actualStartTime?: string | string[],
-    applyFreeHourPromotion?: boolean
+    actualStartTime?: string | string[]
   ): Promise<IBill> {
     // Validate ObjectId format for scheduleId
     if (!ObjectId.isValid(scheduleId)) {
@@ -582,20 +581,6 @@ export class BillService {
     // cho các schedule cũ chưa có field này.
     const effectiveRoomType = schedule.roomType ?? room?.roomType
     const dayType = await this.determineDayType(dayjs.utc(schedule.startTime).tz('Asia/Ho_Chi_Minh').toDate())
-
-    // Tính tổng snack và drinks để kiểm tra điều kiện áp dụng freeHourPromotion
-    // Chỉ cần tổng snacks + drinks >= 35000 là đủ điều kiện
-    let totalSnacksAndDrinks = 0
-    if (order && order.order) {
-      const fnbNorm = normalizeFnbOrder(order.order)
-      for (const line of fnbNorm.lines) {
-        const menuItem = await this.findMenuItemById(line.itemId, menu)
-        if (menuItem) {
-          const price = this.parsePrice(menuItem.price)
-          totalSnacksAndDrinks += line.quantity * price
-        }
-      }
-    }
 
     // Parse actualStartTime (bắt buộc — HH:mm neo theo ngày của schedule.startTime, hoặc ISO datetime)
     let validatedStartTime: Date
@@ -667,17 +652,6 @@ export class BillService {
     if (sessionDurationMinutes === 0) {
       validatedEndTime = startTime
     }
-
-    // Kiểm tra điều kiện áp dụng freeHourPromotion:
-    // 1. FE phải gửi flag applyFreeHourPromotion = true
-    // 2. Tổng snacks + drinks >= 35000
-    // 3. Thời gian sử dụng >= 120 phút
-    const eligibleForFreeHour =
-      applyFreeHourPromotion === true && totalSnacksAndDrinks >= 35000 && sessionDurationMinutes >= 120
-
-    let freeMinutesLeft = eligibleForFreeHour ? 60 : 0
-    let freeMinutesApplied = 0
-    let freeAmountTotal = 0
 
     // Lấy thông tin bảng giá cho loại ngày (weekday/weekend)
     const priceDoc = await databaseService.price.findOne({ day_type: dayType })
@@ -893,7 +867,7 @@ export class BillService {
     // Không tính line phòng khi chênh phút session = 0 (tránh overlap khung giá sinh sai ~1 phút / 0.02 giờ)
     const roomSlotsToCharge = sessionDurationMinutes > 0 ? applicableTimeSlots : []
 
-    // Tính toán phí dịch vụ cho từng khung giờ riêng biệt (có thể áp dụng free 60 phút đầu trong khung 10-19)
+    // Tính toán phí dịch vụ cho từng khung giờ riêng biệt
     for (const timeSlotInfo of roomSlotsToCharge) {
       const { slot, overlapStart, overlapEnd } = timeSlotInfo
 
@@ -906,25 +880,6 @@ export class BillService {
       const overlapEndTrunc = localOverlapEnd.startOf('minute')
       const billableMinutes = Math.max(0, overlapEndTrunc.diff(overlapStartTrunc, 'minute'))
       if (billableMinutes <= 0) continue
-
-      let slotFreeMinutes = 0
-      if (eligibleForFreeHour && freeMinutesLeft > 0) {
-        const promoStart = localOverlapStart.clone().hour(10).minute(0).second(0).millisecond(0)
-        const promoEnd = localOverlapStart.clone().hour(19).minute(0).second(0).millisecond(0)
-        const promoOverlapStart = promoStart.isAfter(localOverlapStart) ? promoStart : localOverlapStart
-        const promoOverlapEnd = promoEnd.isBefore(localOverlapEnd) ? promoEnd : localOverlapEnd
-
-        if (promoOverlapEnd.isAfter(promoOverlapStart)) {
-          const promoStartTrunc = promoOverlapStart.tz('Asia/Ho_Chi_Minh').startOf('minute')
-          const promoEndTrunc = promoOverlapEnd.tz('Asia/Ho_Chi_Minh').startOf('minute')
-          const promoMinutes = Math.max(0, promoEndTrunc.diff(promoStartTrunc, 'minute'))
-          slotFreeMinutes = Math.min(freeMinutesLeft, promoMinutes)
-          freeMinutesLeft -= slotFreeMinutes
-          freeMinutesApplied += slotFreeMinutes
-          const slotFreeAmount = (slotFreeMinutes / 60) * priceEntry.price
-          freeAmountTotal += slotFreeAmount
-        }
-      }
 
       const overlapHoursRounded = Math.round((billableMinutes / 60) * 100) / 100
 
@@ -1062,11 +1017,7 @@ export class BillService {
       discountAmount = (subtotal * activePromotion.discountPercentage) / 100
     }
 
-    // Trừ khuyến mãi giờ đầu (freeAmountTotal) ở mức tổng, không bỏ record gốc
-    const totalAmount = Math.max(
-      Math.floor((subtotal - discountAmount - freeAmountTotal - giftDiscountAmount) / 1000) * 1000,
-      0
-    )
+    const totalAmount = Math.max(Math.floor((subtotal - discountAmount - giftDiscountAmount) / 1000) * 1000, 0)
 
     const bill: IBill = {
       scheduleId: schedule._id,
@@ -1103,13 +1054,6 @@ export class BillService {
             items: scheduleGift.items
           }
         : undefined,
-      freeHourPromotion:
-        freeMinutesApplied > 0
-          ? {
-              freeMinutesApplied,
-              freeAmount: freeAmountTotal
-            }
-          : undefined,
       actualEndTime: rawActualEndTime ? validatedEndTime : undefined,
       actualStartTime: rawActualStartTime ? startTime : undefined,
       // Thêm thông tin FNB order vào bill
@@ -1601,23 +1545,6 @@ export class BillService {
         ])
       }
     })
-
-    // Thông tin giảm giá free giờ đầu trong khung 10-19 (đã trừ vào tổng) - in xuống dòng
-    if (bill.freeHourPromotion && bill.freeHourPromotion.freeMinutesApplied > 0) {
-      let promotionTimeText = 'KM gio dau tien'
-      const promoStartSource = bill.actualStartTime || bill.startTime
-      if (promoStartSource) {
-        const startTime = dayjs(promoStartSource).tz('Asia/Ho_Chi_Minh')
-        const endTime = startTime.add(60, 'minute')
-        promotionTimeText = `KM (${startTime.format('HH:mm')} - ${endTime.format('HH:mm')})`
-      }
-
-      printer.text('------------------------------------------------')
-      // In tên khuyến mãi trên dòng đầu
-      printer.align('lt').text(promotionTimeText)
-      // In số tiền giảm trên dòng thứ hai, căn phải
-      printer.align('rt').text(`-${bill.freeHourPromotion.freeAmount.toLocaleString('vi-VN')}`)
-    }
 
     // Hiển thị discount từ gift (discount_percentage hoặc discount_amount) - in thẳng hàng
     if (

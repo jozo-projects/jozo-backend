@@ -41,10 +41,6 @@ export interface IBill {
     discountAmount?: number
     items?: GiftBundleItem[]
   }
-  freeHourPromotion?: {
-    freeMinutesApplied: number
-    freeAmount: number
-  }
   actualEndTime?: Date
   actualStartTime?: Date
   invoiceCode?: string // Mã hóa đơn với format #DDMMHHMM
@@ -93,10 +89,6 @@ export class Bill {
     discountPercentage?: number
     discountAmount?: number
     items?: GiftBundleItem[]
-  }
-  freeHourPromotion?: {
-    freeMinutesApplied: number
-    freeAmount: number
   }
   actualEndTime!: Date
   invoiceCode?: string // Mã hóa đơn với format #DDMMHHMM

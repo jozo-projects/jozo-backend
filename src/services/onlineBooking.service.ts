@@ -334,7 +334,6 @@ class OnlineBookingService {
         'online_customer',
         mergedNote,
         BookingSource.Customer,
-        true, // Đã fix: truyền 'true' để đáp ứng kiểu boolean (tham số isOnlineBooking)
         bookingCode, // Mã 4 chữ số
         requestWithType.customerName,
         requestWithType.customerPhone,

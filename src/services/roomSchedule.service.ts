@@ -233,7 +233,6 @@ class RoomScheduleService {
       schedule.updatedBy || 'system',
       schedule.note,
       schedule.source || BookingSource.Staff, // Sử dụng source được cung cấp hoặc mặc định là Staff
-      schedule.applyFreeHourPromo,
       bookingCode,
       schedule.customerName ?? undefined,
       schedule.customerPhone ?? undefined,
@@ -388,9 +387,6 @@ class RoomScheduleService {
     }
     if (schedule.status) {
       updateData.status = schedule.status
-    }
-    if (schedule.applyFreeHourPromo !== undefined) {
-      updateData.applyFreeHourPromo = schedule.applyFreeHourPromo
     }
     // Có thể cập nhật thêm thông tin audit như updatedBy nếu cần
     updateData.updatedAt = updatedAt
@@ -645,7 +641,6 @@ class RoomScheduleService {
           'web_customer', // updatedBy
           `Booking by ${booking.customer_name} (${booking.customer_phone})`, // note
           BookingSource.Customer, // đánh dấu nguồn đặt phòng là từ khách hàng
-          false, // applyFreeHourPromo default off for booking from customer
           bookingCode,
           undefined,
           undefined,
@@ -793,7 +788,6 @@ class RoomScheduleService {
           'web_customer', // updatedBy
           `Booking by ${booking.customer_name} (${booking.customer_phone})`, // note
           BookingSource.Customer, // đánh dấu nguồn đặt phòng là từ khách hàng
-          false, // applyFreeHourPromo default off for auto booking
           bookingCode,
           undefined,
           undefined,
