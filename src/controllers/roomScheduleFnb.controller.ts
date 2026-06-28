@@ -157,6 +157,13 @@ export const submitClientCart = async (req: Request, res: Response, next: NextFu
       }
     }
 
+    await fnbSalesMovementService.logDeltas(
+      inventoryUpdates.map(({ itemId, delta }) => ({ itemId, delta })),
+      'karaoke',
+      currentSchedule._id.toString(),
+      'client-app'
+    )
+
     const result = await fnbOrderService.upsertFnbOrder(
       currentSchedule._id.toString(),
       mergedOrder,
@@ -298,8 +305,6 @@ export const addClientFnbOrderItems = async (req: Request, res: Response, next: 
         status: HTTP_STATUS_CODE.NOT_FOUND
       })
     }
-
-    const currentOrder = await fnbOrderService.getFnbOrdersByRoomSchedule(currentSchedule._id.toString())
 
     const reqNorm = normalizeFnbOrder(order)
     const allItems = aggregateQuantitiesByItemId(reqNorm)
@@ -1028,12 +1033,7 @@ export const upsertClientFnbOrderItem = async (req: Request, res: Response, next
     }
 
     if (delta !== 0) {
-      await fnbSalesMovementService.logDeltas(
-        [{ itemId, delta }],
-        'karaoke',
-        currentSchedule._id.toString(),
-        createdBy
-      )
+      await fnbSalesMovementService.logDeltas([{ itemId, delta }], 'karaoke', currentSchedule._id.toString(), createdBy)
     }
 
     const nextOrder = setPlainLineQuantity(curNorm, itemId, cat, quantity)
