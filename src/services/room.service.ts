@@ -9,12 +9,55 @@ import redis from './redis.service'
 import fnbSalesMovementService from './fnbSalesMovement.service'
 import { roomMusicEventEmitter } from './roomMusic.service'
 import { EventEmitter } from 'events'
+import { RoomSchedule } from '~/models/schemas/RoomSchdedule.schema'
 
 export const roomEventEmitter = new EventEmitter()
+
+export type ScheduleChangeAction = 'created' | 'updated' | 'cancelled' | 'finished'
 
 // Add method to emit booking notifications
 export const emitBookingNotification = (roomId: string, bookingData: any) => {
   roomEventEmitter.emit('new_booking', { roomId, booking: bookingData })
+}
+
+export function serializeScheduleForSocket(schedule: RoomSchedule) {
+  return {
+    _id: schedule._id!.toString(),
+    roomId: schedule.roomId.toString(),
+    startTime: schedule.startTime,
+    endTime: schedule.endTime ?? null,
+    status: schedule.status,
+    createdAt: schedule.createdAt,
+    updatedAt: schedule.updatedAt,
+    createdBy: schedule.createdBy,
+    updatedBy: schedule.updatedBy,
+    note: schedule.note,
+    source: schedule.source,
+    giftEnabled: schedule.giftEnabled,
+    roomType: schedule.roomType,
+    bookingCode: schedule.bookingCode,
+    dateOfUse: schedule.dateOfUse,
+    customerName: schedule.customerName,
+    customerPhone: schedule.customerPhone,
+    customerEmail: schedule.customerEmail
+  }
+}
+
+export async function resolveRoomIndex(roomObjectId: ObjectId): Promise<string | undefined> {
+  const room = await databaseService.rooms.findOne({ _id: roomObjectId })
+  return room?.roomId != null ? String(room.roomId) : undefined
+}
+
+export const emitScheduleChanged = (
+  action: ScheduleChangeAction,
+  schedule: RoomSchedule,
+  roomIndex?: string
+) => {
+  roomEventEmitter.emit('schedule_changed', {
+    action,
+    schedule: serializeScheduleForSocket(schedule),
+    roomIndex
+  })
 }
 
 class RoomServices {

@@ -5,7 +5,7 @@ import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { FNB_MESSAGES } from '~/constants/messages'
 import { ErrorWithStatus } from '~/models/Error'
 import databaseService from '~/services/database.service'
-import fnbMenuItemService from '~/services/fnbMenuItem.service'
+import fnbMenuItemService, { isMenuItemActive } from '~/services/fnbMenuItem.service'
 import { assertValidFnbOrderPayload } from '~/utils/validateFnbOrderPayload'
 import { validate } from '~/utils/validation'
 
@@ -349,6 +349,12 @@ export const checkMenuItemExists = async (req: Request, res: Response, next: Nex
         throw new ErrorWithStatus({
           message: `Item ${itemId} không tồn tại trong menu`,
           status: HTTP_STATUS_CODE.NOT_FOUND
+        })
+      }
+      if (!isMenuItemActive(menuItem)) {
+        throw new ErrorWithStatus({
+          message: `Item ${menuItem.name} đã ngừng phục vụ`,
+          status: HTTP_STATUS_CODE.BAD_REQUEST
         })
       }
     }

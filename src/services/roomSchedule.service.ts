@@ -10,7 +10,7 @@ import { generateUniqueBookingCode, parseDate, buildBookingCodeDuplicateFilter, 
 import databaseService from './database.service'
 import fnbOrderService from './fnbOrder.service'
 import redis from './redis.service'
-import { roomEventEmitter } from './room.service'
+import { emitScheduleChanged, resolveRoomIndex, roomEventEmitter, type ScheduleChangeAction } from './room.service'
 import { roomMusicServices } from './roomMusic.service'
 
 type ClientBooking = {
@@ -260,18 +260,19 @@ class RoomScheduleService {
     }
 
     const result = await databaseService.roomSchedule.insertOne(scheduleData)
+    scheduleData._id = result.insertedId
 
-    // Emit thông báo gift cho đúng roomIndex nếu giftEnabled
-    if (scheduleData.giftEnabled) {
-      const room = await databaseService.rooms.findOne({ _id: scheduleData.roomId })
-      if (room?.roomId !== undefined && room?.roomId !== null) {
-        const roomIndex = String(room.roomId)
-        roomEventEmitter.emit('gift_enabled', {
-          roomId: roomIndex,
-          scheduleId: result.insertedId.toString()
-        })
-      }
+    const room = await databaseService.rooms.findOne({ _id: scheduleData.roomId })
+    const roomIndex = room?.roomId != null ? String(room.roomId) : undefined
+
+    if (scheduleData.giftEnabled && roomIndex) {
+      roomEventEmitter.emit('gift_enabled', {
+        roomId: roomIndex,
+        scheduleId: result.insertedId.toString()
+      })
     }
+
+    emitScheduleChanged('created', scheduleData, roomIndex)
 
     // Tự động tạo FNB order trống cho room schedule từ admin/staff
     try {
@@ -460,6 +461,16 @@ class RoomScheduleService {
       }
     }
 
+    if (result.modifiedCount > 0) {
+      const updatedSchedule = await databaseService.roomSchedule.findOne({ _id: new ObjectId(id) })
+      if (updatedSchedule) {
+        let action: ScheduleChangeAction = 'updated'
+        if (updatedSchedule.status === RoomScheduleStatus.Cancelled) action = 'cancelled'
+        else if (updatedSchedule.status === RoomScheduleStatus.Finished) action = 'finished'
+        await this.notifyScheduleChanged(action, updatedSchedule)
+      }
+    }
+
     return result.modifiedCount
   }
 
@@ -490,6 +501,9 @@ class RoomScheduleService {
       updatedBy: updatedBy || 'system'
     }
     const result = await databaseService.roomSchedule.updateOne({ _id: new ObjectId(id) }, { $set: updateData })
+    if (result.modifiedCount > 0) {
+      await this.notifyScheduleChanged('cancelled', { ...currentEvent, ...updateData })
+    }
     return result.modifiedCount
   }
 
@@ -511,14 +525,18 @@ class RoomScheduleService {
         })
         .toArray()
 
-      // Với mỗi booking vượt hạn, cập nhật trạng thái thành "cancelled"
+      const updatedAt = new Date()
       for (const booking of lateBookings) {
         await databaseService.roomSchedule.updateOne(
           { _id: booking._id },
-          { $set: { status: RoomScheduleStatus.Cancelled, updatedAt: new Date() } }
+          { $set: { status: RoomScheduleStatus.Cancelled, updatedAt } }
         )
         console.log(`Booking ${booking._id} cancelled automatically.`)
-        // (Optional) Emit event hoặc thông báo đến client nếu cần
+        await this.notifyScheduleChanged('cancelled', {
+          ...booking,
+          status: RoomScheduleStatus.Cancelled,
+          updatedAt
+        })
       }
     } catch (error) {
       console.error('Error in autoCancelLateBookings:', error)
@@ -566,13 +584,17 @@ class RoomScheduleService {
         { $set: { status: RoomScheduleStatus.Finished, updatedAt: new Date() } }
       )
 
-      // Đối với mỗi lịch phòng đã cập nhật, xóa tất cả cache liên quan
+      const updatedAt = new Date()
       for (const schedule of schedulesToFinish) {
         await this.clearRoomCache(schedule.roomId.toString())
+        await this.notifyScheduleChanged('finished', {
+          ...schedule,
+          status: RoomScheduleStatus.Finished,
+          updatedAt
+        })
       }
 
       console.log(`${result.modifiedCount} events finished automatically.`)
-      // (Optional) Emit event hoặc gửi thông báo tới client nếu cần
     } catch (error) {
       console.error('Error in autoFinishAllScheduleInADay:', error)
     }
@@ -659,6 +681,7 @@ class RoomScheduleService {
 
         // Lưu trực tiếp vào database không qua hàm createSchedule
         const result = await databaseService.roomSchedule.insertOne(newSchedule)
+        newSchedule._id = result.insertedId
         createdScheduleIds.push(result.insertedId)
 
         // Tự động tạo FNB order trống cho mỗi room schedule từ booking
@@ -669,6 +692,12 @@ class RoomScheduleService {
           console.error('Lỗi khi tạo FNB order tự động:', fnbOrderError)
           // Không fail toàn bộ request nếu chỉ lỗi tạo FNB order
         }
+
+        await this.notifyScheduleChanged(
+          'created',
+          newSchedule,
+          room.roomId != null ? String(room.roomId) : undefined
+        )
       }
 
       // Cập nhật trạng thái booking
@@ -806,6 +835,7 @@ class RoomScheduleService {
 
         // Lưu trực tiếp vào database không qua hàm createSchedule
         const result = await databaseService.roomSchedule.insertOne(newSchedule)
+        newSchedule._id = result.insertedId
         createdScheduleIds.push(result.insertedId)
 
         // Tự động tạo FNB order trống cho mỗi room schedule từ auto booking
@@ -816,6 +846,12 @@ class RoomScheduleService {
           console.error('Lỗi khi tạo FNB order tự động:', fnbOrderError)
           // Không fail toàn bộ request nếu chỉ lỗi tạo FNB order
         }
+
+        await this.notifyScheduleChanged(
+          'created',
+          newSchedule,
+          room.roomId != null ? String(room.roomId) : undefined
+        )
       }
 
       // Cập nhật trạng thái booking thành confirmed ngay
@@ -841,6 +877,15 @@ class RoomScheduleService {
   /** Khớp field roomType trên physical room không phân biệt hoa thường (vd. dorm vs Dorm) */
   private physicalRoomQueryByEnum(roomType: RoomType) {
     return { roomType: { $regex: new RegExp(`^${roomType}$`, 'i') } }
+  }
+
+  private async notifyScheduleChanged(
+    action: ScheduleChangeAction,
+    schedule: RoomSchedule,
+    roomIndex?: string
+  ) {
+    const resolvedRoomIndex = roomIndex ?? (await resolveRoomIndex(schedule.roomId))
+    emitScheduleChanged(action, schedule, resolvedRoomIndex)
   }
 }
 

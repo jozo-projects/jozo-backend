@@ -4,6 +4,7 @@ import {
   createMenuItem,
   getMenuItemById,
   getAllMenuItems,
+  getAllMenuItemsManage,
   updateMenuItem,
   deleteMenuItem,
   updateVariantInventory,
@@ -17,6 +18,7 @@ const fnbMenuItemRouter = Router()
 // Routes
 fnbMenuItemRouter.post('/', protect([UserRole.Admin]), upload.any(), createMenuItem)
 fnbMenuItemRouter.post('/cleanup', protect([UserRole.Admin]), cleanupMenuItems)
+fnbMenuItemRouter.get('/manage', protect([UserRole.Admin]), getAllMenuItemsManage)
 fnbMenuItemRouter.get('/', getAllMenuItems)
 fnbMenuItemRouter.get('/:id', protect([UserRole.Admin]), getMenuItemById)
 

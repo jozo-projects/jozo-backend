@@ -2,11 +2,22 @@ import { FnBMenuItem } from '~/models/schemas/FnBMenuItem.schema'
 import databaseService from './database.service'
 import { ObjectId, Collection } from 'mongodb'
 import { FnBCategory } from '~/constants/enum'
+import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
+import { FNB_MENU_MESSAGES } from '~/constants/messages'
+import { ErrorWithStatus } from '~/models/Error'
+import type { FNBOrder } from '~/models/schemas/FNB.schema'
+import { aggregateQuantitiesByItemId } from '~/utils/fnbOrderLines'
 
 const COLLECTION_NAME = 'fnb_menu_item'
 
 const ROOT_PARENT_ID_FILTER = {
   $or: [{ parentId: null }, { parentId: '' }]
+}
+
+export const ACTIVE_MENU_ITEM_FILTER = { isActive: { $ne: false } }
+
+export function isMenuItemActive(item: FnBMenuItem): boolean {
+  return item.isActive !== false
 }
 
 const EXTRA_MENU_ITEM_FIELDS = ['quantity', 'existingImage'] as const
@@ -50,8 +61,16 @@ class FnBMenuItemService {
     return await this.collection.find({}).toArray()
   }
 
+  async getActiveMenuItems(): Promise<FnBMenuItem[]> {
+    return await this.collection.find(ACTIVE_MENU_ITEM_FILTER).toArray()
+  }
+
   async getRootMenuItems(): Promise<FnBMenuItem[]> {
     return await this.collection.find(ROOT_PARENT_ID_FILTER).toArray()
+  }
+
+  async getActiveRootMenuItems(): Promise<FnBMenuItem[]> {
+    return await this.collection.find({ ...ROOT_PARENT_ID_FILTER, ...ACTIVE_MENU_ITEM_FILTER }).toArray()
   }
 
   async updateMenuItem(id: string, data: Partial<FnBMenuItem>): Promise<FnBMenuItem | null> {
@@ -81,6 +100,13 @@ class FnBMenuItemService {
     return variants
   }
 
+  async getActiveVariantsByParentId(parentId: string): Promise<FnBMenuItem[]> {
+    const parent = await this.getMenuItemById(parentId)
+    if (!parent || !isMenuItemActive(parent)) return []
+
+    return await this.collection.find({ parentId, ...ACTIVE_MENU_ITEM_FILTER }).toArray()
+  }
+
   async getVariantByNameAndParentId(name: string, parentId: string): Promise<FnBMenuItem | null> {
     const variant = await this.collection.findOne({ name: name, parentId: parentId })
     return variant || null
@@ -88,6 +114,54 @@ class FnBMenuItemService {
 
   async getMenuItemsByCategory(category: FnBCategory): Promise<FnBMenuItem[]> {
     return await this.collection.find({ category, ...ROOT_PARENT_ID_FILTER }).toArray()
+  }
+
+  async getActiveMenuItemsByCategory(category: FnBCategory): Promise<FnBMenuItem[]> {
+    return await this.collection
+      .find({ category, ...ROOT_PARENT_ID_FILTER, ...ACTIVE_MENU_ITEM_FILTER })
+      .toArray()
+  }
+
+  async isMenuItemEffectivelyActive(item: FnBMenuItem): Promise<boolean> {
+    if (!isMenuItemActive(item)) return false
+    if (!item.parentId) return true
+    const parent = await this.getMenuItemById(item.parentId)
+    return Boolean(parent && isMenuItemActive(parent))
+  }
+
+  async resolveMenuItemDisplayName(item: FnBMenuItem): Promise<string> {
+    if (!item.parentId) return item.name
+    const parent = await this.getMenuItemById(item.parentId)
+    return parent ? `${parent.name} - ${item.name}` : item.name
+  }
+
+  async assertMenuItemIsOrderable(itemId: string): Promise<void> {
+    const menuItem = await this.getMenuItemById(itemId)
+    if (!menuItem) {
+      const legacy = await databaseService.fnbMenu.findOne({ _id: new ObjectId(itemId) })
+      if (legacy) return
+      return
+    }
+
+    if (!(await this.isMenuItemEffectivelyActive(menuItem))) {
+      const name = await this.resolveMenuItemDisplayName(menuItem)
+      throw new ErrorWithStatus({
+        message: FNB_MENU_MESSAGES.MENU_ITEM_INACTIVE.replace('{name}', name),
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
+    }
+  }
+
+  async assertActiveMenuItemsForOrderDelta(before: FNBOrder, after: FNBOrder): Promise<void> {
+    const beforeQty = aggregateQuantitiesByItemId(before)
+    const afterQty = aggregateQuantitiesByItemId(after)
+
+    for (const [itemId, newQuantity] of Object.entries(afterQty)) {
+      const oldQuantity = beforeQty[itemId] ?? 0
+      if (newQuantity > oldQuantity) {
+        await this.assertMenuItemIsOrderable(itemId)
+      }
+    }
   }
 
   async cleanupMenuItems(dryRun = true): Promise<MenuItemCleanupResult> {

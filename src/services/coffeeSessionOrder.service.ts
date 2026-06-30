@@ -324,6 +324,8 @@ class CoffeeSessionOrderService {
     nextOrder: FNBOrder,
     context?: { coffeeSessionId: string; createdBy?: string; orderRef?: string }
   ) {
+    await fnbMenuItemService.assertActiveMenuItemsForOrderDelta(currentOrder, nextOrder)
+
     const currentItems = aggregateQuantitiesByItemId(currentOrder)
     const nextItems = aggregateQuantitiesByItemId(nextOrder)
     const itemIds = new Set([...Object.keys(currentItems), ...Object.keys(nextItems)])

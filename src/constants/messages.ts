@@ -156,7 +156,8 @@ export const FNB_MENU_MESSAGES = {
   DELETE_FNB_MENU_SUCCESS: 'Delete FNB menu success',
   GET_FNB_MENUS_SUCCESS: 'Get FNB menus success',
   FNB_MENU_NOT_FOUND: 'FNB menu not found',
-  FNB_MENU_EXISTS: 'FNB menu already exists'
+  FNB_MENU_EXISTS: 'FNB menu already exists',
+  MENU_ITEM_INACTIVE: 'Món "{name}" đã ngừng phục vụ'
 }
 
 export const RATE_LIMIT_MESSAGES = {

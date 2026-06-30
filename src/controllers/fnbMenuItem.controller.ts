@@ -37,6 +37,36 @@ function applyCustomizationConfig(target: Partial<FnBMenuItem>, source: Record<s
   if (overrides !== undefined) target.customizationOverrides = overrides
 }
 
+function parseIsActive(value: unknown): boolean | undefined {
+  if (typeof value === 'boolean') return value
+  if (typeof value !== 'string') return undefined
+  const normalized = value.toLowerCase()
+  if (normalized === 'true' || normalized === '1') return true
+  if (normalized === 'false' || normalized === '0') return false
+  return undefined
+}
+
+async function buildMenuItemsListResponse(
+  fetchItems: () => Promise<FnBMenuItem[]>,
+  fetchVariants: (parentId: string) => Promise<FnBMenuItem[]>
+) {
+  const result = await fetchItems()
+  const parsedResult = result.map((item) => {
+    if (item.hasVariant) {
+      return fetchVariants(item._id!.toString()).then((variants) => ({
+        ...item,
+        variants
+      }))
+    }
+    return {
+      ...item,
+      variants: []
+    }
+  })
+
+  return Promise.all(parsedResult)
+}
+
 // Tạo mới menu item
 export const createMenuItem = async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -84,6 +114,7 @@ export const createMenuItem = async (req: Request, res: Response, next: NextFunc
           quantity: 0, // Sản phẩm cha không có số lượng
           lastUpdated: new Date()
         },
+        isActive: parseIsActive(body.isActive) ?? true,
         createdAt: new Date(),
         updatedAt: new Date()
       }
@@ -126,6 +157,7 @@ export const createMenuItem = async (req: Request, res: Response, next: NextFunc
             maxStock: variant.inventory?.maxStock ? Number(variant.inventory.maxStock) : undefined,
             lastUpdated: new Date()
           },
+          isActive: parseIsActive(variant.isActive) ?? true,
           createdAt: new Date(),
           updatedAt: new Date()
         }
@@ -167,6 +199,7 @@ export const createMenuItem = async (req: Request, res: Response, next: NextFunc
         maxStock: body.maxStock ? Number(body.maxStock) : undefined,
         lastUpdated: new Date()
       },
+      isActive: parseIsActive(body.isActive) ?? true,
       createdAt: new Date(),
       updatedAt: new Date()
     }
@@ -205,6 +238,7 @@ export const createMenuItemWithVariants = async (req: Request, res: Response, ne
         quantity: 0, // Sản phẩm cha không có số lượng
         lastUpdated: new Date()
       },
+      isActive: parseIsActive(body.isActive) ?? true,
       createdAt: new Date(),
       updatedAt: new Date()
     }
@@ -244,6 +278,7 @@ export const createMenuItemWithVariants = async (req: Request, res: Response, ne
             maxStock: variant.inventory?.maxStock ? Number(variant.inventory.maxStock) : undefined,
             lastUpdated: new Date()
           },
+          isActive: parseIsActive(variant.isActive) ?? true,
           createdAt: new Date(),
           updatedAt: new Date()
         }
@@ -317,35 +352,40 @@ export const getMenuItemById = async (req: Request, res: Response, next: NextFun
   }
 }
 
-// Lấy tất cả menu item
+// Lấy tất cả menu item (bao gồm cả inactive — FE lọc theo isActive khi cần)
 export const getAllMenuItems = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { category } = req.query
 
-    let result
-    if (category && Object.values(FnBCategory).includes(category as FnBCategory)) {
-      result = await fnBMenuItemService.getMenuItemsByCategory(category as FnBCategory)
-    } else {
-      result = await fnBMenuItemService.getRootMenuItems()
-    }
+    const finalResult = await buildMenuItemsListResponse(
+      () =>
+        category && Object.values(FnBCategory).includes(category as FnBCategory)
+          ? fnBMenuItemService.getMenuItemsByCategory(category as FnBCategory)
+          : fnBMenuItemService.getRootMenuItems(),
+      (parentId) => fnBMenuItemService.getVariantsByParentId(parentId)
+    )
 
-    // Parse variants nếu chúng là JSON string
-    const parsedResult = result.map((item) => {
-      if (item.hasVariant) {
-        // Lấy variants cho từng parent item
-        return fnBMenuItemService.getVariantsByParentId(item._id!.toString()).then((variants) => ({
-          ...item,
-          variants: variants
-        }))
-      }
-      return {
-        ...item,
-        variants: []
-      }
+    return res.status(HttpStatusCode.Ok).json({
+      message: 'Lấy menu items thành công',
+      result: finalResult
     })
+  } catch (error) {
+    next(error)
+  }
+}
 
-    // Chờ tất cả promises resolve
-    const finalResult = await Promise.all(parsedResult)
+// Lấy tất cả menu item cho admin (bao gồm inactive)
+export const getAllMenuItemsManage = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { category } = req.query
+
+    const finalResult = await buildMenuItemsListResponse(
+      () =>
+        category && Object.values(FnBCategory).includes(category as FnBCategory)
+          ? fnBMenuItemService.getMenuItemsByCategory(category as FnBCategory)
+          : fnBMenuItemService.getRootMenuItems(),
+      (parentId) => fnBMenuItemService.getVariantsByParentId(parentId)
+    )
 
     return res.status(HttpStatusCode.Ok).json({
       message: 'Lấy menu items thành công',
@@ -407,6 +447,10 @@ export const updateMenuItem = async (req: Request, res: Response, next: NextFunc
       updateData.hasVariant = body.hasVariant === 'true' || body.hasVariant === true
     }
     if (body.price !== undefined) updateData.price = Number(body.price)
+    if (body.isActive !== undefined) {
+      const parsedIsActive = parseIsActive(body.isActive)
+      if (parsedIsActive !== undefined) updateData.isActive = parsedIsActive
+    }
     if (body.quantity !== undefined) {
       updateData.inventory = {
         ...(updateData.inventory || {}),
@@ -527,6 +571,10 @@ export const updateMenuItem = async (req: Request, res: Response, next: NextFunc
             lastUpdated: new Date()
           },
           updatedAt: new Date()
+        }
+        if (variant.isActive !== undefined) {
+          const parsedIsActive = parseIsActive(variant.isActive)
+          if (parsedIsActive !== undefined) variantData.isActive = parsedIsActive
         }
         applyCustomizationConfig(variantData, variant as Record<string, unknown>)
 

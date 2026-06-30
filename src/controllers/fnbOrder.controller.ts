@@ -13,6 +13,8 @@ import { ObjectId } from 'mongodb'
 import {
   aggregateLinesToLegacyMaps,
   aggregateQuantitiesByItemId,
+  appendCartLines,
+  applyLegacyMapDelta,
   emptyFnbOrder,
   newFnbLineId,
   normalizeFnbOrder,
@@ -138,6 +140,7 @@ export const upsertFnbOrder = async (req: Request, res: Response, next: NextFunc
 
     const newNorm = normalizeFnbOrder(order)
     const currentNorm = normalizeFnbOrder(currentOrder?.order)
+    await fnbMenuItemService.assertActiveMenuItemsForOrderDelta(currentNorm, newNorm)
     const allItems = aggregateQuantitiesByItemId(newNorm)
     const inventoryUpdates: Array<{ itemId: string; delta: number; item: any; isVariant: boolean }> = []
 
@@ -279,6 +282,8 @@ export const addItemsToOrder = async (req: Request, res: Response, next: NextFun
           message: `Không tìm thấy item ${itemId}`
         })
       }
+
+      await fnbMenuItemService.assertMenuItemIsOrderable(itemId)
 
       if ((item.inventory?.quantity ?? 0) < quantity) {
         return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
@@ -493,6 +498,8 @@ export const completeOrder = async (req: Request, res: Response, next: NextFunct
           message: `Không tìm thấy item ${itemId}`
         })
       }
+
+      await fnbMenuItemService.assertMenuItemIsOrderable(itemId)
 
       if ((item.inventory?.quantity ?? 0) < quantity) {
         return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
@@ -766,6 +773,7 @@ export const upsertOrderItem = async (req: Request, res: Response, next: NextFun
 
     // Kiểm tra tồn kho nếu tăng số lượng
     if (delta > 0) {
+      await fnbMenuItemService.assertMenuItemIsOrderable(itemId)
       console.log('Checking inventory for delta > 0')
       console.log('Item inventory quantity:', item.inventory?.quantity ?? 0)
       console.log('Delta:', delta)
@@ -844,6 +852,19 @@ export const addAdminFnbOrderItems = async (req: Request, res: Response, next: N
     const currentOrder = await fnbOrderService.getFnbOrdersByRoomSchedule(roomScheduleId)
 
     const addNorm = normalizeFnbOrder(order)
+    const currentNorm = normalizeFnbOrder(currentOrder?.order)
+    let merged = currentNorm
+    if (Array.isArray(addNorm.lines) && addNorm.lines.length > 0) {
+      merged = appendCartLines(merged, addNorm).mergedOrder
+    }
+    const legacyOrder = order as { drinks?: Record<string, number>; snacks?: Record<string, number> }
+    if (legacyOrder.drinks && typeof legacyOrder.drinks === 'object' && Object.keys(legacyOrder.drinks).length > 0) {
+      merged = applyLegacyMapDelta(merged, legacyOrder.drinks, undefined)
+    }
+    if (legacyOrder.snacks && typeof legacyOrder.snacks === 'object' && Object.keys(legacyOrder.snacks).length > 0) {
+      merged = applyLegacyMapDelta(merged, undefined, legacyOrder.snacks)
+    }
+    await fnbMenuItemService.assertActiveMenuItemsForOrderDelta(currentNorm, merged)
     const allItems = aggregateQuantitiesByItemId(addNorm)
     const inventoryUpdates: Array<{ itemId: string; delta: number; item: any; isVariant: boolean }> = []
     const itemsCache = new Map<string, { item: any; isVariant: boolean }>()
@@ -1059,6 +1080,7 @@ export const setAdminFnbOrder = async (req: Request, res: Response, next: NextFu
 
     const newNorm = normalizeFnbOrder(order)
     const currentNorm = normalizeFnbOrder(currentOrder?.order)
+    await fnbMenuItemService.assertActiveMenuItemsForOrderDelta(currentNorm, newNorm)
     const newItems = aggregateQuantitiesByItemId(newNorm)
     const currentItems = aggregateQuantitiesByItemId(currentNorm)
 

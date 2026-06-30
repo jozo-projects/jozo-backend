@@ -10,7 +10,7 @@ import { AddSongRequestBody } from '~/models/requests/Song.request'
 import { generateUniqueBookingCode, buildBookingCodeDuplicateFilter, buildBookingCodeLookupFilter, getDateOfUseFromDate, normalizeBookingCode } from '~/utils/common'
 import { parseClientRoomTypeString, roomTypeFieldToEnum } from '~/utils/roomType'
 import databaseService from './database.service'
-import { emitBookingNotification } from './room.service'
+import { emitBookingNotification, emitScheduleChanged } from './room.service'
 import fnbOrderService from './fnbOrder.service'
 
 dayjs.extend(utc)
@@ -391,6 +391,13 @@ class OnlineBookingService {
 
       emitBookingNotification(roomResult.room._id.toString(), bookingNotification)
 
+      newSchedule._id = result.insertedId
+      emitScheduleChanged(
+        'created',
+        newSchedule,
+        roomResult.room.roomId != null ? String(roomResult.room.roomId) : undefined
+      )
+
       return {
         success: true,
         booking: {
@@ -567,12 +574,13 @@ class OnlineBookingService {
       }
 
       // Cập nhật status thành cancelled
+      const updatedAt = new Date()
       await databaseService.roomSchedule.updateOne(
         { _id: new ObjectId(bookingId) },
         {
           $set: {
             status: RoomScheduleStatus.Cancelled,
-            updatedAt: new Date(),
+            updatedAt,
             updatedBy: 'customer'
           }
         }
@@ -592,6 +600,13 @@ class OnlineBookingService {
       }
 
       emitBookingNotification(schedule.roomId.toString(), cancelNotification)
+
+      emitScheduleChanged('cancelled', {
+        ...schedule,
+        status: RoomScheduleStatus.Cancelled,
+        updatedAt,
+        updatedBy: 'customer'
+      })
 
       return {
         success: true,

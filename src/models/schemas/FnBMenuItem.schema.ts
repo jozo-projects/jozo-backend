@@ -51,6 +51,8 @@ export interface FnBMenuItem {
   customizationTemplateRefs?: FnBMenuCustomizationTemplateRef[]
   /** Override option theo món (ưu tiên cao hơn template). */
   customizationOverrides?: FnBMenuCustomizationOptionOverride[]
+  /** false = ngừng phục vụ / tạm không nhập kiểm kê */
+  isActive?: boolean
   createdAt: Date
   updatedAt: Date
 }

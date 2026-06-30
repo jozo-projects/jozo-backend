@@ -13,6 +13,7 @@ import {
   aggregateLinesToLegacyMaps,
   aggregateQuantitiesByItemId,
   appendCartLines,
+  applyLegacyMapDelta,
   emptyFnbOrder,
   normalizeFnbOrder,
   plainQuantityForItem,
@@ -87,6 +88,8 @@ export const submitClientCart = async (req: Request, res: Response, next: NextFu
     const cartNorm = normalizeFnbOrder(cart)
     const currentNorm = currentOrder?.order ? normalizeFnbOrder(currentOrder.order) : emptyFnbOrder()
     const mergedOrder = appendCartLines(currentNorm, cartNorm).mergedOrder
+
+    await fnbMenuItemService.assertActiveMenuItemsForOrderDelta(currentNorm, mergedOrder)
 
     const cartByItem = aggregateQuantitiesByItemId(cartNorm)
     const inventoryUpdates: Array<{ itemId: string; delta: number; item: any; isVariant: boolean }> = []
@@ -306,7 +309,22 @@ export const addClientFnbOrderItems = async (req: Request, res: Response, next: 
       })
     }
 
+    const currentOrder = await fnbOrderService.getFnbOrdersByRoomSchedule(currentSchedule._id.toString())
+    const currentNorm = normalizeFnbOrder(currentOrder?.order)
     const reqNorm = normalizeFnbOrder(order)
+    let merged = currentNorm
+    if (Array.isArray(reqNorm.lines) && reqNorm.lines.length > 0) {
+      merged = appendCartLines(merged, reqNorm).mergedOrder
+    }
+    const legacyOrder = order as { drinks?: Record<string, number>; snacks?: Record<string, number> }
+    if (legacyOrder.drinks && typeof legacyOrder.drinks === 'object' && Object.keys(legacyOrder.drinks).length > 0) {
+      merged = applyLegacyMapDelta(merged, legacyOrder.drinks, undefined)
+    }
+    if (legacyOrder.snacks && typeof legacyOrder.snacks === 'object' && Object.keys(legacyOrder.snacks).length > 0) {
+      merged = applyLegacyMapDelta(merged, undefined, legacyOrder.snacks)
+    }
+    await fnbMenuItemService.assertActiveMenuItemsForOrderDelta(currentNorm, merged)
+
     const allItems = aggregateQuantitiesByItemId(reqNorm)
     const inventoryUpdates: Array<{ itemId: string; delta: number; item: any; isVariant: boolean }> = []
 
@@ -728,6 +746,7 @@ export const setClientFnbOrder = async (req: Request, res: Response, next: NextF
 
     const newNorm = normalizeFnbOrder(order)
     const currentNorm = normalizeFnbOrder(currentOrder?.order)
+    await fnbMenuItemService.assertActiveMenuItemsForOrderDelta(currentNorm, newNorm)
     const newItems = aggregateQuantitiesByItemId(newNorm)
     const currentItems = aggregateQuantitiesByItemId(currentNorm)
 
@@ -975,6 +994,10 @@ export const upsertClientFnbOrderItem = async (req: Request, res: Response, next
     const currentQuantity = plainQuantityForItem(curNorm, itemId, cat)
 
     const delta = quantity - currentQuantity
+
+    if (delta > 0) {
+      await fnbMenuItemService.assertMenuItemIsOrderable(itemId)
+    }
 
     // Find item and check inventory
     let item: any = await databaseService.fnbMenu.findOne({ _id: new ObjectId(itemId) })

@@ -437,6 +437,7 @@ class FnbOrderService {
       merged = applyLegacyMapDelta(currentNorm, negDrinks, negSnacks)
     }
 
+    await fnbMenuItemService.assertActiveMenuItemsForOrderDelta(currentNorm, merged)
     await assertOrderLinesMatchMenuCustomizations(merged)
 
     if (existingOrder) {

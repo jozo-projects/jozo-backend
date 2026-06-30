@@ -50,6 +50,10 @@ export const RoomSocket = (io: Server) => {
     io.to('management').emit('gift_claimed', { roomId, scheduleId, gift })
   })
 
+  roomEventEmitter.on('schedule_changed', ({ action, schedule, roomIndex }) => {
+    io.to('management').emit('schedule_changed', { action, schedule, roomIndex })
+  })
+
   // Listen for booking notifications
   roomEventEmitter.on('new_booking', ({ roomId, booking }) => {
     console.log(`New booking notification for room ${roomId}:`, booking)

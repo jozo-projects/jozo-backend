@@ -95,12 +95,14 @@ class FnbShiftCountService {
   > {
     const result: Array<{ itemId: string; name: string; category: 'drink' | 'snack'; currentInventory: number }> = []
 
-    const menuItems = await fnbMenuItemService.getAllMenuItems()
+    const menuItems = await fnbMenuItemService.getActiveMenuItems()
     for (const item of menuItems) {
       if (item.hasVariant) continue
+      if (!(await fnbMenuItemService.isMenuItemEffectivelyActive(item))) continue
+
       result.push({
         itemId: item._id!.toString(),
-        name: item.name,
+        name: await fnbMenuItemService.resolveMenuItemDisplayName(item),
         category: this.normalizeCategory(item.category),
         currentInventory: item.inventory?.quantity ?? 0
       })
