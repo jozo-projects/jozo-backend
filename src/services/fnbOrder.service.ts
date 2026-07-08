@@ -12,6 +12,7 @@ import {
 } from '~/utils/fnbOrderLines'
 import { resolveReportingMonthRange } from '~/utils/reportingPeriod'
 import databaseService from './database.service'
+import { CacheService } from './cache.service'
 import { assertOrderLinesMatchMenuCustomizations } from './fnbMenuCustomization.service'
 import fnbMenuItemService from './fnbMenuItem.service'
 import fnbSalesMovementService from './fnbSalesMovement.service'
@@ -20,8 +21,20 @@ dayjs.extend(utc)
 dayjs.extend(timezone)
 const VIETNAM_TZ = 'Asia/Ho_Chi_Minh'
 
+const FNB_STATS_CACHE_PREFIX = 'fnb:sales-stats'
+const FNB_STATS_CLOSED_PERIOD_TTL_SEC = 24 * 60 * 60
+const FNB_STATS_CURRENT_PERIOD_TTL_SEC = 5 * 60
+
+type FnbSalesStatsResult = {
+  period: { from: Date; to: Date; fromFormatted: string; toFormatted: string }
+  totalItemsSold: number
+  ordersCount: number
+  itemsBreakdown: Array<{ itemId: string; name: string; category: 'drink' | 'snack'; quantity: number }>
+}
+
 class FnbOrderService {
   private initialized = false
+  private readonly cacheService = new CacheService()
 
   /**
    * Khởi tạo service - đảm bảo unique index được tạo
@@ -205,12 +218,49 @@ class FnbOrderService {
     dateStr?: string,
     category?: 'drink' | 'snack',
     search?: string
-  ): Promise<{
-    period: { from: Date; to: Date; fromFormatted: string; toFormatted: string }
-    totalItemsSold: number
-    ordersCount: number
-    itemsBreakdown: Array<{ itemId: string; name: string; category: 'drink' | 'snack'; quantity: number }>
-  }> {
+  ): Promise<FnbSalesStatsResult> {
+    const cacheKey = this.buildFnbStatsCacheKey(period, dateStr, category, search)
+    const cached = await this.cacheService.get(cacheKey)
+    if (cached) {
+      return this.parseFnbStatsCache(cached)
+    }
+
+    const result = await this.computeFnbSalesStats(period, dateStr, category, search)
+
+    const ttl = result.period.to.getTime() < Date.now() ? FNB_STATS_CLOSED_PERIOD_TTL_SEC : FNB_STATS_CURRENT_PERIOD_TTL_SEC
+    await this.cacheService.setex(cacheKey, ttl, JSON.stringify(result))
+
+    return result
+  }
+
+  private buildFnbStatsCacheKey(
+    period: 'day' | 'week' | 'month',
+    dateStr?: string,
+    category?: 'drink' | 'snack',
+    search?: string
+  ): string {
+    const normalizedSearch = search?.trim().toLowerCase() || ''
+    return `${FNB_STATS_CACHE_PREFIX}:${period}:${dateStr || 'default'}:${category || 'all'}:${normalizedSearch}`
+  }
+
+  private parseFnbStatsCache(raw: string): FnbSalesStatsResult {
+    const parsed = JSON.parse(raw) as FnbSalesStatsResult
+    return {
+      ...parsed,
+      period: {
+        ...parsed.period,
+        from: new Date(parsed.period.from),
+        to: new Date(parsed.period.to)
+      }
+    }
+  }
+
+  private async computeFnbSalesStats(
+    period: 'day' | 'week' | 'month',
+    dateStr?: string,
+    category?: 'drink' | 'snack',
+    search?: string
+  ): Promise<FnbSalesStatsResult> {
     const now = dayjs().tz(VIETNAM_TZ)
     const baseDate = dateStr ? dayjs.tz(dateStr, 'YYYY-MM-DD', VIETNAM_TZ) : now
 
@@ -250,35 +300,7 @@ class FnbOrderService {
     let totalItemsSold = karaokeStats.totalItemsSold
     const itemsByKey = karaokeStats.items
 
-    const itemsBreakdown: Array<{
-      itemId: string
-      name: string
-      category: 'drink' | 'snack'
-      quantity: number
-    }> = []
-
-    for (const row of itemsByKey) {
-      let name = 'N/A'
-      let item: any = await databaseService.fnbMenu.findOne({ _id: new ObjectId(row.itemId) })
-      if (item) {
-        name = item.name
-      } else {
-        const menuItem = await fnbMenuItemService.getMenuItemById(row.itemId)
-        if (menuItem) {
-          name = menuItem.name
-          if (menuItem.parentId) {
-            const parent = await databaseService.fnbMenu.findOne({ _id: new ObjectId(menuItem.parentId) })
-            if (parent) name = `${parent.name} - ${menuItem.name}`
-          }
-        }
-      }
-      itemsBreakdown.push({
-        itemId: row.itemId,
-        name,
-        category: row.category,
-        quantity: row.quantity
-      })
-    }
+    const itemsBreakdown = await this.resolveFnbItemDisplayNames(itemsByKey)
 
     // Filter theo category (drink | snack)
     let filteredBreakdown = itemsBreakdown
@@ -305,6 +327,57 @@ class FnbOrderService {
       ordersCount: ordersCount,
       itemsBreakdown: filteredBreakdown
     }
+  }
+
+  /** Batch resolve tên món từ fnb_menu / fnb_menu_item (tránh N+1 query). */
+  private async resolveFnbItemDisplayNames(
+    rows: Array<{ itemId: string; category: 'drink' | 'snack'; quantity: number }>
+  ): Promise<Array<{ itemId: string; name: string; category: 'drink' | 'snack'; quantity: number }>> {
+    if (rows.length === 0) return []
+
+    const objectIds = rows.map((row) => new ObjectId(row.itemId))
+
+    const [menuItems, variantItems] = await Promise.all([
+      databaseService.fnbMenu.find({ _id: { $in: objectIds } }).toArray(),
+      databaseService.getCollection('fnb_menu_item').find({ _id: { $in: objectIds } }).toArray()
+    ])
+
+    const menuMap = new Map(menuItems.map((item) => [item._id!.toString(), item]))
+    const variantMap = new Map(variantItems.map((item) => [item._id!.toString(), item]))
+
+    const parentIds = [
+      ...new Set(
+        variantItems
+          .map((item: any) => item.parentId as string | undefined)
+          .filter((parentId): parentId is string => Boolean(parentId))
+      )
+    ]
+
+    const parentMenus =
+      parentIds.length > 0
+        ? await databaseService.fnbMenu
+            .find({ _id: { $in: parentIds.map((id) => new ObjectId(id)) } })
+            .toArray()
+        : []
+    const parentMap = new Map(parentMenus.map((item) => [item._id!.toString(), item]))
+
+    return rows.map((row) => {
+      let name = 'N/A'
+      const menu = menuMap.get(row.itemId)
+      if (menu) {
+        name = menu.name
+      } else {
+        const variant = variantMap.get(row.itemId) as any
+        if (variant) {
+          name = variant.name
+          if (variant.parentId) {
+            const parent = parentMap.get(variant.parentId)
+            if (parent) name = `${parent.name} - ${variant.name}`
+          }
+        }
+      }
+      return { itemId: row.itemId, name, category: row.category, quantity: row.quantity }
+    })
   }
 
   // Method mới: Kiểm tra tồn kho cho multiple items

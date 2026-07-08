@@ -46,58 +46,18 @@ class FnbSalesMovementService {
   }
 
   /** Pipeline chung: bill theo ngày tạo/ghi nhận, FnB từ bill hoặc fallback history. */
-  private buildKaraokeBillsInRangeStages(from: Date, to: Date) {
+  private billHasFnbExpr() {
+    return {
+      $or: [
+        { $gt: [{ $size: { $ifNull: ['$fnbOrder.lines', []] } }, 0] },
+        { $gt: [{ $size: { $objectToArray: { $ifNull: ['$fnbOrder.drinks', {}] } } }, 0] },
+        { $gt: [{ $size: { $objectToArray: { $ifNull: ['$fnbOrder.snacks', {}] } } }, 0] }
+      ]
+    }
+  }
+
+  private buildFnbItemsForStatsStages() {
     return [
-      {
-        $addFields: {
-          // Bill cũ lưu createdAt = schedule.createdAt; bill mới (getBill) dùng thời điểm tạo bill.
-          statsDate: {
-            $cond: [{ $gte: ['$createdAt', '$startTime'] }, '$createdAt', '$endTime']
-          }
-        }
-      },
-      {
-        $match: {
-          statsDate: { $gte: from, $lte: to }
-        }
-      },
-      { $sort: { scheduleId: 1, endTime: -1, createdAt: -1 } },
-      {
-        $group: {
-          _id: '$scheduleId',
-          doc: { $first: '$$ROOT' }
-        }
-      },
-      { $replaceRoot: { newRoot: '$doc' } },
-      {
-        $lookup: {
-          from: 'fnb_order_history',
-          let: { scheduleId: '$scheduleId' },
-          pipeline: [
-            { $match: { $expr: { $eq: ['$roomScheduleId', '$$scheduleId'] } } },
-            { $sort: { completedAt: -1 } },
-            { $limit: 1 }
-          ],
-          as: 'orderHistory'
-        }
-      },
-      {
-        $addFields: {
-          fnbSource: {
-            $cond: [
-              {
-                $or: [
-                  { $gt: [{ $size: { $ifNull: ['$fnbOrder.lines', []] } }, 0] },
-                  { $gt: [{ $size: { $objectToArray: { $ifNull: ['$fnbOrder.drinks', {}] } } }, 0] },
-                  { $gt: [{ $size: { $objectToArray: { $ifNull: ['$fnbOrder.snacks', {}] } } }, 0] }
-                ]
-              },
-              '$fnbOrder',
-              { $ifNull: [{ $arrayElemAt: ['$orderHistory.order', 0] }, {}] }
-            ]
-          }
-        }
-      },
       {
         $addFields: {
           fnbItemsForStats: {
@@ -136,7 +96,90 @@ class FnbSalesMovementService {
           }
         }
       },
-      { $match: { $expr: { $gt: [{ $size: '$fnbItemsForStats' }, 0] } } }
+      { $match: { $expr: { $gt: [{ $size: '$fnbItemsForStats' }, 0] } } },
+      { $project: { scheduleId: 1, fnbItemsForStats: 1 } }
+    ]
+  }
+
+  private buildKaraokeBillsInRangeStages(from: Date, to: Date) {
+    const billHasFnbExpr = this.billHasFnbExpr()
+    const fnbItemsStages = this.buildFnbItemsForStatsStages()
+
+    return [
+      // Lọc sơ bộ theo index (createdAt / endTime) trước khi tính statsDate trên toàn bộ bills.
+      {
+        $match: {
+          $or: [{ createdAt: { $gte: from, $lte: to } }, { endTime: { $gte: from, $lte: to } }]
+        }
+      },
+      {
+        $project: {
+          scheduleId: 1,
+          createdAt: 1,
+          startTime: 1,
+          endTime: 1,
+          fnbOrder: 1
+        }
+      },
+      {
+        $addFields: {
+          // Bill cũ lưu createdAt = schedule.createdAt; bill mới (getBill) dùng thời điểm tạo bill.
+          statsDate: {
+            $cond: [{ $gte: ['$createdAt', '$startTime'] }, '$createdAt', '$endTime']
+          }
+        }
+      },
+      {
+        $match: {
+          statsDate: { $gte: from, $lte: to }
+        }
+      },
+      { $sort: { scheduleId: 1, endTime: -1, createdAt: -1 } },
+      {
+        $group: {
+          _id: '$scheduleId',
+          doc: { $first: '$$ROOT' }
+        }
+      },
+      { $replaceRoot: { newRoot: '$doc' } },
+      // Chỉ $lookup history cho bill cũ không có fnbOrder — tránh lookup trên mọi bill.
+      {
+        $facet: {
+          withFnbOnBill: [
+            { $match: { $expr: billHasFnbExpr } },
+            { $addFields: { fnbSource: '$fnbOrder' } },
+            ...fnbItemsStages
+          ],
+          needHistory: [
+            { $match: { $expr: { $not: billHasFnbExpr } } },
+            {
+              $lookup: {
+                from: 'fnb_order_history',
+                let: { scheduleId: '$scheduleId' },
+                pipeline: [
+                  { $match: { $expr: { $eq: ['$roomScheduleId', '$$scheduleId'] } } },
+                  { $sort: { completedAt: -1 } },
+                  { $limit: 1 }
+                ],
+                as: 'orderHistory'
+              }
+            },
+            {
+              $addFields: {
+                fnbSource: { $ifNull: [{ $arrayElemAt: ['$orderHistory.order', 0] }, {}] }
+              }
+            },
+            ...fnbItemsStages
+          ]
+        }
+      },
+      {
+        $project: {
+          bills: { $concatArrays: ['$withFnbOnBill', '$needHistory'] }
+        }
+      },
+      { $unwind: '$bills' },
+      { $replaceRoot: { newRoot: '$bills' } }
     ]
   }
 
@@ -170,42 +213,48 @@ class FnbSalesMovementService {
     totalItemsSold: number
     items: Array<{ itemId: string; category: 'drink' | 'snack'; quantity: number }>
   }> {
-    const [agg, ordersCountAgg] = await Promise.all([
-      databaseService.bills
-        .aggregate<{
+    const [facetResult] = await databaseService.bills
+      .aggregate<{
+        items: Array<{
           totalItemsSold?: number
           items?: Array<{ itemId: string; category: 'drink' | 'snack'; quantity: number }>
-        }>([
+        }>
+        ordersCount: Array<{ count?: number }>
+      }>(
+        [
           ...this.buildKaraokeBillsInRangeStages(from, to),
           { $unwind: '$fnbItemsForStats' },
           {
-            $group: {
-              _id: { itemId: '$fnbItemsForStats.k', category: '$fnbItemsForStats.cat' },
-              quantity: { $sum: '$fnbItemsForStats.v' }
+            $facet: {
+              items: [
+                {
+                  $group: {
+                    _id: { itemId: '$fnbItemsForStats.k', category: '$fnbItemsForStats.cat' },
+                    quantity: { $sum: '$fnbItemsForStats.v' }
+                  }
+                },
+                {
+                  $group: {
+                    _id: null,
+                    totalItemsSold: { $sum: '$quantity' },
+                    items: { $push: { itemId: '$_id.itemId', category: '$_id.category', quantity: '$quantity' } }
+                  }
+                },
+                { $project: { _id: 0, totalItemsSold: 1, items: 1 } }
+              ],
+              ordersCount: [{ $group: { _id: '$scheduleId' } }, { $count: 'count' }]
             }
-          },
-          {
-            $group: {
-              _id: null,
-              totalItemsSold: { $sum: '$quantity' },
-              items: { $push: { itemId: '$_id.itemId', category: '$_id.category', quantity: '$quantity' } }
-            }
-          },
-          { $project: { _id: 0, totalItemsSold: 1, items: 1 } }
-        ])
-        .toArray(),
-      databaseService.bills
-        .aggregate<{
-          count?: number
-        }>([...this.buildKaraokeBillsInRangeStages(from, to), { $group: { _id: '$scheduleId' } }, { $count: 'count' }])
-        .toArray()
-    ])
+          }
+        ],
+        { allowDiskUse: true }
+      )
+      .toArray()
 
-    const first = agg[0]
+    const itemsAgg = facetResult?.items?.[0]
     return {
-      ordersCount: ordersCountAgg[0]?.count ?? 0,
-      totalItemsSold: first?.totalItemsSold ?? 0,
-      items: first?.items ?? []
+      ordersCount: facetResult?.ordersCount?.[0]?.count ?? 0,
+      totalItemsSold: itemsAgg?.totalItemsSold ?? 0,
+      items: itemsAgg?.items ?? []
     }
   }
 

@@ -96,6 +96,10 @@ class DatabaseService {
       await this.db.collection('fnb_sales_movements').createIndex({ itemId: 1, createdAt: 1 })
       await this.db.collection('fnb_sales_movements').createIndex({ createdAt: 1 })
       await this.db.collection('fnb_sales_movements').createIndex({ createdBy: 1, createdAt: 1 })
+      await this.db.collection('bills').createIndex({ createdAt: 1 })
+      await this.db.collection('bills').createIndex({ endTime: 1 })
+      await this.db.collection('bills').createIndex({ scheduleId: 1, endTime: -1, createdAt: -1 })
+      await this.db.collection('fnb_order_history').createIndex({ roomScheduleId: 1, completedAt: -1 })
     } catch (error) {
       console.log(`[DB]   Connection FAILED to ${dbHost}!`)
       console.error(error)
