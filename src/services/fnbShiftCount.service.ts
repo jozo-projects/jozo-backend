@@ -41,6 +41,13 @@ class FnbShiftCountService {
     const today = this.getTodayDateStr()
     if (dateStr === today) return true
     if (isAdmin && dateStr < today) return true
+
+    // Quán hoạt động qua đêm — staff vẫn sửa được ngày hôm qua cho đến khi khóa ca thủ công.
+    if (!isAdmin) {
+      const yesterday = dayjs.tz(today, 'YYYY-MM-DD', VIETNAM_TZ).subtract(1, 'day').format('YYYY-MM-DD')
+      if (dateStr === yesterday) return true
+    }
+
     return false
   }
 
@@ -194,8 +201,7 @@ class FnbShiftCountService {
     const dateEditable = this.isEditableDate(businessDate, isAdmin)
     const editable = dateEditable && (isAdmin || !locked)
     const hasShiftData = Boolean(doc)
-    const canLock =
-      !locked && hasShiftData && (isAdmin ? dateEditable : businessDate === this.getTodayDateStr())
+    const canLock = !locked && hasShiftData && dateEditable
     const canUnlock = isAdmin && locked
 
     return { locked, lockedAt, editable, canLock, canUnlock }
@@ -519,14 +525,6 @@ class FnbShiftCountService {
   ): Promise<FnbShiftCountResponse> {
     this.assertShiftNo(shiftNoValue)
     const shiftNo = shiftNoValue
-
-    const isToday = dateStr === this.getTodayDateStr()
-    if (!isAdmin && !isToday) {
-      throw new ErrorWithStatus({
-        message: FNB_SHIFT_COUNT_MESSAGES.ONLY_TODAY_EDITABLE,
-        status: HTTP_STATUS_CODE.FORBIDDEN
-      })
-    }
 
     if (!this.isEditableDate(dateStr, isAdmin)) {
       throw new ErrorWithStatus({

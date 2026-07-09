@@ -259,7 +259,8 @@ export const FNB_SHIFT_COUNT_MESSAGES = {
   SHIFT_NOT_SAVED_FOR_LOCK: 'Chưa có dữ liệu ca kiểm kê, không thể khóa',
   SHIFT_NOT_CLOSED_FOR_LOCK: 'Phải nhập kết ca trước khi khóa ca kiểm kê',
   ONLY_ADMIN_CAN_UNLOCK: 'Chỉ admin mới được mở khóa kiểm kê',
-  ONLY_TODAY_EDITABLE: 'Chỉ được nhập/sửa kiểm kê cho ngày hôm nay (admin có thể sửa ngày trong quá khứ)',
+  ONLY_TODAY_EDITABLE:
+    'Chỉ được nhập/sửa kiểm kê cho hôm nay hoặc hôm qua; ca đã khóa thủ công không thể sửa (admin có thể sửa ngày trong quá khứ)',
   ITEMS_REQUIRED: 'Danh sách món kiểm kê không được rỗng',
   INVALID_ITEM_ID: 'itemId không hợp lệ',
   INVALID_SHIFT_NO: 'Ca kiểm kê không hợp lệ (1, 2 hoặc 3)',
