@@ -250,6 +250,10 @@ class RoomScheduleService {
     const giftEnabled = schedule.giftEnabled ?? false
     scheduleData.giftEnabled = !!giftEnabled
 
+    if (schedule.promotionId) {
+      scheduleData.promotionId = new ObjectId(schedule.promotionId)
+    }
+
     // Chốt roomType riêng cho schedule: ưu tiên giá trị FE truyền, nếu không thì snapshot từ phòng hiện tại.
     // Nhờ vậy schedule giữ nguyên size dù phòng vật lý bị đổi roomType bởi schedule khác.
     if (schedule.roomType) {
@@ -412,6 +416,13 @@ class RoomScheduleService {
     }
     if (schedule.customerEmail !== undefined) {
       updateData.customerEmail = schedule.customerEmail as string | undefined
+    }
+    if (schedule.promotionId !== undefined) {
+      if (schedule.promotionId === null || schedule.promotionId === '') {
+        updateOperations.$unset = { ...(updateOperations.$unset || {}), promotionId: '' }
+      } else {
+        updateData.promotionId = new ObjectId(schedule.promotionId)
+      }
     }
 
     const result = await databaseService.roomSchedule.updateOne({ _id: new ObjectId(id) }, updateOperations)

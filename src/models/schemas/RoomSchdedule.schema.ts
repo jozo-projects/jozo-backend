@@ -57,6 +57,9 @@ export class RoomSchedule {
   source?: BookingSource
   giftEnabled?: boolean
 
+  // Khuyến mãi đã chọn lúc booked — dùng lại khi mở modal thanh toán
+  promotionId?: ObjectId
+
   // Loại phòng (size) được chốt riêng cho schedule này tại thời điểm tạo.
   // Dùng để tính tiền độc lập, không bị ảnh hưởng khi phòng vật lý đổi roomType về sau.
   roomType?: RoomType

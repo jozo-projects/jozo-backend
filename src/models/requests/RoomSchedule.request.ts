@@ -21,6 +21,8 @@ export interface IRoomScheduleRequestBody {
   source?: BookingSource
   paymentMethod?: string
   giftEnabled?: boolean
+  /** ID promotion đã chọn lúc booked; truyền null để xóa khi update */
+  promotionId?: string | null
   // Trường mở rộng để đổi phòng
   newRoomId?: string
   roomChangeNote?: string

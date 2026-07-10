@@ -20,6 +20,10 @@ export const createScheduleValidator = validate(
         errorMessage: 'giftEnabled must be boolean'
       }
     },
+    promotionId: {
+      optional: { options: { nullable: true, values: 'falsy' } },
+      isMongoId: { errorMessage: 'promotionId must be a valid MongoDB ObjectId' }
+    },
     status: {
       notEmpty: {
         errorMessage: ROOM_SCHEDULE_MESSAGES.STATUS_REQUIRED
@@ -69,6 +73,10 @@ export const updateScheduleValidator = validate(
       notEmpty: {
         errorMessage: ROOM_SCHEDULE_MESSAGES.ROOM_ID_REQUIRED
       }
+    },
+    promotionId: {
+      optional: { options: { nullable: true, values: 'falsy' } },
+      isMongoId: { errorMessage: 'promotionId must be a valid MongoDB ObjectId' }
     },
     customerName: {
       optional: { options: { nullable: true, values: 'falsy' } },

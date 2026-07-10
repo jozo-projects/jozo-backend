@@ -953,10 +953,11 @@ export class BillService {
       }
     }
 
-    // Lấy thông tin promotion nếu có promotionId (bỏ qua nếu có gift discount để tránh chồng khuyến mãi)
+    // Lấy thông tin promotion: ưu tiên promotionId từ request, fallback từ schedule đã lưu lúc booked
     let activePromotion = undefined
-    if (promotionId) {
-      const promotion = await databaseService.promotions.findOne({ _id: new ObjectId(promotionId) })
+    const effectivePromotionId = promotionId || schedule.promotionId?.toString()
+    if (effectivePromotionId) {
+      const promotion = await databaseService.promotions.findOne({ _id: new ObjectId(effectivePromotionId) })
       if (promotion) {
         activePromotion = promotion
       }
