@@ -4,6 +4,7 @@ import redis from '~/services/redis.service'
 import { roomMusicServices, roomMusicEventEmitter } from '~/services/roomMusic.service'
 import { songPruneJobEventEmitter } from '~/services/songPruneJob.service'
 import { roomEventEmitter } from '~/services/room.service'
+import { roomDevicePresenceService } from '~/services/roomDevicePresence.service'
 
 interface CommandPayload {
   action: string
@@ -104,9 +105,10 @@ export const RoomSocket = (io: Server) => {
 
     // Get role from query params (admin or staff)
     const role = socket.handshake.query.role as string
+    const isManagementClient = role === 'admin' || role === 'staff'
 
     // If client is admin or staff, join management room
-    if (role === 'admin' || role === 'staff') {
+    if (isManagementClient) {
       socket.join('management')
       console.log(`${role.charAt(0).toUpperCase() + role.slice(1)} socket ${socket.id} joined management room`)
     }
@@ -117,6 +119,26 @@ export const RoomSocket = (io: Server) => {
     if (roomId) {
       socket.join(roomId) // Gán socket vào room
       console.log(`Socket ${socket.id} joined room ${roomId}`)
+    }
+
+    // Track control/video device presence (skip admin/staff)
+    if (!isManagementClient && roomId) {
+      const deviceId = socket.handshake.query.deviceId as string
+      const clientType = socket.handshake.query.clientType as string
+      const origin = (socket.handshake.headers.origin as string) || ''
+      const registered = roomDevicePresenceService.register({
+        deviceId,
+        roomId,
+        socketId: socket.id,
+        clientType,
+        origin
+      })
+      if (registered) {
+        console.log(
+          `[DevicePresence] connected deviceId=${registered.deviceId} roomId=${registered.roomId} type=${registered.clientType}`
+        )
+        roomDevicePresenceService.emitConnected(io, registered)
+      }
     }
 
     // Xử lý lệnh từ client
@@ -406,6 +428,13 @@ export const RoomSocket = (io: Server) => {
     // Khi client ngắt kết nối
     socket.on('disconnect', () => {
       console.log(`Client disconnected: ${socket.id}`)
+      const disconnected = roomDevicePresenceService.unregister(socket.id)
+      if (disconnected) {
+        console.log(
+          `[DevicePresence] disconnected deviceId=${disconnected.deviceId} roomId=${disconnected.roomId} type=${disconnected.clientType}`
+        )
+        roomDevicePresenceService.emitDisconnected(io, disconnected)
+      }
     })
   })
 }

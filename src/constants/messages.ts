@@ -71,6 +71,7 @@ export const ROOM_MESSAGES = {
   ROOM_EXISTS: 'Room already exists',
   GET_ROOM_SUCCESS: 'Get room success',
   GET_ROOMS_SUCCESS: 'Get rooms success',
+  GET_DEVICE_CONNECTIONS_SUCCESS: 'Get device connections success',
   ROOM_NOT_FOUND: 'Room not found',
   UPDATE_ROOM_SUCCESS: 'Update room success',
   DELETE_ROOM_SUCCESS: 'Delete room success'

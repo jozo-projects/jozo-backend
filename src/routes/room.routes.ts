@@ -7,6 +7,7 @@ import {
   getRoomController,
   getRoomByRoomIdController,
   getRoomsController,
+  getDeviceConnectionsController,
   solveRequestController,
   solveOrderController,
   turnOffVideosController,
@@ -46,6 +47,17 @@ roomRouter.post(
  * @author QuangDoo
  */
 roomRouter.get('/', protect([UserRole.Admin, UserRole.Staff]), wrapRequestHandler(getRoomsController))
+
+/**
+ * @description Snapshot thiết bị control/video đang kết nối theo phòng
+ * @path /rooms/device-connections
+ * @method GET
+ */
+roomRouter.get(
+  '/device-connections',
+  protect([UserRole.Admin, UserRole.Staff]),
+  wrapRequestHandler(getDeviceConnectionsController)
+)
 
 /**
  * @description Lấy phòng theo id

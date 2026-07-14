@@ -4,6 +4,7 @@ import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { ROOM_MESSAGES } from '~/constants/messages'
 import { IAddRoomRequestBody } from '~/models/requests/Room.request'
 import { roomServices } from '~/services/room.service'
+import { roomDevicePresenceService } from '~/services/roomDevicePresence.service'
 import databaseService from '~/services/database.service'
 import { RoomStatus, RoomType } from '~/constants/enum'
 
@@ -58,6 +59,22 @@ export const getRoomsController = async (req: Request, res: Response, next: Next
 
     return res.status(HTTP_STATUS_CODE.OK).json({
       message: ROOM_MESSAGES.GET_ROOMS_SUCCESS,
+      result
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+/**
+ * @description Snapshot thiết bị control/video đang kết nối Socket.IO theo phòng
+ */
+export const getDeviceConnectionsController = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const result = roomDevicePresenceService.getSnapshot()
+
+    return res.status(HTTP_STATUS_CODE.OK).json({
+      message: ROOM_MESSAGES.GET_DEVICE_CONNECTIONS_SUCCESS,
       result
     })
   } catch (error) {

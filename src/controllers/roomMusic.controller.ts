@@ -800,8 +800,6 @@ export const searchLocalSongs = async (req: Request, res: Response, next: NextFu
       source: 'local'
     }))
 
-    console.log(`[search-local] query="${q}" results=${localResults.length} duration=${searchDuration}ms`)
-
     res.status(HTTP_STATUS_CODE.OK).json({
       message: SONG_QUEUE_MESSAGES.SEARCH_SONGS_SUCCESS,
       result: {
@@ -848,7 +846,6 @@ export const searchRemoteSongs = async (req: Request, res: Response, next: NextF
     const rateLimitKey = `remote_search_429:${q.toLowerCase().trim()}:${parsedLimit}`
     const rateLimitCached = await redis.get(rateLimitKey)
     if (rateLimitCached) {
-      console.log(`[search-remote] Rate limit cache hit for query="${q}", returning 503`)
       return res.status(503).json({
         error: 'Search temporarily unavailable',
         message: 'Quá tải, vui lòng thử lại sau vài phút.',
@@ -861,7 +858,6 @@ export const searchRemoteSongs = async (req: Request, res: Response, next: NextF
     const cachedResult = await redis.get(cacheKey)
     if (cachedResult) {
       const cachedData = JSON.parse(cachedResult)
-      console.log(`[search-remote] Cache hit for query="${q}"`)
       return res.status(HTTP_STATUS_CODE.OK).json({
         message: SONG_QUEUE_MESSAGES.SEARCH_SONGS_SUCCESS,
         result: {
@@ -881,7 +877,6 @@ export const searchRemoteSongs = async (req: Request, res: Response, next: NextF
 
     if (lockExists) {
       // Poll cache thay vì chạy thêm yt-search trùng → request sau đợi và dùng kết quả cache từ request đầu
-      console.log(`[search-remote] Request in progress for query="${q}", polling cache...`)
       let waited = 0
       while (waited < MAX_WAIT_FOR_CACHE_MS) {
         await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
@@ -889,7 +884,6 @@ export const searchRemoteSongs = async (req: Request, res: Response, next: NextF
         const retryCachedResult = await redis.get(cacheKey)
         if (retryCachedResult) {
           const cachedData = JSON.parse(retryCachedResult)
-          console.log(`[search-remote] Cache hit after waiting ${waited}ms for query="${q}"`)
           return res.status(HTTP_STATUS_CODE.OK).json({
             message: SONG_QUEUE_MESSAGES.SEARCH_SONGS_SUCCESS,
             result: {
@@ -909,8 +903,6 @@ export const searchRemoteSongs = async (req: Request, res: Response, next: NextF
     await redis.setex(lockKey, 30, '1') // Lock trong 30 giây
 
     try {
-      console.log(`[search-remote] Starting YouTube search for query: "${q}"`)
-
       const searchPromise = searchYoutube(q, { limit: parsedLimit })
       const timeoutPromise = new Promise<never>((_, reject) => {
         setTimeout(() => {
@@ -919,8 +911,6 @@ export const searchRemoteSongs = async (req: Request, res: Response, next: NextF
       })
 
       const result = await Promise.race([searchPromise, timeoutPromise])
-      const ytSearchDuration = Date.now() - startTime
-      console.log(`[search-remote] YouTube search done in ${ytSearchDuration}ms for query="${q}"`)
 
       if (!result?.videos || !Array.isArray(result.videos)) {
         throw new Error('YouTube search returned invalid result (missing or empty videos)')
@@ -938,11 +928,7 @@ export const searchRemoteSongs = async (req: Request, res: Response, next: NextF
         views: video.views || 0
       }))
 
-      const beforeSaved = Date.now()
       const savedMap = await songService.getSavedSongsByVideoIds(videos.map((video) => video.video_id))
-      console.log(
-        `[search-remote] getSavedSongsByVideoIds in ${Date.now() - beforeSaved}ms for ${videos.length} videos`
-      )
 
       const savedVideos: Array<VideoSchema & { is_saved: boolean; views: number }> = []
       const otherVideos: Array<VideoSchema & { is_saved: boolean; views: number }> = []
@@ -984,8 +970,6 @@ export const searchRemoteSongs = async (req: Request, res: Response, next: NextF
 
       // Lưu vào cache
       await redis.setex(cacheKey, CACHE_TTL, JSON.stringify(responseData))
-
-      console.log(`[search-remote] query="${q}" results=${prioritizedVideos.length} duration=${searchDuration}ms`)
 
       // Xóa lock
       await redis.del(lockKey)
