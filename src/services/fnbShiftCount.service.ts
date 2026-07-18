@@ -18,6 +18,7 @@ import type {
   IFnbShiftCountDayItemMeta
 } from '~/models/schemas/FnbShiftCount.schema'
 import type { IUpdateFnbShiftCountDayItem, IUpsertFnbShiftCountItem } from '~/models/requests/FnbShiftCount.request'
+import { getFnbBusinessDateStr, VIETNAM_TZ } from '~/utils/fnbBusinessDate'
 import databaseService from './database.service'
 import fnbMenuItemService from './fnbMenuItem.service'
 import fnbSalesMovementService from './fnbSalesMovement.service'
@@ -25,12 +26,12 @@ import fnbSalesMovementService from './fnbSalesMovement.service'
 dayjs.extend(utc)
 dayjs.extend(timezone)
 
-const VIETNAM_TZ = 'Asia/Ho_Chi_Minh'
 const SHIFT_NOS: FnbShiftNo[] = [1, 2, 3]
 
 class FnbShiftCountService {
+  /** Ngày kinh doanh hiện tại — trước 03:00 sáng vẫn tính là ngày hôm trước. */
   getTodayDateStr(): string {
-    return dayjs().tz(VIETNAM_TZ).format('YYYY-MM-DD')
+    return getFnbBusinessDateStr()
   }
 
   parseBusinessDate(dateStr: string): Date {
@@ -42,7 +43,7 @@ class FnbShiftCountService {
     if (dateStr === today) return true
     if (isAdmin && dateStr < today) return true
 
-    // Quán hoạt động qua đêm — staff vẫn sửa được ngày hôm qua cho đến khi khóa ca thủ công.
+    // Quán hoạt động qua đêm (đến 03:00) — staff vẫn sửa được ngày hôm qua cho đến khi khóa ca thủ công.
     if (!isAdmin) {
       const yesterday = dayjs.tz(today, 'YYYY-MM-DD', VIETNAM_TZ).subtract(1, 'day').format('YYYY-MM-DD')
       if (dateStr === yesterday) return true

@@ -1,14 +1,7 @@
-import dayjs from 'dayjs'
-import timezone from 'dayjs/plugin/timezone'
-import utc from 'dayjs/plugin/utc'
 import { ObjectId } from 'mongodb'
 import type { FnbSalesSource, IFnbSalesMovement } from '~/models/schemas/FnbSalesMovement.schema'
+import { getFnbBusinessDateRange } from '~/utils/fnbBusinessDate'
 import databaseService from './database.service'
-
-dayjs.extend(utc)
-dayjs.extend(timezone)
-
-const VIETNAM_TZ = 'Asia/Ho_Chi_Minh'
 
 class FnbSalesMovementService {
   async logDeltas(
@@ -183,13 +176,13 @@ class FnbSalesMovementService {
     ]
   }
 
-  /** Kiểm kê FNB: net qty đã add/bớt trên đơn karaoke trong khoảng thời gian (fnb_sales_movements). */
+  /** Kiểm kê FNB: net qty đã add/bớt trên đơn karaoke trong [from, to) (fnb_sales_movements). */
   private async aggregateKaraokeMovementsByRange(from: Date, to: Date): Promise<Record<string, number>> {
     const rows = await databaseService.fnbSalesMovements
       .aggregate<{ _id: ObjectId; quantity: number }>([
         {
           $match: {
-            createdAt: { $gte: from, $lte: to },
+            createdAt: { $gte: from, $lt: to },
             source: 'karaoke'
           }
         },
@@ -258,11 +251,12 @@ class FnbSalesMovementService {
     }
   }
 
+  /** Coffee sold trong [from, to). */
   private async aggregateCoffeeSoldByRange(from: Date, to: Date): Promise<Record<string, number>> {
     const rows = await databaseService.coffeeSessionOrders
       .aggregate<{ _id: string; quantity: number }>([
         { $unwind: '$batches' },
-        { $match: { 'batches.submittedAt': { $gte: from, $lte: to } } },
+        { $match: { 'batches.submittedAt': { $gte: from, $lt: to } } },
         {
           $addFields: {
             batchLines: {
@@ -303,12 +297,12 @@ class FnbSalesMovementService {
   }
 
   /**
-   * systemSold kiểm kê theo ngày VN = karaoke (fnb_sales_movements) + coffee (batches submittedAt).
+   * systemSold kiểm kê theo ngày kinh doanh VN (cắt 03:00 sáng hôm sau)
+   * = karaoke (fnb_sales_movements) + coffee (batches submittedAt).
    * Karaoke: lúc add/bớt món trên đơn, không phụ thuộc bill đã hoàn tất.
    */
   async aggregateSystemSoldByDate(businessDate: string): Promise<Record<string, number>> {
-    const from = dayjs.tz(businessDate, 'YYYY-MM-DD', VIETNAM_TZ).startOf('day').toDate()
-    const to = dayjs.tz(businessDate, 'YYYY-MM-DD', VIETNAM_TZ).endOf('day').toDate()
+    const { from, to } = getFnbBusinessDateRange(businessDate)
 
     const [karaokeMap, coffeeMap] = await Promise.all([
       this.aggregateKaraokeMovementsByRange(from, to),
@@ -318,16 +312,15 @@ class FnbSalesMovementService {
     return this.mergeSoldMaps(karaokeMap, coffeeMap)
   }
 
-  /** systemSold theo ca nhân viên: lọc fnb_sales_movements theo createdBy trong ngày VN. */
+  /** systemSold theo ca nhân viên: lọc fnb_sales_movements theo createdBy trong ngày kinh doanh (cắt 03:00). */
   async aggregateSystemSoldByStaffAndDate(staffId: string, businessDate: string): Promise<Record<string, number>> {
-    const from = dayjs.tz(businessDate, 'YYYY-MM-DD', VIETNAM_TZ).startOf('day').toDate()
-    const to = dayjs.tz(businessDate, 'YYYY-MM-DD', VIETNAM_TZ).endOf('day').toDate()
+    const { from, to } = getFnbBusinessDateRange(businessDate)
 
     const rows = await databaseService.fnbSalesMovements
       .aggregate<{ _id: ObjectId; quantity: number }>([
         {
           $match: {
-            createdAt: { $gte: from, $lte: to },
+            createdAt: { $gte: from, $lt: to },
             createdBy: staffId
           }
         },

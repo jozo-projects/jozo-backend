@@ -18,7 +18,7 @@ export interface IFnbShiftCount {
   status: FnbShiftCountStatus
   items: FnbShiftCountLine[]
   note?: string
-  /** Khóa ca thủ công — không tự động khóa theo thời gian (0h). */
+  /** Khóa ca thủ công — không tự động khóa theo thời gian (ngày kinh doanh cắt 03:00). */
   locked?: boolean
   lockedAt?: Date
   lockedBy?: ObjectId

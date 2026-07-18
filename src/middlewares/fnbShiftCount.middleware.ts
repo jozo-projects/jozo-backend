@@ -2,16 +2,11 @@ import { Request } from 'express'
 import { checkSchema } from 'express-validator'
 import { FNB_SHIFT_COUNT_MESSAGES } from '~/constants/messages'
 import { validate } from '~/utils/validation'
+import { getFnbBusinessDateStr } from '~/utils/fnbBusinessDate'
 import dayjs from 'dayjs'
 import customParseFormat from 'dayjs/plugin/customParseFormat'
-import timezone from 'dayjs/plugin/timezone'
-import utc from 'dayjs/plugin/utc'
 
 dayjs.extend(customParseFormat)
-dayjs.extend(utc)
-dayjs.extend(timezone)
-
-const VIETNAM_TZ = 'Asia/Ho_Chi_Minh'
 
 const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/
 
@@ -156,5 +151,6 @@ export const listShiftCountsValidator = validate(
 export const resolveShiftCountDate = (req: Request): string => {
   const date = typeof req.query.date === 'string' ? req.query.date : undefined
   if (date) return date
-  return dayjs().tz(VIETNAM_TZ).format('YYYY-MM-DD')
+  // Trước 03:00 sáng vẫn mặc định ngày kinh doanh hôm trước.
+  return getFnbBusinessDateStr()
 }
