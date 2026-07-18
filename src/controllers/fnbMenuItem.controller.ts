@@ -459,6 +459,9 @@ export const updateMenuItem = async (req: Request, res: Response, next: NextFunc
       }
     }
 
+    // FormData có thể gửi quantity/existingImage top-level — không lưu vào document menu item
+    delete (updateData as Record<string, unknown>).quantity
+    delete (updateData as Record<string, unknown>).existingImage
     delete (updateData as Record<string, unknown>).customizationGroups
     delete (updateData as Record<string, unknown>).customizationTemplateRefs
     delete (updateData as Record<string, unknown>).customizationOverrides

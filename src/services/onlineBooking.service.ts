@@ -351,6 +351,8 @@ class OnlineBookingService {
       newSchedule.customerName = requestWithType.customerName
       newSchedule.customerPhone = requestWithType.customerPhone
       newSchedule.customerEmail = requestWithType.customerEmail
+      // Chốt roomType theo size khách đặt — không đổi khi staff chuyển phòng vật lý sau này
+      newSchedule.roomType = normalizedRoomType
       newSchedule.originalRoomType = normalizedRoomType
       newSchedule.actualRoomType = roomResult.assignedRoomType
       newSchedule.upgraded = roomResult.upgraded

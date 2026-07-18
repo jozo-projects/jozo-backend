@@ -382,6 +382,16 @@ class RoomScheduleService {
           note: schedule.roomChangeNote
         }
       }
+
+      // Giữ nguyên roomType đã chốt trên schedule (size khách đặt / lúc tạo).
+      // Không lấy theo phòng mới — tránh nhỏ→lớn làm đổi giá/bill theo Large.
+      const newRoom = await databaseService.rooms.findOne({ _id: newRoomObjectId })
+      if (newRoom?.roomType) {
+        updateData.actualRoomType = newRoom.roomType as RoomType
+      }
+      if (!currentSchedule.roomType && currentSchedule.originalRoomType) {
+        updateData.roomType = currentSchedule.originalRoomType
+      }
     }
 
     if (schedule.startTime) {
@@ -399,7 +409,8 @@ class RoomScheduleService {
       updateData.updatedBy = schedule.updatedBy
     }
 
-    if (schedule.roomType !== undefined) {
+    // Khi đổi phòng: bỏ qua roomType từ FE — schedule giữ size đã chốt
+    if (schedule.roomType !== undefined && !schedule.newRoomId) {
       updateData.roomType = schedule.roomType
     }
     if (schedule.note !== undefined) {
