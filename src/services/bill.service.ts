@@ -195,6 +195,16 @@ export function resolveBillRoomType(
   return bill?.roomType ?? schedule?.roomType ?? room?.roomType ?? 'Unknown Type'
 }
 
+/** Khớp room_type trong bảng giá với snapshot schedule (vd. Medium vs medium) — không phân biệt hoa thường. */
+function findPriceEntryByRoomType(
+  prices: Array<{ room_type?: string; price?: number }> | undefined,
+  roomType: string | RoomType | undefined
+): { room_type?: string; price?: number } | undefined {
+  if (!prices?.length || roomType === undefined || roomType === null) return undefined
+  const needle = String(roomType).trim().toLowerCase()
+  return prices.find((p) => String(p.room_type ?? '').trim().toLowerCase() === needle)
+}
+
 /** Express query/body đôi khi là string | string[]; chuỗi rỗng coi như không gửi — tránh rơi nhánh schedule.endTime khi admin đã truyền ISO. */
 function pickBillTimeParam(v: unknown): string | undefined {
   if (v === undefined || v === null) return undefined
@@ -499,8 +509,8 @@ export class BillService {
         })
       }
 
-      const priceEntry = defaultTimeSlot.prices.find((p: any) => p.room_type === roomType)
-      if (!priceEntry) {
+      const priceEntry = findPriceEntryByRoomType(defaultTimeSlot.prices, roomType)
+      if (!priceEntry || priceEntry.price === undefined) {
         throw new ErrorWithStatus({
           message: 'Không tìm thấy giá cho loại phòng ' + roomType,
           status: HTTP_STATUS_CODE.NOT_FOUND
@@ -510,8 +520,8 @@ export class BillService {
       return priceEntry.price
     }
 
-    const priceEntry = timeSlot.prices.find((p: any) => p.room_type === roomType)
-    if (!priceEntry) {
+    const priceEntry = findPriceEntryByRoomType(timeSlot.prices, roomType)
+    if (!priceEntry || priceEntry.price === undefined) {
       throw new ErrorWithStatus({
         message: 'Không tìm thấy giá cho loại phòng ' + roomType,
         status: HTTP_STATUS_CODE.NOT_FOUND
@@ -880,8 +890,8 @@ export class BillService {
     for (const timeSlotInfo of roomSlotsToCharge) {
       const { slot, overlapStart, overlapEnd } = timeSlotInfo
 
-      const priceEntry = slot.prices.find((p: any) => p.room_type === effectiveRoomType)
-      if (!priceEntry) continue
+      const priceEntry = findPriceEntryByRoomType(slot.prices, effectiveRoomType)
+      if (!priceEntry || priceEntry.price === undefined) continue
 
       const localOverlapStart = dayjs(overlapStart).tz('Asia/Ho_Chi_Minh')
       const localOverlapEnd = dayjs(overlapEnd).tz('Asia/Ho_Chi_Minh')
