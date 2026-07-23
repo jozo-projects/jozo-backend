@@ -6,7 +6,6 @@ import { ROOM_MESSAGES } from '~/constants/messages'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { ErrorWithStatus } from '~/models/Error'
 import redis from './redis.service'
-import fnbSalesMovementService from './fnbSalesMovement.service'
 import { roomMusicEventEmitter } from './roomMusic.service'
 import { EventEmitter } from 'events'
 import { RoomSchedule } from '~/models/schemas/RoomSchdedule.schema'
@@ -230,25 +229,14 @@ class RoomServices {
       }
     }
 
-    const roomScheduleId =
-      notification.orderData?.roomScheduleId || notification.orderData?.customerInfo?.roomScheduleId
-    if (!roomScheduleId) {
-      throw new ErrorWithStatus({
-        message: 'Missing room schedule in order notification',
-        status: HTTP_STATUS_CODE.BAD_REQUEST
-      })
-    }
-
+    // Không log fnb_sales_movements ở đây — đã ghi lúc client submit/add món.
+    // Ghi lại khi serve sẽ double-count systemSold kiểm kê.
     const deltas =
       notification.orderData?.itemDeltas ??
       (notification.orderData?.items ?? []).map((item) => ({
         itemId: item.itemId,
         delta: item.quantity
       }))
-
-    if (deltas.length > 0) {
-      await fnbSalesMovementService.logDeltas(deltas, 'karaoke', roomScheduleId, actorId)
-    }
 
     const servedAt = new Date()
     await redis.del(notificationKey)
