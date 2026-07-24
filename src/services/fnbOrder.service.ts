@@ -10,6 +10,7 @@ import {
   normalizeFnbOrder,
   orderFromSetPayload
 } from '~/utils/fnbOrderLines'
+import { getFnbBusinessDateRange, getFnbBusinessDateStr, VIETNAM_TZ } from '~/utils/fnbBusinessDate'
 import { resolveReportingMonthRange } from '~/utils/reportingPeriod'
 import databaseService from './database.service'
 import { CacheService } from './cache.service'
@@ -19,9 +20,9 @@ import fnbSalesMovementService from './fnbSalesMovement.service'
 
 dayjs.extend(utc)
 dayjs.extend(timezone)
-const VIETNAM_TZ = 'Asia/Ho_Chi_Minh'
 
-const FNB_STATS_CACHE_PREFIX = 'fnb:sales-stats'
+/** v2: period=day dùng ngày kinh doanh FNB (cắt 03:00), đồng bộ với systemSold kiểm kê. */
+const FNB_STATS_CACHE_PREFIX = 'fnb:sales-stats:v2'
 const FNB_STATS_CLOSED_PERIOD_TTL_SEC = 24 * 60 * 60
 const FNB_STATS_CURRENT_PERIOD_TTL_SEC = 5 * 60
 
@@ -208,8 +209,9 @@ class FnbOrderService {
   /**
    * Lấy thống kê FNB theo khoảng thời gian (ngày/tuần/tháng) theo giờ Việt Nam.
    * Karaoke: lọc theo statsDate trên bill (createdAt lúc tạo bill, fallback endTime cho bill cũ).
+   * period=day: ngày kinh doanh FNB [03:00 → 03:00 hôm sau) — cùng mốc với systemSold kiểm kê.
    * @param period 'day' | 'week' | 'month'
-   * @param dateStr Ngày theo VN (YYYY-MM-DD). Nếu không truyền: day = hôm nay, week = tuần hiện tại, month = kỳ báo cáo hiện tại (ngày 6 → ngày 5 tháng sau)
+   * @param dateStr Ngày theo VN (YYYY-MM-DD). Nếu không truyền: day = ngày KD hiện tại, week = tuần hiện tại, month = kỳ báo cáo hiện tại (ngày 6 → ngày 5 tháng sau)
    * @param category Lọc theo category: 'drink' | 'snack' (optional)
    * @param search Tìm theo tên item (optional, không phân biệt hoa thường)
    */
@@ -268,10 +270,16 @@ class FnbOrderService {
     let toDate: dayjs.Dayjs
 
     switch (period) {
-      case 'day':
-        fromDate = baseDate.startOf('day')
-        toDate = baseDate.endOf('day')
+      case 'day': {
+        // Đồng bộ với kiểm kê: ngày KD cắt 03:00 (không dùng 00:00–23:59 lịch).
+        // Tránh lệch phòng qua đêm — order tối hôm trước, bill chốt sau nửa đêm.
+        const businessDate = dateStr ?? getFnbBusinessDateStr(now)
+        const { from, to } = getFnbBusinessDateRange(businessDate)
+        fromDate = dayjs(from).tz(VIETNAM_TZ)
+        // getFnbBusinessDateRange trả [from, to); pipeline bill dùng $lte nên lùi 1ms.
+        toDate = dayjs(to).tz(VIETNAM_TZ).subtract(1, 'millisecond')
         break
+      }
       case 'week':
         // Tuần từ thứ 2 00:00 đến Chủ nhật 23:59:59.999 (theo VN). day(): 0 = Chủ nhật, 1 = Thứ 2
         fromDate =
@@ -286,9 +294,13 @@ class FnbOrderService {
         toDate = range.toDate
         break
       }
-      default:
-        fromDate = baseDate.startOf('day')
-        toDate = baseDate.endOf('day')
+      default: {
+        const businessDate = dateStr ?? getFnbBusinessDateStr(now)
+        const { from, to } = getFnbBusinessDateRange(businessDate)
+        fromDate = dayjs(from).tz(VIETNAM_TZ)
+        toDate = dayjs(to).tz(VIETNAM_TZ).subtract(1, 'millisecond')
+        break
+      }
     }
 
     const fromUtc = fromDate.toDate()
