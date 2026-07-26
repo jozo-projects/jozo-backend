@@ -4,6 +4,7 @@ import { IRoom, Room } from '~/models/schemas/Room.schema'
 import { ObjectId } from 'mongodb'
 import { ROOM_MESSAGES } from '~/constants/messages'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
+import { RoomStatus } from '~/constants/enum'
 import { ErrorWithStatus } from '~/models/Error'
 import redis from './redis.service'
 import { roomMusicEventEmitter } from './roomMusic.service'
@@ -45,6 +46,28 @@ export function serializeScheduleForSocket(schedule: RoomSchedule) {
 export async function resolveRoomIndex(roomObjectId: ObjectId): Promise<string | undefined> {
   const room = await databaseService.rooms.findOne({ _id: roomObjectId })
   return room?.roomId != null ? String(room.roomId) : undefined
+}
+
+/**
+ * Chặn gán/book phòng đang bảo trì (Room.status = maintenance).
+ */
+export async function assertRoomNotInMaintenance(roomId: ObjectId | string): Promise<void> {
+  const roomObjectId = typeof roomId === 'string' ? new ObjectId(roomId) : roomId
+  const room = await databaseService.rooms.findOne({ _id: roomObjectId })
+
+  if (!room) {
+    throw new ErrorWithStatus({
+      message: 'Room not found',
+      status: HTTP_STATUS_CODE.NOT_FOUND
+    })
+  }
+
+  if (room.status === RoomStatus.Maintenance) {
+    throw new ErrorWithStatus({
+      message: `Phòng ${room.roomName} đang bảo trì, không thể đặt/gán lịch`,
+      status: HTTP_STATUS_CODE.CONFLICT
+    })
+  }
 }
 
 export const emitScheduleChanged = (

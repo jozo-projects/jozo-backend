@@ -2,7 +2,7 @@ import { ObjectId } from 'mongodb'
 import dayjs from 'dayjs'
 import timezone from 'dayjs/plugin/timezone'
 import utc from 'dayjs/plugin/utc'
-import { RoomType, RoomScheduleStatus } from '~/constants/enum'
+import { RoomType, RoomScheduleStatus, RoomStatus } from '~/constants/enum'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { ErrorWithStatus } from '~/models/Error'
 import { RoomSchedule, BookingSource } from '~/models/schemas/RoomSchdedule.schema'
@@ -185,9 +185,12 @@ class OnlineBookingService {
   ): Promise<RoomAvailabilityResult | null> {
     console.log(`🔍 Tìm phòng ${requestedSize} với hardcode logic...`)
 
-    // Lấy tất cả phòng và sắp xếp theo roomId
-    const allRooms = await databaseService.rooms.find().sort({ roomId: 1 }).toArray()
-    console.log(`📋 Tìm thấy ${allRooms.length} phòng trong database`)
+    // Lấy phòng không đang bảo trì và sắp xếp theo roomId
+    const allRooms = await databaseService.rooms
+      .find({ status: { $ne: RoomStatus.Maintenance } })
+      .sort({ roomId: 1 })
+      .toArray()
+    console.log(`📋 Tìm thấy ${allRooms.length} phòng có thể book (đã loại maintenance)`)
 
     // Karaoke box: hardcode theo roomId. Dorm: chỉ các phòng có roomType dorm trên DB.
     const dormRooms = allRooms.filter((r) => roomTypeFieldToEnum(r.roomType) === RoomType.Dorm)
@@ -258,6 +261,11 @@ class OnlineBookingService {
    * Kiểm tra phòng có trống không
    */
   private async checkRoomAvailability(roomId: ObjectId, startTime: Date, endTime: Date): Promise<boolean> {
+    const room = await databaseService.rooms.findOne({ _id: roomId })
+    if (!room || room.status === RoomStatus.Maintenance) {
+      return false
+    }
+
     const existingSchedule = await databaseService.roomSchedule.findOne({
       roomId: roomId,
       status: { $nin: [RoomScheduleStatus.Cancelled, RoomScheduleStatus.Finished] },

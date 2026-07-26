@@ -1,5 +1,5 @@
 import { ObjectId } from 'mongodb'
-import { RoomScheduleStatus, RoomType } from '~/constants/enum'
+import { RoomScheduleStatus, RoomStatus, RoomType } from '~/constants/enum'
 import { RoomSchedule } from '~/models/schemas/RoomSchdedule.schema'
 import databaseService from './database.service'
 import { roomScheduleService } from './roomSchedule.service'
@@ -324,12 +324,13 @@ class BookingService {
         const rooms = await databaseService.rooms
           .find({
             roomType: { $regex: new RegExp(roomType, 'i') },
-            // Loại bỏ các phòng bị khóa khỏi kết quả tìm kiếm
-            _id: { $nin: LOCKED_ROOM_IDS.map((id) => new ObjectId(id)) }
+            // Loại bỏ các phòng bị khóa / đang bảo trì khỏi kết quả tìm kiếm
+            _id: { $nin: LOCKED_ROOM_IDS.map((id) => new ObjectId(id)) },
+            status: { $ne: RoomStatus.Maintenance }
           })
           .toArray()
         console.log(
-          `Found ${rooms.length} rooms matching room type ${roomType} (case insensitive, excluding locked rooms)`
+          `Found ${rooms.length} rooms matching room type ${roomType} (case insensitive, excluding locked/maintenance rooms)`
         )
 
         if (rooms.length === 0) {

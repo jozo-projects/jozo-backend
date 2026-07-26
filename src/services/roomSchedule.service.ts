@@ -1,7 +1,7 @@
 import { ObjectId } from 'mongodb'
 // import { IRoomScheduleRequestBody, IRoomScheduleRequestQuery } from '~/models/requests/RoomSchedule.request'
 import dayjs from 'dayjs'
-import { RoomScheduleStatus, RoomType } from '~/constants/enum'
+import { RoomScheduleStatus, RoomStatus, RoomType } from '~/constants/enum'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { ErrorWithStatus } from '~/models/Error'
 import { IRoomScheduleRequestBody, IRoomScheduleRequestQuery } from '~/models/requests/RoomSchedule.request'
@@ -10,7 +10,13 @@ import { generateUniqueBookingCode, parseDate, buildBookingCodeDuplicateFilter, 
 import databaseService from './database.service'
 import fnbOrderService from './fnbOrder.service'
 import redis from './redis.service'
-import { emitScheduleChanged, resolveRoomIndex, roomEventEmitter, type ScheduleChangeAction } from './room.service'
+import {
+  assertRoomNotInMaintenance,
+  emitScheduleChanged,
+  resolveRoomIndex,
+  roomEventEmitter,
+  type ScheduleChangeAction
+} from './room.service'
 // import { roomMusicServices } from './roomMusic.service' // tạm tắt auto-move queue khi đổi phòng
 
 type ClientBooking = {
@@ -208,6 +214,11 @@ class RoomScheduleService {
     // Validate và parse startTime, endTime dựa trên nghiệp vụ
     const { startTime, endTime } = this.validateScheduleTimes(schedule)
 
+    // Phòng đang bảo trì không được gán book/lịch sử dụng
+    if (schedule.status !== RoomScheduleStatus.Maintenance) {
+      await assertRoomNotInMaintenance(schedule.roomId)
+    }
+
     // Kiểm tra trùng lịch tại phòng
     await this.ensureNoOverlap(new ObjectId(schedule.roomId), startTime, endTime)
 
@@ -370,6 +381,7 @@ class RoomScheduleService {
         })
       }
 
+      await assertRoomNotInMaintenance(newRoomObjectId)
       await this.ensureNoOverlap(newRoomObjectId, targetStartTime, targetEndTime, currentSchedule._id)
 
       updateData.roomId = newRoomObjectId
@@ -902,7 +914,10 @@ class RoomScheduleService {
 
   /** Khớp field roomType trên physical room không phân biệt hoa thường (vd. dorm vs Dorm) */
   private physicalRoomQueryByEnum(roomType: RoomType) {
-    return { roomType: { $regex: new RegExp(`^${roomType}$`, 'i') } }
+    return {
+      roomType: { $regex: new RegExp(`^${roomType}$`, 'i') },
+      status: { $ne: RoomStatus.Maintenance }
+    }
   }
 
   private async notifyScheduleChanged(

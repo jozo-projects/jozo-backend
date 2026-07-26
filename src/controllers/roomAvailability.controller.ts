@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express'
 import { ObjectId } from 'mongodb'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import databaseService from '~/services/database.service'
-import { RoomType, RoomScheduleStatus } from '~/constants/enum'
+import { RoomType, RoomScheduleStatus, RoomStatus } from '~/constants/enum'
 import dayjs from 'dayjs'
 import timezone from 'dayjs/plugin/timezone'
 import utc from 'dayjs/plugin/utc'
@@ -42,8 +42,10 @@ export const checkRoomAvailability = async (req: Request, res: Response, next: N
       })
     }
 
-    // Build room filter
-    const roomFilter: any = {}
+    // Build room filter — loại phòng đang bảo trì
+    const roomFilter: any = {
+      status: { $ne: RoomStatus.Maintenance }
+    }
     if (roomType) {
       roomFilter.roomType = { $regex: new RegExp(roomType as string, 'i') }
     }
