@@ -22,7 +22,7 @@ giftRouter.get('/', protect([UserRole.Admin]), wrapRequestHandler(listGifts))
 // Endpoint public để app khác chỉ xem danh sách quà
 giftRouter.get('/public', wrapRequestHandler(listGifts))
 giftRouter.get('/room/:roomIndex', getRoomGiftValidator, wrapRequestHandler(getGiftForRoom))
-giftRouter.get('/:id', protect([UserRole.Admin]), wrapRequestHandler(getGiftById))
+giftRouter.get('/:id', protect([UserRole.Admin, UserRole.Staff]), wrapRequestHandler(getGiftById))
 giftRouter.post(
   '/',
   protect([UserRole.Admin]),
