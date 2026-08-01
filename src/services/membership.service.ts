@@ -135,10 +135,11 @@ class MembershipService {
     return target
   }
 
+  /** Điểm = floor((amount / currencyUnit) * pointPerCurrency), bám theo amount (vd 168k với 100k→10đ = 16đ). */
   private computeBasePoints(totalAmount: number, config: IMembershipConfig): number {
+    if (!totalAmount || totalAmount <= 0) return 0
     if (!config.currencyUnit || !config.pointPerCurrency) return 0
-    const unitBlock = Math.floor(totalAmount / config.currencyUnit)
-    return unitBlock * config.pointPerCurrency
+    return Math.floor((totalAmount / config.currencyUnit) * config.pointPerCurrency)
   }
 
   async computePointsForAmount(totalAmount: number): Promise<number> {
