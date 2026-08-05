@@ -56,7 +56,17 @@ export const testPrintController = async (req: Request, res: Response, next: Nex
  * @author QuangDoo
  */
 export const printController = async (req: Request, res: Response) => {
-  const { printerId, content, scheduleId, actualEndTime, actualStartTime, paymentMethod, promotionId } = req.body
+  const {
+    printerId,
+    content,
+    scheduleId,
+    actualEndTime,
+    actualStartTime,
+    paymentMethod,
+    promotionId,
+    phone,
+    customerPhone
+  } = req.body
 
   // Nếu có scheduleId, lấy dữ liệu hóa đơn và in
   if (scheduleId) {
@@ -74,7 +84,14 @@ export const printController = async (req: Request, res: Response) => {
       }
 
       // Lấy dữ liệu hóa đơn
-      const billData = await billService.getBill(scheduleId, actualEndTime, paymentMethod, promotionId, actualStartTime)
+      const billData = await billService.getBill(
+        scheduleId,
+        actualEndTime,
+        paymentMethod,
+        promotionId,
+        actualStartTime,
+        phone || customerPhone
+      )
 
       // Tạo nội dung hóa đơn dạng text
       const billContent = await billService.getBillText(billData)

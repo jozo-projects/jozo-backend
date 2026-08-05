@@ -13,6 +13,7 @@ import { ErrorWithStatus } from '~/models/Error'
 import { IBill } from '~/models/schemas/Bill.schema'
 import { aggregateLinesToLegacyMaps, normalizeFnbOrder } from '~/utils/fnbOrderLines'
 import { normalizeVietnamPhone } from '~/utils/common'
+import { buildStreakGiftBillLines, wrapBillItemName } from '~/utils/streakGiftBillLines'
 import databaseService from './database.service'
 import fnbMenuItemService from './fnbMenuItem.service'
 import fnbOrderService from './fnbOrder.service'
@@ -536,7 +537,8 @@ export class BillService {
     actualEndTime?: string | string[],
     paymentMethod?: string,
     promotionId?: string,
-    actualStartTime?: string | string[]
+    actualStartTime?: string | string[],
+    customerPhone?: string
   ): Promise<IBill> {
     // Validate ObjectId format for scheduleId
     if (!ObjectId.isValid(scheduleId)) {
@@ -691,6 +693,8 @@ export class BillService {
       totalPrice: number
       discountPercentage?: number
       discountName?: string
+      isStreakGift?: boolean
+      streakCount?: number
     }> = []
 
     // Sắp xếp các khung giờ theo thời gian bắt đầu
@@ -963,6 +967,11 @@ export class BillService {
       }
     }
 
+    // Quà streak đã phát trên schedule → line 0đ (không tính vào subtotal)
+    for (const line of buildStreakGiftBillLines(schedule.streakGifts)) {
+      timeSlotItems.push(line)
+    }
+
     // Lấy thông tin promotion: ưu tiên promotionId từ request, fallback từ schedule đã lưu lúc booked
     let activePromotion = undefined
     const effectivePromotionId = promotionId || schedule.promotionId?.toString()
@@ -1012,8 +1021,9 @@ export class BillService {
       }
 
       if (shouldApplyPromotion) {
-        // Thêm thông tin promotion vào từng item để hiển thị
+        // Thêm thông tin promotion vào từng item để hiển thị (bỏ qua line 0đ quà tặng)
         for (let i = 0; i < timeSlotItems.length; i++) {
+          if (timeSlotItems[i].price === 0 && timeSlotItems[i].totalPrice === 0) continue
           timeSlotItems[i].discountPercentage = activePromotion.discountPercentage
           timeSlotItems[i].discountName = activePromotion.name
         }
@@ -1037,7 +1047,50 @@ export class BillService {
       discountAmount = (subtotal * activePromotion.discountPercentage) / 100
     }
 
-    const totalAmount = Math.max(Math.floor((subtotal - discountAmount - giftDiscountAmount) / 1000) * 1000, 0)
+    // Membership: 1 nguồn duy nhất — phone request hoặc schedule.customerPhone
+    const membershipService = require('./membership.service').default
+    const resolvedPhoneRaw = customerPhone || schedule.customerPhone
+    const resolvedPhone = resolvedPhoneRaw
+      ? normalizeVietnamPhone(String(resolvedPhoneRaw)) || String(resolvedPhoneRaw).trim()
+      : undefined
+
+    let membershipInfo: IBill['membership'] | undefined
+    let membershipDiscountAmount = 0
+
+    if (resolvedPhone) {
+      const resolved = await membershipService.resolveMembershipByPhone(resolvedPhone)
+      if (resolved.found && resolved.user) {
+        const tierDiscount = resolved.tierDiscount
+        if (tierDiscount?.discountPercentage && tierDiscount.discountPercentage > 0) {
+          membershipDiscountAmount = (subtotal * tierDiscount.discountPercentage) / 100
+        } else if (tierDiscount?.discountAmount && tierDiscount.discountAmount > 0) {
+          membershipDiscountAmount = tierDiscount.discountAmount
+        }
+
+        membershipInfo = {
+          found: true,
+          phone: resolved.phone,
+          userId: resolved.user.userId,
+          name: resolved.user.name,
+          tier: resolved.user.tier,
+          discountPercentage: tierDiscount?.discountPercentage,
+          discountAmount: tierDiscount?.discountAmount,
+          note: tierDiscount?.note,
+          reason: !tierDiscount ? 'Hạng chưa có quyền lợi discount trong config' : undefined
+        }
+      } else {
+        membershipInfo = {
+          found: false,
+          phone: resolved.phone,
+          reason: resolved.reason
+        }
+      }
+    }
+
+    const totalAmount = Math.max(
+      Math.floor((subtotal - discountAmount - giftDiscountAmount - membershipDiscountAmount) / 1000) * 1000,
+      0
+    )
 
     const bill: IBill = {
       scheduleId: schedule._id,
@@ -1048,15 +1101,21 @@ export class BillService {
       createdAt: new Date(),
       createdBy: schedule.createdBy,
       note: schedule.note,
+      customerPhone: resolvedPhone || undefined,
+      userId: membershipInfo?.userId,
       items: timeSlotItems.map((item) => ({
         description: item.description,
         price: item.price,
         quantity: typeof item.quantity === 'number' ? parseFloat(item.quantity.toFixed(2)) : item.quantity, // Đảm bảo hiển thị đúng 2 chữ số thập phân
         discountPercentage: item.discountPercentage,
-        discountName: item.discountName
+        discountName: item.discountName,
+        isStreakGift: item.isStreakGift,
+        streakCount: item.streakCount
       })),
       totalAmount, // ĐÃ SỬA: tổng tiền đã trừ discount
       giftDiscountAmount: giftDiscountAmount > 0 ? giftDiscountAmount : undefined,
+      membershipDiscountAmount: membershipDiscountAmount > 0 ? membershipDiscountAmount : undefined,
+      membership: membershipInfo,
       paymentMethod,
       activePromotion: activePromotion
         ? {
@@ -1073,6 +1132,18 @@ export class BillService {
             discountPercentage: scheduleGift.discountPercentage,
             items: scheduleGift.items
           }
+        : undefined,
+      streakGifts: Array.isArray(schedule.streakGifts)
+        ? schedule.streakGifts.map((served) => ({
+            streakCount: Number(served.streakCount),
+            itemCount: Number(served.itemCount) || (served.items?.length ?? 0),
+            items: (served.items || []).map((item) => ({
+              itemId: item.itemId?.toString?.() ?? String(item.itemId),
+              name: item.name,
+              category: item.category,
+              quantity: item.quantity
+            }))
+          }))
         : undefined,
       actualEndTime: rawActualEndTime ? validatedEndTime : undefined,
       actualStartTime: rawActualStartTime ? startTime : undefined,
@@ -1120,8 +1191,7 @@ export class BillService {
 
     // Thêm mã hóa đơn nếu chưa có
     if (!bill.invoiceCode) {
-      const now = dayjs().tz('Asia/Ho_Chi_Minh')
-      bill.invoiceCode = `#${now.date().toString().padStart(2, '0')}${(now.month() + 1).toString().padStart(2, '0')}${now.hour().toString().padStart(2, '0')}${now.minute().toString().padStart(2, '0')}`
+      bill.invoiceCode = this.generateInvoiceCode()
     }
 
     return bill
@@ -1210,9 +1280,7 @@ export class BillService {
       const exactStartTime = billData.actualStartTime || billData.startTime
       const exactEndTime = billData.endTime || new Date()
 
-      // Tạo mã hóa đơn theo định dạng #DDMMHHMM (ngày, tháng, giờ, phút)
-      const now = dayjs().tz('Asia/Ho_Chi_Minh')
-      const invoiceCode = `#${now.date().toString().padStart(2, '0')}${(now.month() + 1).toString().padStart(2, '0')}${now.hour().toString().padStart(2, '0')}${now.minute().toString().padStart(2, '0')}`
+      const invoiceCode = billData.invoiceCode || this.generateInvoiceCode()
 
       // SỬ DỤNG TRỰC TIẾP billData thay vì tạo bill object mới
       const bill: IBill = {
@@ -1223,7 +1291,7 @@ export class BillService {
         createdAt: new Date(),
         actualEndTime: exactEndTime,
         actualStartTime: exactStartTime,
-        invoiceCode: invoiceCode
+        invoiceCode
       }
 
       // Gọi API in qua Socket.IO
@@ -1490,8 +1558,29 @@ export class BillService {
 
     printer.style('b').tableCustom(tableHeader)
 
-    // In chi tiết từng mục với định dạng tương tự printBill
-    bill.items.forEach((item) => {
+    // In chi tiết từng mục; quà streak in riêng theo nhóm mốc (tránh lặp "Streak N")
+    let streakGiftItems = bill.items.filter((item) => item.isStreakGift)
+    // Fallback: bill cũ / thiếu flag → lấy từ streakGifts metadata
+    if (streakGiftItems.length === 0 && Array.isArray(bill.streakGifts) && bill.streakGifts.length > 0) {
+      streakGiftItems = buildStreakGiftBillLines(bill.streakGifts).map((line) => ({
+        description: line.description,
+        price: 0,
+        quantity: line.quantity,
+        isStreakGift: true,
+        streakCount: line.streakCount
+      }))
+    }
+    const streakDescriptions = new Set(streakGiftItems.map((i) => `${i.description}\0${i.quantity}`))
+    const regularItems = bill.items.filter((item) => {
+      if (item.isStreakGift) return false
+      // Tránh in trùng khi fallback rebuild từ streakGifts
+      if (item.price === 0 && streakDescriptions.has(`${item.description}\0${item.quantity}`)) return false
+      // Bill cũ còn prefix "Streak N - ..."
+      if (/^Streak(\s+\d+)?\s*-/i.test(item.description)) return false
+      return true
+    })
+
+    regularItems.forEach((item) => {
       let description = item.description
       let quantity = item.quantity
 
@@ -1536,13 +1625,7 @@ export class BillService {
         description = description.replace(/ \(Giam (\d+)% - (.*)\)$/, '')
       }
 
-      const maxNameLength = 21
-      const nameLines = []
-      let desc = description
-      while (desc.length > 0) {
-        nameLines.push(desc.substring(0, maxNameLength))
-        desc = desc.substring(maxNameLength)
-      }
+      const nameLines = wrapBillItemName(description, 21)
 
       const formattedPrice = item.price.toLocaleString('vi-VN')
       const rawTotal = item.quantity * item.price
@@ -1550,7 +1633,7 @@ export class BillService {
 
       // In dòng đầu tiên với tên (phần đầu), SL, Đơn giá, Thành tiền
       printer.tableCustom([
-        { text: nameLines[0], width: 0.45, align: 'left' },
+        { text: nameLines[0] || '', width: 0.45, align: 'left' },
         { text: quantity.toString(), width: 0.15, align: 'center' },
         { text: formattedPrice, width: 0.2, align: 'right' },
         { text: formattedTotal, width: 0.2, align: 'right' }
@@ -1565,6 +1648,27 @@ export class BillService {
         ])
       }
     })
+
+    // Quà streak: in như món thường (0đ), bold để dễ nhận; không header "QUA STREAK N"
+    if (streakGiftItems.length > 0) {
+      for (const item of streakGiftItems) {
+        const nameLines = wrapBillItemName(removeVietnameseTones(item.description), 21)
+        printer.style('b').tableCustom([
+          { text: nameLines[0] || '', width: 0.45, align: 'left' },
+          { text: String(item.quantity), width: 0.15, align: 'center' },
+          { text: '0', width: 0.2, align: 'right' },
+          { text: '0', width: 0.2, align: 'right' }
+        ])
+        for (let i = 1; i < nameLines.length; i++) {
+          printer.style('b').tableCustom([
+            { text: nameLines[i], width: 0.45, align: 'left' },
+            { text: '', width: 0.15, align: 'center' },
+            { text: '', width: 0.2, align: 'right' },
+            { text: '', width: 0.2, align: 'right' }
+          ])
+        }
+      }
+    }
 
     // Hiển thị discount từ gift (discount_percentage hoặc discount_amount) - in thẳng hàng
     if (
@@ -1595,6 +1699,21 @@ export class BillService {
         { text: '', width: 0.15, align: 'center' },
         { text: '', width: 0.2, align: 'right' },
         { text: `-${computedGiftDiscount.toLocaleString('vi-VN')}`, width: 0.2, align: 'right' }
+      ])
+    }
+
+    // Hiển thị discount membership tier
+    if (bill.membershipDiscountAmount && bill.membershipDiscountAmount > 0) {
+      const tierLabel = bill.membership?.tier
+        ? bill.membership.discountPercentage
+          ? `TV ${bill.membership.tier} ${bill.membership.discountPercentage}%`
+          : `TV ${bill.membership.tier}`
+        : 'Membership'
+      printer.tableCustom([
+        { text: tierLabel, width: 0.45, align: 'left' },
+        { text: '', width: 0.15, align: 'center' },
+        { text: '', width: 0.2, align: 'right' },
+        { text: `-${bill.membershipDiscountAmount.toLocaleString('vi-VN')}`, width: 0.2, align: 'right' }
       ])
     }
 
@@ -1699,6 +1818,30 @@ export class BillService {
     return null
   }
 
+  /** Mã HĐ unique: #DDMMHHmmss + 3 ký tự random (tránh đụng khi 2 bill cùng phút). */
+  private generateInvoiceCode(): string {
+    const now = dayjs().tz('Asia/Ho_Chi_Minh')
+    const stamp = now.format('DDMMHHmmss')
+    const suffix = Math.random().toString(36).slice(2, 5).toUpperCase()
+    return `#${stamp}${suffix}`
+  }
+
+  /** Đảm bảo invoiceCode chưa tồn tại trên bills / rewardHistories. */
+  private async ensureUniqueInvoiceCode(preferred?: string): Promise<string> {
+    let code = preferred?.trim() || this.generateInvoiceCode()
+
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const [existsInBills, existsInRewards] = await Promise.all([
+        databaseService.bills.findOne({ invoiceCode: code }, { projection: { _id: 1 } }),
+        databaseService.rewardHistories.findOne({ 'meta.invoiceCode': code }, { projection: { _id: 1 } })
+      ])
+      if (!existsInBills && !existsInRewards) return code
+      code = this.generateInvoiceCode()
+    }
+
+    return `${this.generateInvoiceCode()}${Date.now().toString(36).slice(-2).toUpperCase()}`
+  }
+
   /**
    * Chuyển đổi giá tiền từ nhiều định dạng khác nhau sang số
    * Ví dụ: "10.000" -> 10000, "10,000" -> 10000, 10 -> 10000
@@ -1771,11 +1914,8 @@ export class BillService {
         })
       }
 
-      // 2. Tạo invoiceCode nếu chưa có
-      if (!billData.invoiceCode) {
-        const now = dayjs().tz('Asia/Ho_Chi_Minh')
-        billData.invoiceCode = `#${now.date().toString().padStart(2, '0')}${(now.month() + 1).toString().padStart(2, '0')}${now.hour().toString().padStart(2, '0')}${now.minute().toString().padStart(2, '0')}`
-      }
+      // 2. Tạo / chuẩn hoá invoiceCode unique (tránh 2 bill cùng phút đụng mã → mất điểm)
+      billData.invoiceCode = await this.ensureUniqueInvoiceCode(billData.invoiceCode)
 
       // 3. Kiểm tra xem invoiceCode đã được sử dụng để tích điểm chưa (tránh tích điểm trùng)
       const existingRewardHistory = await databaseService.rewardHistories.findOne({

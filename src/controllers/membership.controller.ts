@@ -1,7 +1,9 @@
 import { NextFunction, Request, Response } from 'express'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import membershipService from '~/services/membership.service'
+import fnBMenuItemService from '~/services/fnbMenuItem.service'
 import { ErrorWithStatus } from '~/models/Error'
+import { FnBCategory } from '~/constants/enum'
 
 export const getMembershipConfig = async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -59,6 +61,32 @@ export const getMembershipMe = async (req: Request, res: Response, next: NextFun
         ? error
         : new ErrorWithStatus({
             message: (error as Error)?.message || 'Không lấy được thông tin membership',
+            status: HTTP_STATUS_CODE.BAD_REQUEST
+          })
+    )
+  }
+}
+
+export const lookupMembershipByPhone = async (req: Request, res: Response, next: NextFunction) => {
+  const phone = typeof req.query.phone === 'string' ? req.query.phone : req.body?.phone
+  if (!phone) {
+    return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
+      message: 'Thiếu phone'
+    })
+  }
+
+  try {
+    const data = await membershipService.lookupByPhone(String(phone))
+    return res.status(HTTP_STATUS_CODE.OK).json({
+      message: 'Membership lookup',
+      result: data
+    })
+  } catch (error) {
+    return next(
+      error instanceof ErrorWithStatus
+        ? error
+        : new ErrorWithStatus({
+            message: (error as Error)?.message || 'Không tra cứu được membership',
             status: HTTP_STATUS_CODE.BAD_REQUEST
           })
     )
@@ -228,7 +256,13 @@ export const updateMemberStreak = async (req: Request, res: Response, next: Next
 export const getPendingGifts = async (req: Request, res: Response, next: NextFunction) => {
   // Support both query param (phone) and path param (userId)
   const identifier = req.query.phone ? String(req.query.phone) : req.params.id
-  
+  const category =
+    typeof req.query.category === 'string' &&
+    (req.query.category === FnBCategory.DRINK || req.query.category === FnBCategory.SNACK)
+      ? (req.query.category as FnBCategory)
+      : undefined
+  const scheduleId = typeof req.query.scheduleId === 'string' ? req.query.scheduleId : undefined
+
   if (!identifier) {
     return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
       message: 'Thiếu phone hoặc userId'
@@ -236,7 +270,7 @@ export const getPendingGifts = async (req: Request, res: Response, next: NextFun
   }
 
   try {
-    const data = await membershipService.getPendingAndEligibleGifts(identifier)
+    const data = await membershipService.getPendingAndEligibleGifts(identifier, { category, scheduleId })
     return res.status(HTTP_STATUS_CODE.OK).json({
       message: 'Streak gifts',
       result: data
@@ -253,9 +287,34 @@ export const getPendingGifts = async (req: Request, res: Response, next: NextFun
   }
 }
 
+export const getStreakGiftItems = async (req: Request, res: Response, next: NextFunction) => {
+  const category =
+    typeof req.query.category === 'string' &&
+    (req.query.category === FnBCategory.DRINK || req.query.category === FnBCategory.SNACK)
+      ? (req.query.category as FnBCategory)
+      : undefined
+
+  try {
+    const selectableItems = await fnBMenuItemService.getSelectableStockItems({ category })
+    return res.status(HTTP_STATUS_CODE.OK).json({
+      message: 'Selectable streak gift items',
+      result: { selectableItems }
+    })
+  } catch (error) {
+    return next(
+      error instanceof ErrorWithStatus
+        ? error
+        : new ErrorWithStatus({
+            message: (error as Error)?.message || 'Không lấy được danh sách món',
+            status: HTTP_STATUS_CODE.BAD_REQUEST
+          })
+    )
+  }
+}
+
 export const claimGift = async (req: Request, res: Response, next: NextFunction) => {
   // Support both userId/phone and streakCount
-  const { userIdOrPhone, phone, userId, streakCount, scheduleId } = req.body
+  const { userIdOrPhone, phone, userId, streakCount, scheduleId, items } = req.body
   const staffId = req.decoded_authorization?.user_id
 
   // Flexible input: userIdOrPhone, phone, or userId
@@ -268,7 +327,13 @@ export const claimGift = async (req: Request, res: Response, next: NextFunction)
   }
 
   try {
-    const result = await membershipService.claimStreakGift(identifier, Number(streakCount), scheduleId, staffId)
+    const result = await membershipService.claimStreakGift(
+      identifier,
+      Number(streakCount),
+      scheduleId,
+      staffId,
+      Array.isArray(items) ? items : []
+    )
     return res.status(HTTP_STATUS_CODE.OK).json({
       message: 'Quà streak đã được ghi nhận',
       result
@@ -279,6 +344,95 @@ export const claimGift = async (req: Request, res: Response, next: NextFunction)
         ? error
         : new ErrorWithStatus({
             message: (error as Error)?.message || 'Không thể claim gift',
+            status: HTTP_STATUS_CODE.BAD_REQUEST
+          })
+    )
+  }
+}
+
+/** POST body: { scheduleId, streakCount, items: [{ itemId, quantity? }] } */
+export const addStreakGiftItems = async (req: Request, res: Response, next: NextFunction) => {
+  const { scheduleId, streakCount, items } = req.body
+  if (!scheduleId || !streakCount || !Array.isArray(items) || items.length === 0) {
+    return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
+      message: 'Thiếu scheduleId, streakCount hoặc items'
+    })
+  }
+
+  try {
+    const result = await membershipService.addStreakGiftItems(scheduleId, Number(streakCount), items)
+    return res.status(HTTP_STATUS_CODE.OK).json({
+      message: 'Đã thêm món quà streak',
+      result
+    })
+  } catch (error) {
+    return next(
+      error instanceof ErrorWithStatus
+        ? error
+        : new ErrorWithStatus({
+            message: (error as Error)?.message || 'Không thể thêm món quà',
+            status: HTTP_STATUS_CODE.BAD_REQUEST
+          })
+    )
+  }
+}
+
+/** PATCH body: { scheduleId, streakCount, itemId, quantity } — quantity=0 = xoá */
+export const updateStreakGiftItem = async (req: Request, res: Response, next: NextFunction) => {
+  const { scheduleId, streakCount, itemId, quantity } = req.body
+  if (!scheduleId || !streakCount || !itemId || quantity === undefined || quantity === null) {
+    return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
+      message: 'Thiếu scheduleId, streakCount, itemId hoặc quantity'
+    })
+  }
+
+  try {
+    const result = await membershipService.updateStreakGiftItemQuantity(
+      scheduleId,
+      Number(streakCount),
+      String(itemId),
+      Number(quantity)
+    )
+    return res.status(HTTP_STATUS_CODE.OK).json({
+      message: Number(quantity) === 0 ? 'Đã xoá món quà streak' : 'Đã cập nhật số lượng món quà',
+      result
+    })
+  } catch (error) {
+    return next(
+      error instanceof ErrorWithStatus
+        ? error
+        : new ErrorWithStatus({
+            message: (error as Error)?.message || 'Không thể cập nhật món quà',
+            status: HTTP_STATUS_CODE.BAD_REQUEST
+          })
+    )
+  }
+}
+
+/** DELETE body hoặc query: { scheduleId, streakCount, itemId } */
+export const removeStreakGiftItem = async (req: Request, res: Response, next: NextFunction) => {
+  const scheduleId = (req.body?.scheduleId || req.query.scheduleId) as string | undefined
+  const streakCount = (req.body?.streakCount || req.query.streakCount) as string | number | undefined
+  const itemId = (req.body?.itemId || req.query.itemId) as string | undefined
+
+  if (!scheduleId || !streakCount || !itemId) {
+    return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
+      message: 'Thiếu scheduleId, streakCount hoặc itemId'
+    })
+  }
+
+  try {
+    const result = await membershipService.removeStreakGiftItem(scheduleId, Number(streakCount), String(itemId))
+    return res.status(HTTP_STATUS_CODE.OK).json({
+      message: 'Đã xoá món quà streak (hoàn kho + trả quota)',
+      result
+    })
+  } catch (error) {
+    return next(
+      error instanceof ErrorWithStatus
+        ? error
+        : new ErrorWithStatus({
+            message: (error as Error)?.message || 'Không thể xoá món quà',
             status: HTTP_STATUS_CODE.BAD_REQUEST
           })
     )

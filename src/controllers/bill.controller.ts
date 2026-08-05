@@ -40,7 +40,7 @@ const getRevenueViewerUserId = async (req: Request): Promise<string | undefined 
 
 export const getBill = async (req: Request, res: Response) => {
   const { scheduleId } = req.params
-  const { actualEndTime, actualStartTime, promotionId } = req.query
+  const { actualEndTime, actualStartTime, promotionId, phone, customerPhone } = req.query
 
   // Validate ObjectId format for scheduleId
   if (!ObjectId.isValid(scheduleId)) {
@@ -54,7 +54,8 @@ export const getBill = async (req: Request, res: Response) => {
     actualEndTime as string,
     undefined,
     promotionId as string,
-    actualStartTime as string
+    actualStartTime as string,
+    (phone as string) || (customerPhone as string)
   )
 
   return res.status(HTTP_STATUS_CODE.OK).json({
@@ -65,7 +66,7 @@ export const getBill = async (req: Request, res: Response) => {
 
 export const printBill = async (req: Request, res: Response) => {
   const { scheduleId } = req.params
-  const { actualEndTime, actualStartTime, paymentMethod, promotionId } = req.body
+  const { actualEndTime, actualStartTime, paymentMethod, promotionId, phone, customerPhone } = req.body
 
   // Validate ObjectId format for scheduleId
   if (!ObjectId.isValid(scheduleId)) {
@@ -79,7 +80,8 @@ export const printBill = async (req: Request, res: Response) => {
     actualEndTime as string,
     paymentMethod,
     promotionId as string,
-    actualStartTime as string
+    actualStartTime as string,
+    phone || customerPhone
   )
   billData.completedBy = billData.completedBy || req.decoded_authorization?.user_id
 

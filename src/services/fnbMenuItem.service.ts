@@ -164,6 +164,132 @@ class FnBMenuItemService {
     }
   }
 
+  /**
+   * Item orderable còn hàng: leaf/variant (không list parent hasVariant),
+   * active (+ parent active), inventory.quantity > 0.
+   */
+  async getSelectableStockItems(options?: {
+    category?: FnBCategory
+  }): Promise<
+    Array<{
+      itemId: string
+      name: string
+      category: FnBCategory
+      quantity: number
+      price: number
+      image?: string
+      parentId: string | null
+    }>
+  > {
+    const filter: Record<string, unknown> = {
+      ...ACTIVE_MENU_ITEM_FILTER,
+      hasVariant: { $ne: true },
+      'inventory.quantity': { $gt: 0 }
+    }
+    if (options?.category) {
+      filter.category = options.category
+    }
+
+    const items = await this.collection.find(filter).toArray()
+    const parentIds = [
+      ...new Set(items.map((item) => item.parentId).filter((id): id is string => Boolean(id && id !== '')))
+    ]
+    const parents =
+      parentIds.length > 0
+        ? await this.collection
+            .find({ _id: { $in: parentIds.map((id) => new ObjectId(id)) } })
+            .toArray()
+        : []
+    const parentById = new Map(parents.map((p) => [p._id!.toString(), p]))
+
+    const result: Array<{
+      itemId: string
+      name: string
+      category: FnBCategory
+      quantity: number
+      price: number
+      image?: string
+      parentId: string | null
+    }> = []
+
+    for (const item of items) {
+      if (!item._id) continue
+      const parentId = item.parentId && item.parentId !== '' ? item.parentId : null
+      if (parentId) {
+        const parent = parentById.get(parentId)
+        if (!parent || !isMenuItemActive(parent)) continue
+      }
+
+      const displayName = parentId
+        ? `${parentById.get(parentId)?.name ?? ''} - ${item.name}`.replace(/^ - /, '')
+        : item.name
+
+      result.push({
+        itemId: item._id.toString(),
+        name: displayName,
+        category: item.category,
+        quantity: item.inventory?.quantity ?? 0,
+        price: item.price,
+        image: item.image,
+        parentId
+      })
+    }
+
+    return result
+  }
+
+  /** Trừ kho atomic; throw nếu không đủ stock / không tồn tại. */
+  async deductStock(itemId: string, quantity: number): Promise<FnBMenuItem> {
+    if (!ObjectId.isValid(itemId) || quantity <= 0) {
+      throw new ErrorWithStatus({
+        message: 'itemId hoặc quantity không hợp lệ',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
+    }
+
+    const result = await this.collection.findOneAndUpdate(
+      {
+        _id: new ObjectId(itemId),
+        ...ACTIVE_MENU_ITEM_FILTER,
+        hasVariant: { $ne: true },
+        'inventory.quantity': { $gte: quantity }
+      },
+      {
+        $inc: { 'inventory.quantity': -quantity },
+        $set: { 'inventory.lastUpdated': new Date(), updatedAt: new Date() }
+      },
+      { returnDocument: 'after' }
+    )
+
+    const updated = result as FnBMenuItem | null
+    if (!updated?._id) {
+      const existing = await this.getMenuItemById(itemId)
+      if (!existing) {
+        throw new ErrorWithStatus({
+          message: `Không tìm thấy món ${itemId}`,
+          status: HTTP_STATUS_CODE.NOT_FOUND
+        })
+      }
+      throw new ErrorWithStatus({
+        message: `Không đủ tồn kho cho món ${existing.name}. Available: ${existing.inventory?.quantity ?? 0}, Required: ${quantity}`,
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
+    }
+
+    return updated
+  }
+
+  async restoreStock(itemId: string, quantity: number): Promise<void> {
+    if (!ObjectId.isValid(itemId) || quantity <= 0) return
+    await this.collection.updateOne(
+      { _id: new ObjectId(itemId) },
+      {
+        $inc: { 'inventory.quantity': quantity },
+        $set: { 'inventory.lastUpdated': new Date(), updatedAt: new Date() }
+      }
+    )
+  }
+
   async cleanupMenuItems(dryRun = true): Promise<MenuItemCleanupResult> {
     const allItems = await this.getAllMenuItems()
     const existingIds = new Set(allItems.map((item) => item._id!.toString()))

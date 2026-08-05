@@ -16,9 +16,14 @@ export interface IBill {
     originalPrice?: number
     discountPercentage?: number
     discountName?: string
+    /** Line quà streak (0đ) — in bill nhóm theo mốc, không lặp prefix. */
+    isStreakGift?: boolean
+    streakCount?: number
   }>
   totalAmount: number
   giftDiscountAmount?: number
+  /** Số tiền giảm từ membership tier (đã trừ vào totalAmount). */
+  membershipDiscountAmount?: number
   startTime: Date
   endTime: Date
   createdAt: Date
@@ -28,6 +33,22 @@ export interface IBill {
   userId?: ObjectId | string
   customerPhone?: string
   note?: string
+  /**
+   * Thông tin membership áp vào bill khi nhập SĐT.
+   * Checkout chỉ cần đọc field này từ GET /bill — không cần gọi /lookup riêng.
+   */
+  membership?: {
+    found: boolean
+    phone: string
+    userId?: string
+    name?: string | null
+    tier?: string
+    discountPercentage?: number
+    discountAmount?: number
+    note?: string
+    /** Khi found=false: lý do không áp được (không tìm thấy / không có benefit...) */
+    reason?: string
+  }
   activePromotion?: {
     name: string
     discountPercentage: number
@@ -41,9 +62,20 @@ export interface IBill {
     discountAmount?: number
     items?: GiftBundleItem[]
   }
+  /** Quà streak đã phát trong session (snapshot; line 0đ cũng nằm trong items). */
+  streakGifts?: Array<{
+    streakCount: number
+    itemCount: number
+    items: Array<{
+      itemId: string
+      name: string
+      category?: string
+      quantity: number
+    }>
+  }>
   actualEndTime?: Date
   actualStartTime?: Date
-  invoiceCode?: string // Mã hóa đơn với format #DDMMHHMM
+  invoiceCode?: string // Mã hóa đơn: #DDMMHHmmss + 3 ký tự random
   fnbOrder?: {
     lines?: FNBOrderLine[]
     drinks: Record<string, number>
@@ -67,9 +99,12 @@ export class Bill {
     originalPrice?: number
     discountPercentage?: number
     discountName?: string
+    isStreakGift?: boolean
+    streakCount?: number
   }>
   totalAmount!: number
   giftDiscountAmount?: number
+  membershipDiscountAmount?: number
   createdAt!: Date
   createdBy?: string
   completedBy?: string
@@ -77,6 +112,17 @@ export class Bill {
   userId?: ObjectId
   customerPhone?: string
   note?: string
+  membership?: {
+    found: boolean
+    phone: string
+    userId?: string
+    name?: string | null
+    tier?: string
+    discountPercentage?: number
+    discountAmount?: number
+    note?: string
+    reason?: string
+  }
   activePromotion?: {
     name: string
     discountPercentage: number
@@ -90,8 +136,18 @@ export class Bill {
     discountAmount?: number
     items?: GiftBundleItem[]
   }
+  streakGifts?: Array<{
+    streakCount: number
+    itemCount: number
+    items: Array<{
+      itemId: string
+      name: string
+      category?: string
+      quantity: number
+    }>
+  }>
   actualEndTime!: Date
-  invoiceCode?: string // Mã hóa đơn với format #DDMMHHMM
+  invoiceCode?: string // Mã hóa đơn: #DDMMHHmmss + 3 ký tự random
 
   /**
    * Tạo mới một Bill

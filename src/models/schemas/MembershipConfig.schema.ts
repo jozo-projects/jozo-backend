@@ -14,7 +14,8 @@ export interface IBonusRules {
 export interface IStreakReward {
   count: number
   bonusPoints: number
-  giftId?: ObjectId
+  /** Số món FNB staff được chọn khi phát quà mốc này. */
+  itemCount?: number
 }
 
 export interface IStreakConfig {
@@ -22,8 +23,17 @@ export interface IStreakConfig {
   rewards: IStreakReward[]
 }
 
-export interface ITierGiftBenefit {
-  giftId: ObjectId
+export interface ITierDiscountBenefit {
+  /**
+   * Discount theo % (ví dụ 10 => giảm 10%).
+   * Chỉ được khai báo 1 trong 2: discountPercentage hoặc discountAmount.
+   */
+  discountPercentage?: number
+  /**
+   * Discount số tiền cố định (VND).
+   * Chỉ được khai báo 1 trong 2: discountPercentage hoặc discountAmount.
+   */
+  discountAmount?: number
   note?: string
 }
 
@@ -32,7 +42,7 @@ export interface IMembershipConfig {
   currencyUnit: number
   pointPerCurrency: number
   tierThresholds: Record<string, number>
-  tierBenefits?: Record<string, ITierGiftBenefit[]>
+  tierBenefits?: Record<string, ITierDiscountBenefit[]>
   bonusRules?: IBonusRules
   streak?: IStreakConfig
   dailySelfClaimLimitPerPhone?: number
@@ -45,7 +55,7 @@ export class MembershipConfig {
   currencyUnit: number
   pointPerCurrency: number
   tierThresholds: Record<string, number>
-  tierBenefits?: Record<string, ITierGiftBenefit[]>
+  tierBenefits?: Record<string, ITierDiscountBenefit[]>
   bonusRules?: IBonusRules
   streak?: IStreakConfig
   dailySelfClaimLimitPerPhone: number
@@ -72,8 +82,8 @@ export class MembershipConfig {
       ({
         windowDays: 14,
         rewards: [
-          { count: 5, bonusPoints: 10 },
-          { count: 10, bonusPoints: 20 }
+          { count: 5, bonusPoints: 10, itemCount: 1 },
+          { count: 10, bonusPoints: 20, itemCount: 2 }
         ]
       } as IStreakConfig)
     this.dailySelfClaimLimitPerPhone = config?.dailySelfClaimLimitPerPhone ?? 1

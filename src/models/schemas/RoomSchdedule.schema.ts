@@ -3,13 +3,18 @@ import { RoomScheduleStatus, RoomType } from '~/constants/enum'
 import { AddSongRequestBody } from '~/models/requests/Song.request'
 import { ScheduleGift } from '~/models/schemas/Gift.schema'
 
+export interface StreakGiftServedItem {
+  itemId: ObjectId
+  name: string
+  category?: string
+  quantity: number
+}
+
 export interface StreakGiftServed {
   rewardHistoryId: ObjectId
-  giftId: ObjectId
-  giftName: string
-  giftType: string
-  giftImage?: string
   streakCount: number
+  itemCount: number
+  items: StreakGiftServedItem[]
   servedBy: ObjectId
   servedAt: Date
 }
