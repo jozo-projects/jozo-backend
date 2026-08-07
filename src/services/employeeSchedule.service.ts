@@ -23,6 +23,7 @@ import { HourlyRateMap, HourlyShiftMap } from '~/models/schemas/EmployeeSalarySn
 import { EmployeeSchedule, IEmployeeSalarySnapshotInSchedule } from '~/models/schemas/EmployeeSchedule.schema'
 import databaseService from './database.service'
 import notificationService from './notification.service'
+import staffErrorLogService from './staffErrorLog.service'
 
 dayjs.extend(utc)
 dayjs.extend(timezone)
@@ -227,18 +228,22 @@ class EmployeeScheduleService {
     }
 
     // Filter theo date/week
+    let rangeStart: Date | undefined
+    let rangeEnd: Date | undefined
     if (filter.filterType === 'day' && filter.date) {
-      const dayStart = dayjs(filter.date).startOf('day').toDate()
-      const dayEnd = dayjs(filter.date).endOf('day').toDate()
-      query.date = { $gte: dayStart, $lte: dayEnd }
+      rangeStart = dayjs(filter.date).startOf('day').toDate()
+      rangeEnd = dayjs(filter.date).endOf('day').toDate()
+      query.date = { $gte: rangeStart, $lte: rangeEnd }
     } else if (filter.filterType === 'week' && filter.startDate) {
-      const weekStart = dayjs(filter.startDate).startOf('isoWeek').toDate()
-      const weekEnd = dayjs(filter.startDate).endOf('isoWeek').toDate()
-      query.date = { $gte: weekStart, $lte: weekEnd }
+      rangeStart = dayjs(filter.startDate).startOf('isoWeek').toDate()
+      rangeEnd = dayjs(filter.startDate).endOf('isoWeek').toDate()
+      query.date = { $gte: rangeStart, $lte: rangeEnd }
     } else if (filter.startDate && filter.endDate) {
+      rangeStart = dayjs(filter.startDate).startOf('day').toDate()
+      rangeEnd = dayjs(filter.endDate).endOf('day').toDate()
       query.date = {
-        $gte: dayjs(filter.startDate).startOf('day').toDate(),
-        $lte: dayjs(filter.endDate).endOf('day').toDate()
+        $gte: rangeStart,
+        $lte: rangeEnd
       }
     }
 
@@ -397,6 +402,14 @@ class EmployeeScheduleService {
     const inProgress = statusCount['in-progress']
     const upcoming = statusCount.approved
 
+    const deductionUserId = !isAdmin && requestUserId ? requestUserId : filter.userId && isAdmin ? filter.userId : undefined
+    const { totalDeductions, deductionCount } = await staffErrorLogService.sumActivePenalties({
+      userId: deductionUserId,
+      startDate: rangeStart,
+      endDate: rangeEnd
+    })
+    const netSalary = Math.max(0, totalSalary - totalDeductions)
+
     return {
       schedulesByDate,
       summary: {
@@ -406,6 +419,9 @@ class EmployeeScheduleService {
         inProgress,
         upcoming,
         totalSalary,
+        totalDeductions,
+        deductionCount,
+        netSalary,
         byStatus: statusCount
       }
     }

@@ -119,3 +119,13 @@ export enum RewardSource {
   Tier = 'tier',
   Streak = 'streak'
 }
+
+export enum StaffErrorLogType {
+  Warning = 'warning',
+  Penalty = 'penalty'
+}
+
+export enum StaffErrorLogStatus {
+  Active = 'active',
+  Cancelled = 'cancelled'
+}

@@ -33,6 +33,8 @@ import { EmployeeSalaryConfig } from '~/models/schemas/EmployeeSalaryConfig.sche
 import { EmployeeSalarySpecialDay } from '~/models/schemas/EmployeeSalarySpecialDay.schema'
 import { IFnbShiftCount, IFnbShiftCountDayItemMeta } from '~/models/schemas/FnbShiftCount.schema'
 import { IFnbSalesMovement } from '~/models/schemas/FnbSalesMovement.schema'
+import { IStaffErrorPreset } from '~/models/schemas/StaffErrorPreset.schema'
+import { IStaffErrorLog } from '~/models/schemas/StaffErrorLog.schema'
 dotenv.config()
 dotenv.config({ path: '.env.local', override: true })
 
@@ -96,6 +98,11 @@ class DatabaseService {
       await this.db.collection('fnb_sales_movements').createIndex({ itemId: 1, createdAt: 1 })
       await this.db.collection('fnb_sales_movements').createIndex({ createdAt: 1 })
       await this.db.collection('fnb_sales_movements').createIndex({ createdBy: 1, createdAt: 1 })
+      await this.db.collection('staff_error_presets').createIndex({ code: 1 }, { unique: true })
+      await this.db.collection('staff_error_presets').createIndex({ isActive: 1 })
+      await this.db.collection('staff_error_logs').createIndex({ userId: 1, occurredAt: -1 })
+      await this.db.collection('staff_error_logs').createIndex({ type: 1, status: 1, occurredAt: -1 })
+      await this.db.collection('staff_error_logs').createIndex({ presetId: 1 })
       await this.db.collection('bills').createIndex({ createdAt: 1 })
       await this.db.collection('bills').createIndex({ endTime: 1 })
       await this.db.collection('bills').createIndex({ scheduleId: 1, endTime: -1, createdAt: -1 })
@@ -247,6 +254,14 @@ class DatabaseService {
 
   get fnbSalesMovements(): Collection<IFnbSalesMovement> {
     return this.db.collection('fnb_sales_movements')
+  }
+
+  get staffErrorPresets(): Collection<IStaffErrorPreset> {
+    return this.db.collection('staff_error_presets')
+  }
+
+  get staffErrorLogs(): Collection<IStaffErrorLog> {
+    return this.db.collection('staff_error_logs')
   }
 
   // Cho phép lấy collection bất kỳ

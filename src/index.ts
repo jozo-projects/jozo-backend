@@ -18,6 +18,7 @@ import coffeeSessionRouter from '~/routes/coffeeSession.routes'
 import coffeeTableRouter from '~/routes/coffeeTable.routes'
 import customizationGroupTemplateRouter from '~/routes/customizationGroupTemplate.routes'
 import employeeScheduleRouter from '~/routes/employeeSchedule.routes'
+import staffErrorLogRouter from '~/routes/staffErrorLog.routes'
 import fileRouter from '~/routes/file.routes'
 import fnbMenuRouter from '~/routes/fnbMenu.routes'
 import fnbMenuItemRouter from '~/routes/fnbMenuItem.routes'
@@ -166,6 +167,7 @@ app.use('/print', printRouter)
 app.use('/fnb-menu-item', fnbMenuItemRouter)
 app.use('/fnb-shift-counts', fnbShiftCountRouter)
 app.use('/employee-schedules', employeeScheduleRouter)
+app.use('/staff-error-logs', staffErrorLogRouter)
 app.use('/notifications', notificationRouter)
 app.use('/membership', membershipRouter)
 app.use('/coffee-tables', coffeeTableRouter)

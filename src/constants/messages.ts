@@ -246,6 +246,32 @@ export const GAME_MESSAGES = {
   DELETE_GAME_SUCCESS: 'Xóa game thành công'
 } as const
 
+export const STAFF_ERROR_LOG_MESSAGES = {
+  CREATE_PRESET_SUCCESS: 'Tạo loại lỗi thành công',
+  UPDATE_PRESET_SUCCESS: 'Cập nhật loại lỗi thành công',
+  DELETE_PRESET_SUCCESS: 'Xóa loại lỗi thành công',
+  GET_PRESETS_SUCCESS: 'Lấy danh sách loại lỗi thành công',
+  PRESET_NOT_FOUND: 'Không tìm thấy loại lỗi',
+  PRESET_CODE_EXISTS: 'Mã loại lỗi đã tồn tại',
+  CREATE_LOG_SUCCESS: 'Ghi log lỗi staff thành công',
+  GET_LOGS_SUCCESS: 'Lấy danh sách log lỗi thành công',
+  GET_LOG_BY_ID_SUCCESS: 'Lấy chi tiết log lỗi thành công',
+  CANCEL_LOG_SUCCESS: 'Hủy log lỗi thành công',
+  LOG_NOT_FOUND: 'Không tìm thấy log lỗi',
+  LOG_ALREADY_CANCELLED: 'Log lỗi đã bị hủy',
+  INVALID_TYPE: 'Loại log không hợp lệ (warning hoặc penalty)',
+  INVALID_STATUS: 'Trạng thái log không hợp lệ',
+  INVALID_AMOUNT: 'Số tiền phạt phải là số > 0',
+  PENALTY_AMOUNT_REQUIRED: 'Penalty cần số tiền > 0 (từ preset hoặc nhập tay)',
+  INVALID_USER_ID: 'userId không hợp lệ',
+  USER_NOT_FOUND: 'Không tìm thấy nhân viên',
+  INVALID_PRESET_ID: 'presetId không hợp lệ',
+  INVALID_DATE: 'Ngày không hợp lệ',
+  NOTE_REQUIRED: 'Ghi chú không được để trống',
+  TITLE_REQUIRED: 'Tiêu đề không được để trống',
+  UNAUTHORIZED_ACCESS: 'Bạn không có quyền truy cập log lỗi này'
+} as const
+
 export const FNB_SHIFT_COUNT_MESSAGES = {
   GET_ITEMS_TEMPLATE_SUCCESS: 'Lấy danh sách món kiểm kê thành công',
   GET_SHIFT_COUNT_SUCCESS: 'Lấy kiểm kê FNB thành công',
