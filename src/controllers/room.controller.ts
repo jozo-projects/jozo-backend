@@ -217,6 +217,18 @@ export const solveOrderController = async (req: Request, res: Response, next: Ne
   }
 }
 
+export const getPendingOrderNotificationsController = async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const result = await roomServices.listPendingOrderNotifications()
+    res.status(HTTP_STATUS_CODE.OK).json({
+      message: 'Pending order notifications fetched successfully',
+      result
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
 /**
  * @description turn off all videos in room
  * @path /rooms/turn-off-videos

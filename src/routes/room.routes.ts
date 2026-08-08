@@ -7,6 +7,7 @@ import {
   getRoomController,
   getRoomByRoomIdController,
   getRoomsController,
+  getPendingOrderNotificationsController,
   getDeviceConnectionsController,
   solveRequestController,
   solveOrderController,
@@ -47,6 +48,12 @@ roomRouter.post(
  * @author QuangDoo
  */
 roomRouter.get('/', protect([UserRole.Admin, UserRole.Staff]), wrapRequestHandler(getRoomsController))
+
+roomRouter.get(
+  '/order-notifications/pending',
+  protect([UserRole.Admin, UserRole.Staff]),
+  wrapRequestHandler(getPendingOrderNotificationsController)
+)
 
 /**
  * @description Snapshot thiết bị control/video đang kết nối theo phòng

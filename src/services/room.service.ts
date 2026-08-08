@@ -10,6 +10,9 @@ import redis from './redis.service'
 import { roomMusicEventEmitter } from './roomMusic.service'
 import { EventEmitter } from 'events'
 import { RoomSchedule } from '~/models/schemas/RoomSchdedule.schema'
+import fnbOrderService from './fnbOrder.service'
+import fnbSalesMovementService from './fnbSalesMovement.service'
+import { normalizeFnbOrder } from '~/utils/fnbOrderLines'
 
 export const roomEventEmitter = new EventEmitter()
 
@@ -180,6 +183,36 @@ class RoomServices {
     return true
   }
 
+  async listPendingOrderNotifications(): Promise<
+    Array<{ type: 'new_order'; roomId: string; message: string; timestamp: number; orderData: any }>
+  > {
+    const keys = await redis.keys('room_*_new_order_*')
+    const out: Array<{ type: 'new_order'; roomId: string; message: string; timestamp: number; orderData: any }> = []
+
+    for (const key of keys) {
+      const raw = await redis.get(key)
+      if (!raw) continue
+      try {
+        const parsed = JSON.parse(raw) as { message?: string; timestamp?: number; orderData?: any }
+        if (parsed.orderData?.servedAt) continue
+        const match = key.match(/^room_(.+)_new_order_/)
+        const roomId = String(parsed.orderData?.roomId || match?.[1] || '')
+        if (!roomId) continue
+        out.push({
+          type: 'new_order',
+          roomId,
+          message: parsed.message || `Đơn hàng mới từ phòng ${roomId}`,
+          timestamp: Number(parsed.timestamp) || Date.now(),
+          orderData: parsed.orderData
+        })
+      } catch {
+        continue
+      }
+    }
+
+    return out.sort((a, b) => a.timestamp - b.timestamp)
+  }
+
   private async findOrderNotificationKey(roomId: string, orderId: string): Promise<string | null> {
     const directKey = `room_${roomId}_new_order_${orderId}`
     if (await redis.exists(directKey)) {
@@ -216,7 +249,15 @@ class RoomServices {
     orderId: string,
     actorId: string
   ): Promise<{ servedBy: string; servedAt: Date; itemCount: number }> {
-    const notificationKey = await this.findOrderNotificationKey(roomId, orderId)
+    let notificationRoomId = roomId
+    if (ObjectId.isValid(roomId)) {
+      const room = await databaseService.rooms.findOne({ _id: new ObjectId(roomId) })
+      if (room?.roomId != null) {
+        notificationRoomId = String(room.roomId)
+      }
+    }
+
+    const notificationKey = await this.findOrderNotificationKey(notificationRoomId, orderId)
     if (!notificationKey) {
       throw new ErrorWithStatus({
         message: 'Order notification not found or already served',
@@ -239,6 +280,7 @@ class RoomServices {
         roomScheduleId?: string
         itemDeltas?: Array<{ itemId: string; delta: number }>
         items?: Array<{ itemId: string; quantity: number }>
+        cart?: any
         servedAt?: string
         customerInfo?: { roomScheduleId?: string }
       }
@@ -252,8 +294,6 @@ class RoomServices {
       }
     }
 
-    // Không log fnb_sales_movements ở đây — đã ghi lúc client submit/add món.
-    // Ghi lại khi serve sẽ double-count systemSold kiểm kê.
     const deltas =
       notification.orderData?.itemDeltas ??
       (notification.orderData?.items ?? []).map((item) => ({
@@ -262,11 +302,27 @@ class RoomServices {
       }))
 
     const servedAt = new Date()
+    const roomScheduleId = notification.orderData?.roomScheduleId || notification.orderData?.customerInfo?.roomScheduleId
+    if (!roomScheduleId) {
+      throw new ErrorWithStatus({
+        message: 'Order room schedule not found',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
+    }
+
+    if (notification.orderData?.cart) {
+      const cart = normalizeFnbOrder(notification.orderData.cart)
+      await fnbOrderService.upsertFnbOrder(roomScheduleId, cart, actorId, 'add')
+      if (deltas.length > 0) {
+        await fnbSalesMovementService.logDeltas(deltas, 'karaoke', roomScheduleId, actorId)
+      }
+    }
+
     await redis.del(notificationKey)
 
     roomMusicEventEmitter.emit('admin_notification', {
       type: 'order_served',
-      roomId,
+      roomId: notificationRoomId,
       notificationId: notification.notificationId,
       orderId: notification.orderData?.orderId,
       servedBy: actorId,

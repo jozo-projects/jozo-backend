@@ -494,6 +494,7 @@ class RoomMusicServices {
       totalAmount: number
       customerInfo: { roomName: string; roomScheduleId: string }
       itemDeltas?: Array<{ itemId: string; delta: number }>
+      cart?: any
       roomScheduleId?: string
     }
   ): Promise<{ message: string; timestamp: number; notificationId: string; orderData: any }> {
@@ -511,9 +512,10 @@ class RoomMusicServices {
         orderData: {
           roomId,
           notificationId,
-          orderId: orderData.orderId,
+          orderId: notificationId,
           roomScheduleId,
           itemDeltas,
+          cart: orderData.cart,
           items: orderData.items,
           totalAmount: orderData.totalAmount,
           customerInfo: orderData.customerInfo,

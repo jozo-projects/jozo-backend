@@ -160,33 +160,15 @@ export const submitClientCart = async (req: Request, res: Response, next: NextFu
       }
     }
 
-    await fnbSalesMovementService.logDeltas(
-      inventoryUpdates.map(({ itemId, delta }) => ({ itemId, delta })),
-      'karaoke',
-      currentSchedule._id.toString(),
-      'client-app'
-    )
-
-    const result = await fnbOrderService.upsertFnbOrder(
-      currentSchedule._id.toString(),
-      mergedOrder,
-      'client-app',
-      'set'
-    )
-
-    if (!result) {
-      throw new ErrorWithStatus({
-        message: 'Failed to save order to database',
-        status: HTTP_STATUS_CODE.INTERNAL_SERVER_ERROR
-      })
-    }
+    // Chỉ reserve tồn kho khi khách submit. Chưa add vào fnbOrder/bill cho tới khi admin xác nhận phục vụ.
 
     // Send notification to admin - CHỈ GỬI ITEMS TRONG CART (món mới thêm)
     try {
       const orderNotificationData = {
-        orderId: result._id?.toString() || 'unknown',
+        orderId: '',
         roomScheduleId: currentSchedule._id.toString(),
         itemDeltas: inventoryUpdates.map(({ itemId, delta }) => ({ itemId, delta })),
+        cart: cartNorm,
         items: [] as Array<{
           itemId: string
           name: string
@@ -250,8 +232,12 @@ export const submitClientCart = async (req: Request, res: Response, next: NextFu
     }
 
     return res.status(HTTP_STATUS_CODE.OK).json({
-      message: 'Đặt món thành công',
-      result
+      message: 'Đặt món thành công, đang chờ admin xác nhận phục vụ',
+      result: {
+        status: 'pending_service',
+        roomScheduleId: currentSchedule._id.toString(),
+        order: cartNorm
+      }
     })
   } catch (error) {
     next(error)
