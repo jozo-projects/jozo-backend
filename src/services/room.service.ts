@@ -294,6 +294,13 @@ class RoomServices {
       }
     }
 
+    if (!notification.orderData?.cart) {
+      throw new ErrorWithStatus({
+        message: 'Order payload is missing cart data. The order was not marked as served or added to the bill.',
+        status: HTTP_STATUS_CODE.CONFLICT
+      })
+    }
+
     const deltas =
       notification.orderData?.itemDeltas ??
       (notification.orderData?.items ?? []).map((item) => ({

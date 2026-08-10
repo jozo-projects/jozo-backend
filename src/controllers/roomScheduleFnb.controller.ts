@@ -229,6 +229,7 @@ export const submitClientCart = async (req: Request, res: Response, next: NextFu
       console.log('=== END DEBUG NOTIFICATION ===')
     } catch (notificationError) {
       console.error('❌ Lỗi khi gửi thông báo đến admin:', notificationError)
+      throw notificationError
     }
 
     return res.status(HTTP_STATUS_CODE.OK).json({
