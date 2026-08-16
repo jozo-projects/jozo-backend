@@ -129,3 +129,9 @@ export enum StaffErrorLogStatus {
   Active = 'active',
   Cancelled = 'cancelled'
 }
+
+/** Key lưu DB / API. FE tự map sang nhãn tiếng Việt. */
+export enum PaymentMethod {
+  Cash = 'cash',
+  BankTransfer = 'bank_transfer'
+}

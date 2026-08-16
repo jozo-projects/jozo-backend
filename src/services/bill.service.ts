@@ -7,12 +7,13 @@ import isSameOrBefore from 'dayjs/plugin/isSameOrBefore'
 import timezone from 'dayjs/plugin/timezone'
 import utc from 'dayjs/plugin/utc'
 import { ObjectId } from 'mongodb'
-import { DayType, RoomScheduleStatus, RoomType } from '~/constants/enum'
+import { DayType, PaymentMethod, RoomScheduleStatus, RoomType } from '~/constants/enum'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { ErrorWithStatus } from '~/models/Error'
 import { IBill } from '~/models/schemas/Bill.schema'
 import { aggregateLinesToLegacyMaps, normalizeFnbOrder } from '~/utils/fnbOrderLines'
 import { normalizeVietnamPhone } from '~/utils/common'
+import { normalizePaymentMethod } from '~/utils/paymentMethod'
 import { buildStreakGiftBillLines, wrapBillItemName } from '~/utils/streakGiftBillLines'
 import databaseService from './database.service'
 import fnbMenuItemService from './fnbMenuItem.service'
@@ -1116,7 +1117,7 @@ export class BillService {
       giftDiscountAmount: giftDiscountAmount > 0 ? giftDiscountAmount : undefined,
       membershipDiscountAmount: membershipDiscountAmount > 0 ? membershipDiscountAmount : undefined,
       membership: membershipInfo,
-      paymentMethod,
+      paymentMethod: normalizePaymentMethod(paymentMethod),
       activePromotion: activePromotion
         ? {
             name: activePromotion.name,
@@ -1752,11 +1753,12 @@ export class BillService {
       .text('--------------------------------------------')
 
     if (bill.paymentMethod) {
+      const normalizedPaymentMethod = normalizePaymentMethod(bill.paymentMethod) || bill.paymentMethod
       const paymentMethods: { [key: string]: string } = {
-        cash: 'Tien mat',
-        bank_transfer: 'Chuyen khoan'
+        [PaymentMethod.Cash]: 'Tien mat',
+        [PaymentMethod.BankTransfer]: 'Chuyen khoan'
       }
-      const paymentMethodText = paymentMethods[bill.paymentMethod] || bill.paymentMethod
+      const paymentMethodText = paymentMethods[normalizedPaymentMethod] || normalizedPaymentMethod
       printer.text(`Phuong thuc thanh toan: ${paymentMethodText}`)
     }
 
@@ -1960,7 +1962,8 @@ export class BillService {
         completedBy: billData.completedBy || billData.fnbOrder?.completedBy,
         startTime: billData.startTime ? new Date(billData.startTime) : now,
         endTime: billData.endTime ? new Date(billData.endTime) : now,
-        customerPhone: customerPhone || undefined
+        customerPhone: customerPhone || undefined,
+        paymentMethod: normalizePaymentMethod(billData.paymentMethod)
       }
 
       // 6. Lưu bill vào database

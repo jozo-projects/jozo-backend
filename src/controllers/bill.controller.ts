@@ -7,6 +7,7 @@ import { UserRole } from '~/constants/enum'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import billService, { resolveBillRoomType } from '~/services/bill.service'
 import databaseService from '~/services/database.service'
+import { normalizePaymentMethod } from '~/utils/paymentMethod'
 
 dayjs.extend(utc)
 dayjs.extend(timezone)
@@ -524,9 +525,9 @@ export const getAllBills = async (req: Request, res: Response) => {
       }
     }
 
-    // Add payment method filter if provided
+    // Add payment method filter if provided (chuẩn hóa về cash | bank_transfer)
     if (paymentMethod) {
-      filter.paymentMethod = paymentMethod
+      filter.paymentMethod = normalizePaymentMethod(paymentMethod as string) || paymentMethod
     }
 
     // Add invoice code filter if provided

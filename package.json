@@ -47,6 +47,7 @@
     "prettier": "prettier --check .",
     "prettier:fix": "prettier --write .",
     "start:prod": "npm run build && npm run start",
+    "migration:payment-method": "ts-node -r tsconfig-paths/register src/scripts/migratePaymentMethodKeys.ts",
     "postinstall": "patch-package"
   },
   "keywords": [],
