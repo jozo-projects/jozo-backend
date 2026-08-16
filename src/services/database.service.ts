@@ -35,6 +35,7 @@ import { IFnbShiftCount, IFnbShiftCountDayItemMeta } from '~/models/schemas/FnbS
 import { IFnbSalesMovement } from '~/models/schemas/FnbSalesMovement.schema'
 import { IStaffErrorPreset } from '~/models/schemas/StaffErrorPreset.schema'
 import { IStaffErrorLog } from '~/models/schemas/StaffErrorLog.schema'
+import { IBillPaymentMethodLog } from '~/models/schemas/BillPaymentMethodLog.schema'
 dotenv.config()
 dotenv.config({ path: '.env.local', override: true })
 
@@ -106,6 +107,7 @@ class DatabaseService {
       await this.db.collection('bills').createIndex({ createdAt: 1 })
       await this.db.collection('bills').createIndex({ endTime: 1 })
       await this.db.collection('bills').createIndex({ scheduleId: 1, endTime: -1, createdAt: -1 })
+      await this.db.collection('bill_payment_method_logs').createIndex({ billId: 1, changedAt: 1 })
       await this.db.collection('fnb_order_history').createIndex({ roomScheduleId: 1, completedAt: -1 })
     } catch (error) {
       console.log(`[DB]   Connection FAILED to ${dbHost}!`)
@@ -166,6 +168,10 @@ class DatabaseService {
 
   get bills(): Collection<IBill> {
     return this.db.collection('bills')
+  }
+
+  get billPaymentMethodLogs(): Collection<IBillPaymentMethodLog> {
+    return this.db.collection('bill_payment_method_logs')
   }
 
   get gifts(): Collection<Gift> {

@@ -364,6 +364,62 @@ export const getBillById = async (req: Request, res: Response) => {
   }
 }
 
+export const updatePaymentMethod = async (req: Request, res: Response) => {
+  const { billId } = req.params
+  const { paymentMethod } = req.body
+  const actorId = req.decoded_authorization?.user_id
+
+  try {
+    if (!actorId) {
+      return res.status(HTTP_STATUS_CODE.UNAUTHORIZED).json({ message: 'Unauthorized' })
+    }
+
+    const actor = ObjectId.isValid(actorId) ? await databaseService.users.findOne({ _id: new ObjectId(actorId) }) : null
+    if (!actor || (actor.role !== UserRole.Admin && actor.role !== UserRole.Staff)) {
+      return res.status(HTTP_STATUS_CODE.FORBIDDEN).json({ message: 'Forbidden' })
+    }
+
+    const result = await billService.updatePaymentMethod(billId, paymentMethod, actorId, actor.role)
+    return res.status(HTTP_STATUS_CODE.OK).json({
+      message: 'Update bill payment method successfully',
+      result
+    })
+  } catch (error: any) {
+    return res.status(error.status || HTTP_STATUS_CODE.INTERNAL_SERVER_ERROR).json({
+      message: error.message || 'Error updating bill payment method'
+    })
+  }
+}
+
+export const getPaymentMethodHistory = async (req: Request, res: Response) => {
+  const { billId } = req.params
+
+  try {
+    const result = await billService.getPaymentMethodHistory(billId)
+    const actorIds = result.logs.map((log) => log.changedBy).filter((id): id is ObjectId => id instanceof ObjectId)
+    const actors = actorIds.length > 0 ? await databaseService.users.find({ _id: { $in: actorIds } }).toArray() : []
+    const actorMap = new Map(actors.map((actor) => [actor._id?.toString(), actor.name || actor.username || actor.email || 'Unknown']))
+
+    return res.status(HTTP_STATUS_CODE.OK).json({
+      message: 'Get bill payment method history successfully',
+      result: {
+        chainValid: result.chainValid,
+        logs: result.logs.map((log) => ({
+          ...log,
+          _id: log._id?.toString(),
+          billId: log.billId.toString(),
+          changedBy: log.changedBy.toString(),
+          changedByName: actorMap.get(log.changedBy.toString()) || 'Unknown'
+        }))
+      }
+    })
+  } catch (error: any) {
+    return res.status(error.status || HTTP_STATUS_CODE.INTERNAL_SERVER_ERROR).json({
+      message: error.message || 'Error getting bill payment method history'
+    })
+  }
+}
+
 /**
  * Get bills by room ID
  * @param req Request object containing roomId in params and optional date range in query

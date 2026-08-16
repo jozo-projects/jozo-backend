@@ -6,10 +6,12 @@ import {
   getAllBills,
   getBill,
   getBillById,
+  getPaymentMethodHistory,
   getBillsByRoomId,
   getRevenueByRange,
   printBill,
   saveBill,
+  updatePaymentMethod,
   testBillWithDiscount,
   testPrinterConnection
 } from '~/controllers/bill.controller'
@@ -45,6 +47,28 @@ billRouter.get('/room/:roomId', protect([UserRole.Admin, UserRole.Staff]), wrapR
  * @access Private
  */
 billRouter.get('/all', protect([UserRole.Admin, UserRole.Staff]), wrapRequestHandler(getAllBills))
+
+/**
+ * @route PATCH /bill/:billId/payment-method
+ * @description Update a bill payment method and append an immutable audit log
+ * @access Private (Admin/Staff)
+ */
+billRouter.patch(
+  '/:billId/payment-method',
+  protect([UserRole.Admin, UserRole.Staff]),
+  wrapRequestHandler(updatePaymentMethod)
+)
+
+/**
+ * @route GET /bill/:billId/payment-method-history
+ * @description Get the verified payment method audit chain
+ * @access Private (Admin only)
+ */
+billRouter.get(
+  '/:billId/payment-method-history',
+  protect([UserRole.Admin]),
+  wrapRequestHandler(getPaymentMethodHistory)
+)
 
 /**
  * @route POST /bill/save

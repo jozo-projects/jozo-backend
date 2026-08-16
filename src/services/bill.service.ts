@@ -1,16 +1,18 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /* eslint-disable no-unused-vars */
 import axios from 'axios'
+import { createHash } from 'crypto'
 import dayjs from 'dayjs'
 import isBetween from 'dayjs/plugin/isBetween'
 import isSameOrBefore from 'dayjs/plugin/isSameOrBefore'
 import timezone from 'dayjs/plugin/timezone'
 import utc from 'dayjs/plugin/utc'
 import { ObjectId } from 'mongodb'
-import { DayType, PaymentMethod, RoomScheduleStatus, RoomType } from '~/constants/enum'
+import { DayType, PaymentMethod, RoomScheduleStatus, RoomType, UserRole } from '~/constants/enum'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { ErrorWithStatus } from '~/models/Error'
 import { IBill } from '~/models/schemas/Bill.schema'
+import { IBillPaymentMethodLog } from '~/models/schemas/BillPaymentMethodLog.schema'
 import { aggregateLinesToLegacyMaps, normalizeFnbOrder } from '~/utils/fnbOrderLines'
 import { normalizeVietnamPhone } from '~/utils/common'
 import { normalizePaymentMethod } from '~/utils/paymentMethod'
@@ -43,6 +45,25 @@ function ensureVNTimezone(date: Date | string | null | undefined): Date {
 
   // Nếu không phải UTC, sử dụng timezone hiện tại
   return dayjs(date).tz('Asia/Ho_Chi_Minh').toDate()
+}
+
+function buildPaymentMethodHash(payload: {
+  billId: string
+  fromPaymentMethod: string | null
+  toPaymentMethod: string
+  changedBy: string
+  changedByRole: string
+  changedAt: Date
+  previousHash: string | null
+}) {
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        ...payload,
+        changedAt: payload.changedAt.toISOString()
+      })
+    )
+    .digest('hex')
 }
 
 // Khai báo biến toàn cục để lưu USB adapter
@@ -2024,6 +2045,118 @@ export class BillService {
     } catch (error) {
       console.error('Lỗi khi lưu bill:', error)
       throw error
+    }
+  }
+
+  async updatePaymentMethod(billId: string, paymentMethod: string, changedBy: string, changedByRole: UserRole.Admin | UserRole.Staff) {
+    if (!ObjectId.isValid(billId)) {
+      throw new ErrorWithStatus({ message: 'Invalid billId', status: HTTP_STATUS_CODE.BAD_REQUEST })
+    }
+
+    if (!ObjectId.isValid(changedBy)) {
+      throw new ErrorWithStatus({ message: 'Invalid actor', status: HTTP_STATUS_CODE.UNAUTHORIZED })
+    }
+
+    const normalizedPaymentMethod = normalizePaymentMethod(paymentMethod)
+    if (normalizedPaymentMethod !== PaymentMethod.Cash && normalizedPaymentMethod !== PaymentMethod.BankTransfer) {
+      throw new ErrorWithStatus({ message: 'Invalid payment method', status: HTTP_STATUS_CODE.BAD_REQUEST })
+    }
+
+    const billObjectId = new ObjectId(billId)
+    const actorObjectId = new ObjectId(changedBy)
+    const bill = await databaseService.bills.findOne({ _id: billObjectId })
+    if (!bill) {
+      throw new ErrorWithStatus({ message: 'Bill not found', status: HTTP_STATUS_CODE.NOT_FOUND })
+    }
+
+    const currentPaymentMethod = normalizePaymentMethod(bill.paymentMethod)
+    if (currentPaymentMethod === normalizedPaymentMethod) {
+      throw new ErrorWithStatus({ message: 'Payment method is unchanged', status: HTTP_STATUS_CODE.BAD_REQUEST })
+    }
+
+    const previousLog = await databaseService.billPaymentMethodLogs
+      .find({ billId: billObjectId })
+      .sort({ changedAt: -1, _id: -1 })
+      .limit(1)
+      .next()
+    const changedAt = new Date()
+    const previousHash = previousLog?.hash ?? null
+    const hash = buildPaymentMethodHash({
+      billId,
+      fromPaymentMethod: currentPaymentMethod ?? bill.paymentMethod ?? null,
+      toPaymentMethod: normalizedPaymentMethod,
+      changedBy,
+      changedByRole,
+      changedAt,
+      previousHash
+    })
+
+    const updateResult = await databaseService.bills.updateOne(
+      { _id: billObjectId, paymentMethod: bill.paymentMethod },
+      { $set: { paymentMethod: normalizedPaymentMethod } }
+    )
+    if (updateResult.modifiedCount !== 1) {
+      throw new ErrorWithStatus({
+        message: 'Bill payment method changed by another request. Please reload and try again.',
+        status: HTTP_STATUS_CODE.CONFLICT
+      })
+    }
+
+    const log: IBillPaymentMethodLog = {
+      billId: billObjectId,
+      fromPaymentMethod: currentPaymentMethod ?? bill.paymentMethod,
+      toPaymentMethod: normalizedPaymentMethod,
+      changedBy: actorObjectId,
+      changedByRole,
+      changedAt,
+      previousHash,
+      hash
+    }
+    await databaseService.billPaymentMethodLogs.insertOne(log)
+
+    return {
+      bill: { ...bill, paymentMethod: normalizedPaymentMethod },
+      log
+    }
+  }
+
+  async getPaymentMethodHistory(billId: string) {
+    if (!ObjectId.isValid(billId)) {
+      throw new ErrorWithStatus({ message: 'Invalid billId', status: HTTP_STATUS_CODE.BAD_REQUEST })
+    }
+
+    const billObjectId = new ObjectId(billId)
+    const logs = await databaseService.billPaymentMethodLogs
+      .find({ billId: billObjectId })
+      .sort({ changedAt: 1, _id: 1 })
+      .toArray()
+
+    let previousHash: string | null = null
+    let chainValid = true
+    for (const log of logs) {
+      if (log.previousHash !== previousHash) {
+        chainValid = false
+        break
+      }
+      const expectedHash = buildPaymentMethodHash({
+        billId: log.billId.toString(),
+        fromPaymentMethod: log.fromPaymentMethod?.toString() ?? null,
+        toPaymentMethod: log.toPaymentMethod,
+        changedBy: log.changedBy.toString(),
+        changedByRole: log.changedByRole,
+        changedAt: log.changedAt,
+        previousHash: log.previousHash
+      })
+      if (expectedHash !== log.hash) {
+        chainValid = false
+        break
+      }
+      previousHash = log.hash
+    }
+
+    return {
+      chainValid,
+      logs
     }
   }
 }
