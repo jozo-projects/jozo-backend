@@ -41,7 +41,6 @@ import usersRouter from '~/routes/users.routes'
 import membershipRouter from '~/routes/membership.routes'
 
 import { finishSchedulerInADay } from '~/jobs/bookingScheduler'
-import { startShiftScheduler } from '~/jobs/shiftScheduler'
 import { startSongPruneScheduler } from '~/jobs/songPruneScheduler'
 
 // Thiết lập timezone cho dayjs
@@ -182,7 +181,7 @@ app.use(defaultErrorHandler)
 // Scheduler jobs
 // startBookingScheduler()
 finishSchedulerInADay()
-startShiftScheduler()
+// startShiftScheduler() — không dùng nữa
 startSongPruneScheduler()
 
 app.listen(port, () => {

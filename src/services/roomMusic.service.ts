@@ -210,77 +210,49 @@ class RoomMusicServices {
   async getVideoInfo(videoId: string): Promise<AddSongRequestBody> {
     const videoUrl = `https://youtu.be/${videoId}`
     /** Gọi yt‑dlp qua youtube‑dl‑exec – mất ~400 ms */
+    // Client web thường không còn progressive MP4; android/mweb vẫn có itag 18 (360p mp4).
+    // Không truyền --format khi dump JSON để tránh fail sớm khi selector không khớp.
+    // extractorArgs chưa có trong Flags type của youtube-dl-exec nhưng yt-dlp hỗ trợ
     const info = (await ytdl(videoUrl, {
-      dumpSingleJson: true, // JSON duy nhất
+      dumpSingleJson: true,
       noWarnings: true,
       noCheckCertificates: true,
-      forceIpv4: true, // tránh IPv6 timeout
-      geoBypassCountry: 'VN', // né khoá vùng
-      // Ưu tiên progressive formats (có cả video và audio trong một file)
-      format: 'best[height<=1080][ext=mp4][protocol!=m3u8_native][protocol!=m3u8]/best[height<=1080]/best',
-      // để yt‑dlp tự thêm header vào kết quả
+      forceIpv4: true,
+      geoBypassCountry: 'VN',
+      extractorArgs: 'youtube:player_client=android,mweb',
       addHeader: [`User-Agent: ${UA}`, 'Referer: https://www.youtube.com/']
-    })) as any
+    } as any)) as any
 
-    console.log('info', info)
+    const formats: any[] = info.formats ?? []
 
-    /** Tìm format tốt nhất có thể phát được */
-    // Ưu tiên progressive formats (không phải HLS)
-    let playable = info.formats?.find(
-      (f: any) =>
-        f.vcodec !== 'none' &&
-        f.acodec !== 'none' &&
-        f.ext === 'mp4' &&
-        f.protocol !== 'm3u8_native' &&
-        f.protocol !== 'm3u8'
-    )
-
-    // Nếu không có progressive MP4, tìm format khác có cả video và audio
-    if (!playable) {
-      playable = info.formats?.find(
-        (f: any) =>
+    // Chỉ lấy progressive MP4 (1 file video+audio) — không dùng HLS
+    const progressive =
+      formats.find(
+        (f) =>
+          f.ext === 'mp4' &&
           f.vcodec !== 'none' &&
           f.acodec !== 'none' &&
           f.protocol === 'https' &&
-          f.protocol !== 'm3u8_native' &&
-          f.protocol !== 'm3u8'
+          typeof f.url === 'string'
+      ) ||
+      formats.find(
+        (f) => f.vcodec !== 'none' && f.acodec !== 'none' && f.protocol === 'https' && typeof f.url === 'string'
       )
+
+    if (!progressive) {
+      throw new Error('Không tìm thấy format MP4 progressive phù hợp')
     }
 
-    // Nếu vẫn không có, chấp nhận HLS stream (m3u8)
-    if (!playable) {
-      playable = info.formats?.find((f: any) => f.vcodec !== 'none' && f.acodec !== 'none')
-    }
-
-    // Fallback cuối cùng - lấy format đầu tiên có video
-    if (!playable) {
-      playable = info.formats?.find((f: any) => f.vcodec !== 'none')
-    }
-
-    if (!playable) throw new Error('Không tìm thấy format video phù hợp')
-
-    // Xác định loại format
-    const isHLS = playable.protocol === 'm3u8_native' || playable.protocol === 'm3u8' || playable.url.includes('.m3u8')
-
-    // Tạo và trả về đối tượng phù hợp với AddSongRequestBody
     return {
       video_id: videoId,
       title: info.title ?? '',
       duration: info.duration,
-      url: playable.url,
+      url: progressive.url,
       thumbnail: info.thumbnail ?? info.thumbnails?.[0]?.url,
       author: info.uploader ?? 'Jozo music - recording',
-      // Thêm thông tin cần thiết cho frontend
-      format_type: isHLS ? 'hls' : 'progressive',
-      headers: playable.http_headers || {},
-      // Thêm các headers cần thiết cho HLS
-      required_headers: isHLS
-        ? {
-            'User-Agent': UA || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            Referer: 'https://www.youtube.com/',
-            Origin: 'https://www.youtube.com'
-          }
-        : {}
+      format_type: 'progressive',
+      headers: progressive.http_headers || {},
+      required_headers: {}
     }
   }
 
@@ -502,8 +474,7 @@ class RoomMusicServices {
       const notificationId = Date.now().toString()
       const roomScheduleId = orderData.roomScheduleId || orderData.customerInfo?.roomScheduleId
       const itemDeltas =
-        orderData.itemDeltas ??
-        orderData.items.map((item) => ({ itemId: item.itemId, delta: item.quantity }))
+        orderData.itemDeltas ?? orderData.items.map((item) => ({ itemId: item.itemId, delta: item.quantity }))
 
       const notification = {
         message: `Đơn hàng mới từ phòng ${roomId}`,
@@ -618,13 +589,7 @@ class RoomMusicServices {
       activeSchedule.startTime instanceof Date
         ? activeSchedule.startTime.toISOString()
         : new Date(activeSchedule.startTime as string | number | Date).toISOString()
-    return billService.getBill(
-      activeSchedule._id?.toString(),
-      effectiveEndTime,
-      undefined,
-      undefined,
-      startIso
-    )
+    return billService.getBill(activeSchedule._id?.toString(), effectiveEndTime, undefined, undefined, startIso)
   }
 
   /**
