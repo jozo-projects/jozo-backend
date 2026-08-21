@@ -14,7 +14,12 @@ import { ErrorWithStatus } from '~/models/Error'
 import { IBill } from '~/models/schemas/Bill.schema'
 import { IBillPaymentMethodLog } from '~/models/schemas/BillPaymentMethodLog.schema'
 import { aggregateLinesToLegacyMaps, normalizeFnbOrder } from '~/utils/fnbOrderLines'
-import { normalizeVietnamPhone } from '~/utils/common'
+import {
+  buildUserPhoneLookupFilter,
+  isValidMemberEmail,
+  isValidVietnamPhone,
+  normalizeVietnamPhone
+} from '~/utils/common'
 import { normalizePaymentMethod } from '~/utils/paymentMethod'
 import { buildStreakGiftBillLines, wrapBillItemName } from '~/utils/streakGiftBillLines'
 import databaseService from './database.service'
@@ -225,7 +230,12 @@ function findPriceEntryByRoomType(
 ): { room_type?: string; price?: number } | undefined {
   if (!prices?.length || roomType === undefined || roomType === null) return undefined
   const needle = String(roomType).trim().toLowerCase()
-  return prices.find((p) => String(p.room_type ?? '').trim().toLowerCase() === needle)
+  return prices.find(
+    (p) =>
+      String(p.room_type ?? '')
+        .trim()
+        .toLowerCase() === needle
+  )
 }
 
 /** Express query/body đôi khi là string | string[]; chuỗi rỗng coi như không gửi — tránh rơi nhánh schedule.endTime khi admin đã truyền ISO. */
@@ -336,11 +346,7 @@ export class BillService {
         (!bill.paymentMethod && !existingBill.paymentMethod) ||
         (bill.paymentMethod && existingBill.paymentMethod)
       ) {
-        if (
-          bill.createdAt &&
-          existingBill.createdAt &&
-          new Date(bill.createdAt) > new Date(existingBill.createdAt)
-        ) {
+        if (bill.createdAt && existingBill.createdAt && new Date(bill.createdAt) > new Date(existingBill.createdAt)) {
           shouldReplace = true
         }
       }
@@ -929,9 +935,6 @@ export class BillService {
       const overlapHoursRounded = Math.round((billableMinutes / 60) * 100) / 100
 
       const slotServiceFee = (billableMinutes / 60) * priceEntry.price
-
-      totalServiceFee += slotServiceFee
-      totalHoursUsed += overlapHoursRounded
 
       const startTimeStr = overlapStartTrunc.format('HH:mm')
       const endTimeStr = overlapEndTrunc.format('HH:mm')
@@ -1961,9 +1964,45 @@ export class BillService {
 
       // 4. Lấy phone_number từ bill hoặc schedule
       let customerPhone = billData.customerPhone
-
       if (!customerPhone && schedule?.customerPhone) {
         customerPhone = schedule.customerPhone
+      }
+
+      // Validate contact data before inserting the bill or touching membership.
+      // FE validation is only a convenience; this boundary must protect points/streak.
+      const scheduleEmail = schedule?.customerEmail?.trim()
+      const billEmail =
+        typeof (billData as IBill & { customerEmail?: string }).customerEmail === 'string'
+          ? (billData as IBill & { customerEmail?: string }).customerEmail?.trim()
+          : undefined
+      if (!isValidMemberEmail(scheduleEmail) || !isValidMemberEmail(billEmail)) {
+        throw new ErrorWithStatus({
+          message: 'Email thành viên không hợp lệ. Vui lòng cập nhật lại trước khi lưu bill.',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      }
+
+      if (customerPhone && !isValidVietnamPhone(customerPhone)) {
+        throw new ErrorWithStatus({
+          message: 'Số điện thoại thành viên không hợp lệ. Vui lòng cập nhật lại trước khi lưu bill.',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      }
+
+      if (customerPhone) {
+        const member = await databaseService.users.findOne(buildUserPhoneLookupFilter(customerPhone))
+        if (member?.phone_number && !isValidVietnamPhone(member.phone_number)) {
+          throw new ErrorWithStatus({
+            message: 'Số điện thoại trong hồ sơ thành viên không hợp lệ. Vui lòng cập nhật lại.',
+            status: HTTP_STATUS_CODE.BAD_REQUEST
+          })
+        }
+        if (!isValidMemberEmail(member?.email)) {
+          throw new ErrorWithStatus({
+            message: 'Email trong hồ sơ thành viên không hợp lệ. Vui lòng cập nhật lại.',
+            status: HTTP_STATUS_CODE.BAD_REQUEST
+          })
+        }
       }
 
       if (customerPhone) {
@@ -2033,8 +2072,7 @@ export class BillService {
           membershipResult.pointsEarned = pointsEarned
         } catch (error: any) {
           console.error('Lỗi khi tích điểm tự động:', error)
-          membershipResult.success = false
-          membershipResult.error = error.message || 'Unknown error'
+          throw error
         }
       }
 
@@ -2048,7 +2086,12 @@ export class BillService {
     }
   }
 
-  async updatePaymentMethod(billId: string, paymentMethod: string, changedBy: string, changedByRole: UserRole.Admin | UserRole.Staff) {
+  async updatePaymentMethod(
+    billId: string,
+    paymentMethod: string,
+    changedBy: string,
+    changedByRole: UserRole.Admin | UserRole.Staff
+  ) {
     if (!ObjectId.isValid(billId)) {
       throw new ErrorWithStatus({ message: 'Invalid billId', status: HTTP_STATUS_CODE.BAD_REQUEST })
     }

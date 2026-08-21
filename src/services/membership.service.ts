@@ -12,7 +12,12 @@ import { Streak } from '~/models/schemas/Streak.schema'
 import { User } from '~/models/schemas/User.schema'
 import { ErrorWithStatus } from '~/models/Error'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
-import { buildUserPhoneLookupFilter, normalizeVietnamPhone } from '~/utils/common'
+import {
+  buildUserPhoneLookupFilter,
+  isValidMemberEmail,
+  isValidVietnamPhone,
+  normalizeVietnamPhone
+} from '~/utils/common'
 import databaseService from './database.service'
 import fnBMenuItemService from './fnbMenuItem.service'
 
@@ -497,9 +502,32 @@ class MembershipService {
     return config.tierThresholds
   }
 
+  private assertValidMemberContact(user: User | null): asserts user is User {
+    if (!user || !user._id) {
+      throw new ErrorWithStatus({
+        message: 'Không tìm thấy thành viên',
+        status: HTTP_STATUS_CODE.NOT_FOUND
+      })
+    }
+
+    if (!isValidVietnamPhone(user.phone_number)) {
+      throw new ErrorWithStatus({
+        message: 'Số điện thoại trong hồ sơ thành viên không hợp lệ. Vui lòng cập nhật lại.',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
+    }
+
+    if (!isValidMemberEmail(user.email)) {
+      throw new ErrorWithStatus({
+        message: 'Email trong hồ sơ thành viên không hợp lệ. Vui lòng cập nhật lại.',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
+    }
+  }
+
   private async findUserByPhone(phone: string): Promise<User | null> {
     const normalized = normalizeVietnamPhone(phone)
-    if (!normalized) return null
+    if (!normalized || !isValidVietnamPhone(phone)) return null
 
     return (await databaseService.users.findOne(buildUserPhoneLookupFilter(normalized))) as unknown as User | null
   }
@@ -604,6 +632,9 @@ class MembershipService {
     if (points <= 0) {
       return (await databaseService.users.findOne({ _id: options.userId })) as unknown as User | null
     }
+
+    const member = (await databaseService.users.findOne({ _id: options.userId })) as unknown as User | null
+    this.assertValidMemberContact(member)
 
     // Chỉ cộng điểm + cập nhật tier. Không auto phát discount:
     // staff phải chủ động áp/phát khi checkout (đọc từ config / tierDiscount).
@@ -794,12 +825,14 @@ class MembershipService {
         }
 
         if (record.rewardType === 'gift' && Array.isArray(record.meta?.items)) {
-          result.items = record.meta.items.map((item: { itemId: ObjectId | string; name: string; category?: string; quantity: number }) => ({
-            itemId: item.itemId?.toString?.() ?? String(item.itemId),
-            name: item.name,
-            category: item.category,
-            quantity: item.quantity
-          }))
+          result.items = record.meta.items.map(
+            (item: { itemId: ObjectId | string; name: string; category?: string; quantity: number }) => ({
+              itemId: item.itemId?.toString?.() ?? String(item.itemId),
+              name: item.name,
+              category: item.category,
+              quantity: item.quantity
+            })
+          )
           result.itemCount = record.meta.itemCount ?? result.items.length
         } else if (record.rewardType === 'gift' && record.meta?.giftId) {
           result.gift = {
@@ -941,30 +974,46 @@ class MembershipService {
     }
   }
 
-  async adminAddPoints(userId: string, points: number, meta?: EarnMeta) {
-    if (points <= 0) {
-      throw new Error('Số điểm phải lớn hơn 0')
+  async adminSetPoints(userId: string, points: number, _meta?: EarnMeta) {
+    if (!Number.isInteger(points) || points < 0) {
+      throw new Error('Tổng điểm phải là số nguyên không âm')
     }
 
     const config = await this.loadConfig()
-    const { user: updatedUser } = await this.updateUserPoints(new ObjectId(userId), points, config.tierThresholds)
-    if (!updatedUser) {
-      throw new Error('Không tìm thấy người dùng')
+    const userObjectId = new ObjectId(userId)
+    const currentUser = (await databaseService.users.findOne({ _id: userObjectId })) as unknown as User | null
+    if (!currentUser) {
+      throw new ErrorWithStatus({
+        message: 'Không tìm thấy người dùng',
+        status: HTTP_STATUS_CODE.NOT_FOUND
+      })
     }
 
-    await this.addRewardHistory(new ObjectId(userId), points, RewardSource.Point, {
-      ...meta,
-      method: 'admin'
-    })
+    const tier = this.resolveTier(points, config.tierThresholds || {}) as MembershipTier
+    await databaseService.users.updateOne(
+      { _id: userObjectId },
+      {
+        $set: {
+          totalPoint: points,
+          availablePoint: points,
+          lifetimePoint: points,
+          tier,
+          updated_at: new Date()
+        }
+      }
+    )
 
-    const tierThresholds = config.tierThresholds || {}
-    const nextTier = this.getNextTierInfo(updatedUser.lifetimePoint || 0, tierThresholds)
-
+    const updatedUser = (await databaseService.users.findOne({ _id: userObjectId })) as unknown as User | null
     return {
       user: updatedUser,
       config,
-      progress: nextTier
+      progress: this.getNextTierInfo(points, config.tierThresholds || {})
     }
+  }
+
+  /** @deprecated Admin chỉnh tổng điểm dùng adminSetPoints; điểm từ bill vẫn dùng earnPointsForUser. */
+  async adminAddPoints(userId: string, points: number, meta?: EarnMeta) {
+    return this.adminSetPoints(userId, points, meta)
   }
 
   private getNextTierInfo(lifetime: number, tierThresholds: Record<string, number>) {
@@ -1299,7 +1348,9 @@ class MembershipService {
       })
     }
 
-    const served = (schedule.streakGifts || []).find((g: { streakCount: number }) => Number(g.streakCount) === streakCount)
+    const served = (schedule.streakGifts || []).find(
+      (g: { streakCount: number }) => Number(g.streakCount) === streakCount
+    )
     if (!served) {
       throw new ErrorWithStatus({
         message: `Chưa claim quà streak ${streakCount} trên schedule này — gọi claim-gift trước`,
@@ -1311,10 +1362,7 @@ class MembershipService {
   }
 
   /** Quà streak cho staff: dựa trên mốc config + streak hiện tại; kèm catalog món chọn được. */
-  async getPendingAndEligibleGifts(
-    userIdOrPhone: string,
-    options?: { category?: FnBCategory; scheduleId?: string }
-  ) {
+  async getPendingAndEligibleGifts(userIdOrPhone: string, options?: { category?: FnBCategory; scheduleId?: string }) {
     const userProjection = {
       password: 0,
       email_verify_token: 0,
@@ -1772,12 +1820,7 @@ class MembershipService {
    * Sửa số lượng 1 món quà. quantity=0 = xoá.
    * Tăng → trừ kho + tiêu quota; giảm → hoàn kho + trả quota.
    */
-  async updateStreakGiftItemQuantity(
-    scheduleId: string,
-    streakCount: number,
-    itemId: string,
-    quantity: number
-  ) {
+  async updateStreakGiftItemQuantity(scheduleId: string, streakCount: number, itemId: string, quantity: number) {
     if (!ObjectId.isValid(itemId)) {
       throw new ErrorWithStatus({
         message: 'itemId không hợp lệ',

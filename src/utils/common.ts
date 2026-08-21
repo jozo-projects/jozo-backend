@@ -168,6 +168,19 @@ export function normalizeVietnamPhone(phone?: string | null): string | null {
   return `0${digits}`
 }
 
+/** Validate phone sau khi normalize; không biến chuỗi sai thành phone hợp lệ. */
+export function isValidVietnamPhone(phone?: string | null): boolean {
+  const normalized = normalizeVietnamPhone(phone)
+  return Boolean(normalized && /^0\d{9,10}$/.test(normalized))
+}
+
+/** Email member là optional; chỉ reject khi có giá trị nhưng sai format. */
+export function isValidMemberEmail(email?: string | null): boolean {
+  const value = email?.trim() || ''
+  if (!value) return true
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
+}
+
 /** Các biến thể SĐT để tra user (0336…, 84336…, +84336…) */
 export function buildUserPhoneLookupFilter(phone: string): { $or: Array<Record<string, unknown>> } {
   const normalized = normalizeVietnamPhone(phone)
@@ -219,10 +232,7 @@ export function buildBookingCodeDuplicateFilter(dateOfUse: string, bookingCode: 
 
   return {
     bookingCode: normalizedCode,
-    $or: [
-      { dateOfUse },
-      { dateOfUse: { $exists: false }, startTime: { $gte: dayStart, $lte: dayEnd } }
-    ]
+    $or: [{ dateOfUse }, { dateOfUse: { $exists: false }, startTime: { $gte: dayStart, $lte: dayEnd } }]
   }
 }
 

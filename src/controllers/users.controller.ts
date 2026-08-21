@@ -320,25 +320,25 @@ export const grantUserPointsController = async (req: Request, res: Response, nex
   const { id } = req.params
   const numericPoints = Number(req.body.points)
 
-  if (!id || Number.isNaN(numericPoints)) {
+  if (!id || !Number.isInteger(numericPoints)) {
     return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
-      message: 'Thiếu id hoặc points không hợp lệ'
+      message: 'Thiếu id hoặc tổng điểm không hợp lệ'
     })
   }
 
-  if (numericPoints <= 0) {
+  if (numericPoints < 0) {
     return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
-      message: 'points phải lớn hơn 0'
+      message: 'Tổng điểm không được âm'
     })
   }
 
   try {
-    const data = await membershipService.adminAddPoints(id, numericPoints, {
+    const data = await membershipService.adminSetPoints(id, numericPoints, {
       method: 'admin',
       reason: req.body.reason
     })
     return res.status(HTTP_STATUS_CODE.OK).json({
-      message: 'Cộng điểm thành công',
+      message: 'Cập nhật tổng điểm thành công',
       result: data
     })
   } catch (error) {

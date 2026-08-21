@@ -717,8 +717,8 @@ export const saveBill = async (req: Request, res: Response) => {
       }
     })
   } catch (error: any) {
-    return res.status(HTTP_STATUS_CODE.INTERNAL_SERVER_ERROR).json({
-      message: 'Error saving bill',
+    return res.status(error.status || HTTP_STATUS_CODE.INTERNAL_SERVER_ERROR).json({
+      message: error.message || 'Error saving bill',
       error: error.message || 'Unknown error'
     })
   }
