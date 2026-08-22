@@ -1354,6 +1354,105 @@ export class BillService {
     }
   }
 
+  /** Danh sách bill đã áp dụng quà membership (F&B hoặc giảm giá). */
+  async getGiftAppliedBills(params: {
+    page: number
+    limit: number
+    startDate?: string
+    endDate?: string
+    kind?: 'all' | 'fnb' | 'discount'
+    search?: string
+  }) {
+    const page = Math.max(1, params.page)
+    const limit = Math.min(100, Math.max(1, params.limit))
+    const filter: any = {
+      $and: [
+        {
+          $or: [
+            { 'gift.type': { $exists: true } },
+            { giftDiscountAmount: { $gt: 0 } },
+            { membershipDiscountAmount: { $gt: 0 } },
+            { 'streakGifts.0': { $exists: true } }
+          ]
+        }
+      ]
+    }
+
+    if (params.startDate || params.endDate) {
+      const start = params.startDate ? dayjs(params.startDate).startOf('day').toDate() : new Date(0)
+      const end = params.endDate ? dayjs(params.endDate).endOf('day').toDate() : new Date()
+      if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) throw new Error('Định dạng ngày không hợp lệ')
+      filter.$and.push({
+        $or: [
+          { endTime: { $gte: start, $lte: end } },
+          { actualEndTime: { $gte: start, $lte: end } },
+          { createdAt: { $gte: start, $lte: end } }
+        ]
+      })
+    }
+
+    if (params.search?.trim()) {
+      const escaped = params.search.trim().replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')
+      const regex = new RegExp(escaped, 'i')
+      filter.$and.push({
+        $or: [
+          { invoiceCode: regex },
+          { customerPhone: regex },
+          { 'membership.phone': regex },
+          { 'membership.name': regex }
+        ]
+      })
+    }
+
+    const allBills = await databaseService.bills.find(filter).sort({ endTime: -1, createdAt: -1 }).toArray()
+    const classify = (bill: any): { kind: 'fnb' | 'discount'; source: string; label: string; value?: number } | null => {
+      const type = bill.gift?.type
+      if (type === 'fnb_menu' || type === 'fnb_menu_item' || type === 'fnb_discount_amount' || bill.streakGifts?.length) {
+        return { kind: 'fnb', source: 'gift', label: bill.gift?.name || 'Quà F&B', value: bill.gift?.discountAmount }
+      }
+      if (type === 'discount_percentage' || type === 'discount') {
+        return { kind: 'discount', source: 'gift', label: bill.gift?.name || 'Giảm phần trăm', value: bill.gift?.discountPercentage }
+      }
+      if (type === 'discount_amount') {
+        return { kind: 'discount', source: 'gift', label: bill.gift?.name || 'Giảm số tiền', value: bill.gift?.discountAmount }
+      }
+      if ((bill.membershipDiscountAmount || 0) > 0 || (bill.membership?.discountAmount || 0) > 0 || (bill.membership?.discountPercentage || 0) > 0) {
+        return { kind: 'discount', source: 'membership', label: bill.membership?.note || 'Giảm membership', value: bill.membership?.discountPercentage || bill.membership?.discountAmount }
+      }
+      if ((bill.giftDiscountAmount || 0) > 0) return { kind: 'discount', source: 'gift', label: 'Giảm từ quà tặng', value: bill.giftDiscountAmount }
+      return null
+    }
+
+    const enriched = allBills
+      .map((bill: any) => ({ bill, classification: classify(bill) }))
+      .filter(({ classification }) => classification && (params.kind === undefined || params.kind === 'all' || classification.kind === params.kind))
+    const totalCount = enriched.length
+    const pageItems = enriched.slice((page - 1) * limit, page * limit)
+    const roomIds = pageItems.map(({ bill }) => bill.roomId).filter(Boolean).map((id: any) => (id instanceof ObjectId ? id : new ObjectId(id)))
+    const rooms = roomIds.length ? await databaseService.rooms.find({ _id: { $in: roomIds } }).toArray() : []
+    const roomMap = new Map(rooms.map((room: any) => [room._id.toString(), room.roomName || 'Không rõ phòng']))
+
+    return {
+      items: pageItems.map(({ bill, classification }) => ({
+        _id: bill._id?.toString(), invoiceCode: bill.invoiceCode || 'N/A',
+        roomName: roomMap.get(bill.roomId?.toString()) || 'Không rõ phòng',
+        customerName: bill.membership?.name || '', customerPhone: bill.customerPhone || bill.membership?.phone || '',
+        memberTier: bill.membership?.tier, appliedKind: classification!.kind, appliedSource: classification!.source,
+        giftName: classification!.label, giftValue: classification!.value,
+        giftDiscountAmount: bill.giftDiscountAmount || 0, membershipDiscountAmount: bill.membershipDiscountAmount || 0,
+        totalAmount: bill.totalAmount, endTime: bill.actualEndTime || bill.endTime || bill.createdAt, completedBy: bill.completedBy
+      })),
+      summary: {
+        totalBills: totalCount,
+        fnbBills: enriched.filter(({ classification }) => classification?.kind === 'fnb').length,
+        discountBills: enriched.filter(({ classification }) => classification?.kind === 'discount').length,
+        totalGiftDiscountAmount: enriched.reduce((sum, { bill }) => sum + (bill.giftDiscountAmount || 0), 0),
+        totalMembershipDiscountAmount: enriched.reduce((sum, { bill }) => sum + (bill.membershipDiscountAmount || 0), 0)
+      },
+      pagination: { page, limit, total: totalCount, totalPages: Math.ceil(totalCount / limit) }
+    }
+  }
+
   /**
    * Tạo key duy nhất cho một hóa đơn dựa trên các thông tin chính
    * @private

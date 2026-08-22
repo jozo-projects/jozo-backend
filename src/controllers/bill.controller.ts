@@ -162,6 +162,25 @@ export const getRevenueByRange = async (req: Request, res: Response) => {
   }
 }
 
+export const getGiftAppliedBills = async (req: Request, res: Response) => {
+  try {
+    const page = Number(req.query.page || 1)
+    const limit = Number(req.query.limit || 20)
+    const kind = pickQueryString(req.query.kind) as 'all' | 'fnb' | 'discount' | undefined
+    const result = await billService.getGiftAppliedBills({
+      page: Number.isFinite(page) ? page : 1,
+      limit: Number.isFinite(limit) ? limit : 20,
+      startDate: pickQueryString(req.query.startDate),
+      endDate: pickQueryString(req.query.endDate),
+      kind,
+      search: pickQueryString(req.query.search)
+    })
+    return res.status(HTTP_STATUS_CODE.OK).json({ message: 'Lấy thống kê bill áp dụng quà thành công', result })
+  } catch (error: any) {
+    return res.status(error.status || HTTP_STATUS_CODE.INTERNAL_SERVER_ERROR).json({ message: error.message || 'Lỗi khi lấy thống kê bill áp dụng quà' })
+  }
+}
+
 /**
  * Clean duplicate bills
  * @param req Request object containing optional date in query params

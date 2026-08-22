@@ -9,6 +9,7 @@ import {
   getPaymentMethodHistory,
   getBillsByRoomId,
   getRevenueByRange,
+  getGiftAppliedBills,
   printBill,
   saveBill,
   updatePaymentMethod,
@@ -26,6 +27,9 @@ const billRouter = Router()
  * @access Private
  */
 billRouter.get('/revenue', protect([UserRole.Admin, UserRole.Staff]), wrapRequestHandler(getRevenueByRange))
+
+/** @route GET /bill/gift-applied */
+billRouter.get('/gift-applied', protect([UserRole.Admin, UserRole.Staff]), wrapRequestHandler(getGiftAppliedBills))
 
 /**
  * @route GET /bill/details/:billId

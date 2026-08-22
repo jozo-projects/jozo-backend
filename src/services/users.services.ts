@@ -155,6 +155,7 @@ class UsersServices {
       .toArray()
 
     return {
+      items: users,
       users,
       pagination: {
         page,
