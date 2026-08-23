@@ -170,6 +170,10 @@ class DatabaseService {
     return this.db.collection('bills')
   }
 
+  get retailSales(): Collection<Document> {
+    return this.db.collection('retail_sales')
+  }
+
   get billPaymentMethodLogs(): Collection<IBillPaymentMethodLog> {
     return this.db.collection('bill_payment_method_logs')
   }

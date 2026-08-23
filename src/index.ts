@@ -24,6 +24,7 @@ import fnbMenuRouter from '~/routes/fnbMenu.routes'
 import fnbMenuItemRouter from '~/routes/fnbMenuItem.routes'
 import fnbShiftCountRouter from '~/routes/fnbShiftCount.routes'
 import fnbOrderRouter from '~/routes/fnbOrder.routes'
+import retailSaleRouter from '~/routes/retailSale.routes'
 import holidayRouter from '~/routes/holiday.routes'
 import notificationRouter from '~/routes/notification.routes'
 import onlineBookingRouter from '~/routes/onlineBooking.routes'
@@ -150,6 +151,7 @@ app.use('/price', priceRouter)
 app.use('/file', fileRouter)
 app.use('/room-schedule', roomScheduleRouter)
 app.use('/fnb-orders', fnbOrderRouter)
+app.use('/retail-sales', retailSaleRouter)
 app.use('/bill', billRouter)
 app.use('/fnb-menu', fnbMenuRouter)
 app.use('/promotions', promotionRouter)

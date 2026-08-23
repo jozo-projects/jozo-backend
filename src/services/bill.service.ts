@@ -90,7 +90,7 @@ declare module 'escpos-usb' {
 }
 
 // TextPrinter class để giả lập printer
-class TextPrinter {
+export class TextPrinter {
   private content: string[] = []
   private currentAlign: 'lt' | 'ct' | 'rt' = 'lt'
   private currentStyle: 'normal' | 'b' | 'i' = 'normal'
@@ -329,7 +329,24 @@ export class BillService {
     return this.attachRevenueUserNames(filteredBills)
   }
 
-  /** Gộp các bill trùng scheduleId: ưu tiên đã thanh toán, sau đó bill mới nhất theo createdAt. */
+  private revenueBillBenefitScore(bill: IBill): number {
+    const candidate = bill as IBill & {
+      gift?: unknown
+      giftDiscountAmount?: number
+      streakGifts?: unknown[]
+    }
+    return (
+      (candidate.membershipDiscountAmount ||
+      candidate.membership?.discountAmount ||
+      candidate.membership?.discountPercentage
+        ? 4
+        : 0) +
+      (candidate.gift || candidate.giftDiscountAmount ? 3 : 0) +
+      (candidate.streakGifts?.length ? 3 : 0)
+    )
+  }
+
+  /** Gộp các bill trùng scheduleId: giữ bản đã thanh toán và ưu tiên bản có metadata ưu đãi đầy đủ. */
   private dedupeBillsByScheduleForRevenue(bills: IBill[]): IBill[] {
     const uniqueBills = new Map<string, IBill>()
     for (const bill of bills) {
@@ -339,17 +356,26 @@ export class BillService {
         continue
       }
       const existingBill = uniqueBills.get(scheduleId)!
+      const billIsPaid = !!bill.paymentMethod
+      const existingBillIsPaid = !!existingBill.paymentMethod
       let shouldReplace = false
-      if (bill.paymentMethod && !existingBill.paymentMethod) {
-        shouldReplace = true
-      } else if (
-        (!bill.paymentMethod && !existingBill.paymentMethod) ||
-        (bill.paymentMethod && existingBill.paymentMethod)
-      ) {
-        if (bill.createdAt && existingBill.createdAt && new Date(bill.createdAt) > new Date(existingBill.createdAt)) {
+
+      if (billIsPaid !== existingBillIsPaid) {
+        shouldReplace = billIsPaid
+      } else {
+        const benefitScore = this.revenueBillBenefitScore(bill)
+        const existingBenefitScore = this.revenueBillBenefitScore(existingBill)
+        if (benefitScore !== existingBenefitScore) {
+          shouldReplace = benefitScore > existingBenefitScore
+        } else if (
+          bill.createdAt &&
+          existingBill.createdAt &&
+          new Date(bill.createdAt) > new Date(existingBill.createdAt)
+        ) {
           shouldReplace = true
         }
       }
+
       if (shouldReplace) {
         uniqueBills.set(scheduleId, bill)
       }
@@ -1361,6 +1387,7 @@ export class BillService {
     startDate?: string
     endDate?: string
     kind?: 'all' | 'fnb' | 'discount'
+    source?: 'all' | 'membership' | 'gift' | 'streak'
     search?: string
   }) {
     const page = Math.max(1, params.page)
@@ -1405,47 +1432,123 @@ export class BillService {
     }
 
     const allBills = await databaseService.bills.find(filter).sort({ endTime: -1, createdAt: -1 }).toArray()
-    const classify = (bill: any): { kind: 'fnb' | 'discount'; source: string; label: string; value?: number } | null => {
+    const classify = (
+      bill: any
+    ): {
+      kind: 'fnb' | 'discount'
+      source: 'membership' | 'gift' | 'streak'
+      label: string
+      reason: string
+      value?: number
+    } | null => {
       const type = bill.gift?.type
-      if (type === 'fnb_menu' || type === 'fnb_menu_item' || type === 'fnb_discount_amount' || bill.streakGifts?.length) {
-        return { kind: 'fnb', source: 'gift', label: bill.gift?.name || 'Quà F&B', value: bill.gift?.discountAmount }
+      if (bill.streakGifts?.length) {
+        const milestones = bill.streakGifts.map((gift: any) => `${gift.streakCount} lần`).join(', ')
+        return {
+          kind: 'fnb',
+          source: 'streak',
+          label: 'Quà streak',
+          reason: `Đạt streak ${milestones}`,
+          value: bill.giftDiscountAmount || 0
+        }
+      }
+      if (type === 'fnb_menu' || type === 'fnb_menu_item' || type === 'fnb_discount_amount') {
+        return {
+          kind: 'fnb',
+          source: 'gift',
+          label: bill.gift?.name || 'Quà F&B',
+          reason: bill.gift?.name || 'Được tặng theo quà membership',
+          value: bill.gift?.discountAmount
+        }
       }
       if (type === 'discount_percentage' || type === 'discount') {
-        return { kind: 'discount', source: 'gift', label: bill.gift?.name || 'Giảm phần trăm', value: bill.gift?.discountPercentage }
+        return {
+          kind: 'discount',
+          source: 'gift',
+          label: bill.gift?.name || 'Giảm phần trăm',
+          reason: bill.gift?.name || `Giảm ${bill.gift?.discountPercentage || 0}% từ quà membership`,
+          value: bill.gift?.discountPercentage
+        }
       }
       if (type === 'discount_amount') {
-        return { kind: 'discount', source: 'gift', label: bill.gift?.name || 'Giảm số tiền', value: bill.gift?.discountAmount }
+        return {
+          kind: 'discount',
+          source: 'gift',
+          label: bill.gift?.name || 'Giảm số tiền',
+          reason: bill.gift?.name || `Giảm ${bill.gift?.discountAmount || 0}đ từ quà membership`,
+          value: bill.gift?.discountAmount
+        }
       }
-      if ((bill.membershipDiscountAmount || 0) > 0 || (bill.membership?.discountAmount || 0) > 0 || (bill.membership?.discountPercentage || 0) > 0) {
-        return { kind: 'discount', source: 'membership', label: bill.membership?.note || 'Giảm membership', value: bill.membership?.discountPercentage || bill.membership?.discountAmount }
+      if (
+        (bill.membershipDiscountAmount || 0) > 0 ||
+        (bill.membership?.discountAmount || 0) > 0 ||
+        (bill.membership?.discountPercentage || 0) > 0
+      ) {
+        return {
+          kind: 'discount',
+          source: 'membership',
+          label: bill.membership?.note || 'Giảm membership',
+          reason:
+            bill.membership?.note ||
+            `Ưu đãi hạng ${bill.membership?.tier || 'member'}${bill.membership?.discountPercentage ? ` - ${bill.membership.discountPercentage}%` : ''}`,
+          value: bill.membership?.discountPercentage || bill.membership?.discountAmount
+        }
       }
-      if ((bill.giftDiscountAmount || 0) > 0) return { kind: 'discount', source: 'gift', label: 'Giảm từ quà tặng', value: bill.giftDiscountAmount }
+      if ((bill.giftDiscountAmount || 0) > 0)
+        return {
+          kind: 'discount',
+          source: 'gift',
+          label: 'Giảm từ quà tặng',
+          reason: 'Được giảm theo quà membership',
+          value: bill.giftDiscountAmount
+        }
       return null
     }
 
     const enriched = allBills
       .map((bill: any) => ({ bill, classification: classify(bill) }))
-      .filter(({ classification }) => classification && (params.kind === undefined || params.kind === 'all' || classification.kind === params.kind))
+      .filter(
+        ({ classification }) =>
+          classification &&
+          (params.kind === undefined || params.kind === 'all' || classification.kind === params.kind) &&
+          (params.source === undefined || params.source === 'all' || classification.source === params.source)
+      )
     const totalCount = enriched.length
     const pageItems = enriched.slice((page - 1) * limit, page * limit)
-    const roomIds = pageItems.map(({ bill }) => bill.roomId).filter(Boolean).map((id: any) => (id instanceof ObjectId ? id : new ObjectId(id)))
+    const roomIds = pageItems
+      .map(({ bill }) => bill.roomId)
+      .filter(Boolean)
+      .map((id: any) => (id instanceof ObjectId ? id : new ObjectId(id)))
     const rooms = roomIds.length ? await databaseService.rooms.find({ _id: { $in: roomIds } }).toArray() : []
     const roomMap = new Map(rooms.map((room: any) => [room._id.toString(), room.roomName || 'Không rõ phòng']))
 
     return {
       items: pageItems.map(({ bill, classification }) => ({
-        _id: bill._id?.toString(), invoiceCode: bill.invoiceCode || 'N/A',
+        _id: bill._id?.toString(),
+        invoiceCode: bill.invoiceCode || 'N/A',
         roomName: roomMap.get(bill.roomId?.toString()) || 'Không rõ phòng',
-        customerName: bill.membership?.name || '', customerPhone: bill.customerPhone || bill.membership?.phone || '',
-        memberTier: bill.membership?.tier, appliedKind: classification!.kind, appliedSource: classification!.source,
-        giftName: classification!.label, giftValue: classification!.value,
-        giftDiscountAmount: bill.giftDiscountAmount || 0, membershipDiscountAmount: bill.membershipDiscountAmount || 0,
-        totalAmount: bill.totalAmount, endTime: bill.actualEndTime || bill.endTime || bill.createdAt, completedBy: bill.completedBy
+        customerName: bill.membership?.name || '',
+        customerPhone: bill.customerPhone || bill.membership?.phone || '',
+        memberTier: bill.membership?.tier,
+        appliedKind: classification!.kind,
+        appliedSource: classification!.source,
+        giftName: classification!.label,
+        giftValue: classification!.value,
+        appliedReason: classification!.reason,
+        streakGifts: bill.streakGifts || [],
+        giftDiscountAmount: bill.giftDiscountAmount || 0,
+        membershipDiscountAmount: bill.membershipDiscountAmount || 0,
+        totalAmount: bill.totalAmount,
+        endTime: bill.actualEndTime || bill.endTime || bill.createdAt,
+        completedBy: bill.completedBy
       })),
       summary: {
         totalBills: totalCount,
         fnbBills: enriched.filter(({ classification }) => classification?.kind === 'fnb').length,
         discountBills: enriched.filter(({ classification }) => classification?.kind === 'discount').length,
+        membershipBills: enriched.filter(({ classification }) => classification?.source === 'membership').length,
+        giftBills: enriched.filter(({ classification }) => classification?.source === 'gift').length,
+        streakBills: enriched.filter(({ classification }) => classification?.source === 'streak').length,
         totalGiftDiscountAmount: enriched.reduce((sum, { bill }) => sum + (bill.giftDiscountAmount || 0), 0),
         totalMembershipDiscountAmount: enriched.reduce((sum, { bill }) => sum + (bill.membershipDiscountAmount || 0), 0)
       },
@@ -1945,10 +2048,7 @@ export class BillService {
 
   /** Mã HĐ unique: #DDMMHHmmss + 3 ký tự random (tránh đụng khi 2 bill cùng phút). */
   private generateInvoiceCode(): string {
-    const now = dayjs().tz('Asia/Ho_Chi_Minh')
-    const stamp = now.format('DDMMHHmmss')
-    const suffix = Math.random().toString(36).slice(2, 5).toUpperCase()
-    return `#${stamp}${suffix}`
+    return generateInvoiceCode()
   }
 
   /** Đảm bảo invoiceCode chưa tồn tại trên bills / rewardHistories. */
@@ -2108,6 +2208,51 @@ export class BillService {
         customerPhone = normalizeVietnamPhone(customerPhone) || customerPhone.trim()
       }
 
+      // Resolve membership again at the persistence boundary. The client may already
+      // send a discounted total, but the bill must retain the membership snapshot so
+      // GET /bill and revenue statistics can explain why the total was discounted.
+      let persistedMembership: IBill['membership'] | undefined
+      let persistedMembershipDiscountAmount: number | undefined
+      if (customerPhone) {
+        const resolvedMembership = await membershipService.resolveMembershipByPhone(customerPhone)
+        if (resolvedMembership.found && resolvedMembership.user) {
+          const tierDiscount = resolvedMembership.tierDiscount
+          const discountAmount = tierDiscount?.discountPercentage
+            ? undefined
+            : tierDiscount?.discountAmount && tierDiscount.discountAmount > 0
+              ? tierDiscount.discountAmount
+              : undefined
+          const billSubtotal = (billData.items || []).reduce((sum, item) => {
+            if (item.price <= 0 || item.isStreakGift) return sum
+            return sum + item.price * item.quantity
+          }, 0)
+          const discountPercentage =
+            tierDiscount?.discountPercentage && tierDiscount.discountPercentage > 0
+              ? tierDiscount.discountPercentage
+              : undefined
+          persistedMembershipDiscountAmount = discountPercentage
+            ? (billSubtotal * discountPercentage) / 100
+            : discountAmount
+          persistedMembership = {
+            found: true,
+            phone: resolvedMembership.phone,
+            userId: resolvedMembership.user.userId,
+            name: resolvedMembership.user.name,
+            tier: resolvedMembership.user.tier,
+            discountPercentage,
+            discountAmount,
+            note: tierDiscount?.note,
+            reason: tierDiscount ? undefined : 'Hạng chưa có quyền lợi discount trong config'
+          }
+        } else {
+          persistedMembership = {
+            found: false,
+            phone: resolvedMembership.phone,
+            reason: resolvedMembership.reason
+          }
+        }
+      }
+
       // 5. Chuẩn bị bill để lưu
       const now = new Date()
       const billToSave: IBill = {
@@ -2122,7 +2267,9 @@ export class BillService {
         startTime: billData.startTime ? new Date(billData.startTime) : now,
         endTime: billData.endTime ? new Date(billData.endTime) : now,
         customerPhone: customerPhone || undefined,
-        paymentMethod: normalizePaymentMethod(billData.paymentMethod)
+        paymentMethod: normalizePaymentMethod(billData.paymentMethod),
+        membership: persistedMembership || billData.membership,
+        membershipDiscountAmount: persistedMembershipDiscountAmount || billData.membershipDiscountAmount
       }
 
       // 6. Lưu bill vào database
@@ -2414,10 +2561,17 @@ export async function printBitmapWithEscpos(text: string): Promise<void> {
   })
 }
 
-function removeVietnameseTones(str: string): string {
+export function removeVietnameseTones(str: string): string {
   return str
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/đ/g, 'd')
     .replace(/Đ/g, 'D')
+}
+
+/** Mã HĐ: #DDMMHHmmss + 3 ký tự random (cùng công thức bill phòng). */
+export function generateInvoiceCode(at: Date = new Date()): string {
+  const stamp = dayjs(at).tz('Asia/Ho_Chi_Minh').format('DDMMHHmmss')
+  const suffix = Math.random().toString(36).slice(2, 5).toUpperCase()
+  return `#${stamp}${suffix}`
 }
