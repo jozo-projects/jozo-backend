@@ -341,7 +341,37 @@ export const getBillById = async (req: Request, res: Response) => {
       })
     }
 
-    // Tìm hóa đơn trong database
+    // Bill bán lẻ nằm ở collection riêng, không có room/schedule như bill karaoke.
+    const retailSale = await databaseService.retailSales.findOne({ _id: new ObjectId(billId) })
+    if (retailSale) {
+      const createdAt = retailSale.createdAt
+      const formattedRetailSale = {
+        ...retailSale,
+        source: 'retail' as const,
+        roomName: 'Bán lẻ',
+        roomType: 'Bán lẻ',
+        customerName: '',
+        formattedStartTime: dayjs(createdAt).tz('Asia/Ho_Chi_Minh').format('DD/MM/YYYY HH:mm'),
+        formattedEndTime: dayjs(createdAt).tz('Asia/Ho_Chi_Minh').format('DD/MM/YYYY HH:mm'),
+        formattedCreatedAt: dayjs(createdAt).tz('Asia/Ho_Chi_Minh').format('DD/MM/YYYY HH:mm'),
+        usageDuration: '0.00',
+        invoiceCode: retailSale.invoiceCode || 'N/A',
+        items: Array.isArray(retailSale.items)
+          ? retailSale.items.map((item: any) => ({
+              description: item.name,
+              price: item.price,
+              quantity: item.quantity
+            }))
+          : []
+      }
+
+      return res.status(HTTP_STATUS_CODE.OK).json({
+        message: 'Get bill details successfully',
+        result: formattedRetailSale
+      })
+    }
+
+    // Tìm hóa đơn phòng trong database
     const bill = await databaseService.bills.findOne({ _id: new ObjectId(billId) })
 
     if (!bill) {
