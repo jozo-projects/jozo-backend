@@ -8,6 +8,7 @@ import { ErrorWithStatus } from '~/models/Error'
 import { normalizePaymentMethod } from '~/utils/paymentMethod'
 import { wrapBillItemName } from '~/utils/streakGiftBillLines'
 import { generateInvoiceCode, removeVietnameseTones, TextPrinter } from './bill.service'
+import fnbSalesMovementService from './fnbSalesMovement.service'
 
 dayjs.extend(utc)
 dayjs.extend(timezone)
@@ -190,6 +191,21 @@ class RetailSaleService {
     return databaseService.retailSales
   }
 
+  private async recordSaleMovement(sale: RetailSaleDraft): Promise<void> {
+    const deltas = new Map<string, number>()
+    for (const item of sale.items) {
+      deltas.set(item.itemId, (deltas.get(item.itemId) ?? 0) + item.quantity)
+    }
+
+    await fnbSalesMovementService.logDeltas(
+      Array.from(deltas, ([itemId, delta]) => ({ itemId, delta })),
+      'retail',
+      sale._id.toString(),
+      sale.createdBy,
+      sale.idempotencyKey
+    )
+  }
+
   async getProducts() {
     return fnbMenuItemService.getSelectableStockItems()
   }
@@ -242,13 +258,20 @@ class RetailSaleService {
         deducted.push({ itemId: item.itemId, quantity: item.quantity })
       }
       await this.collection.insertOne(draft)
-      return draft
     } catch (error) {
       await Promise.all(deducted.map((item) => fnbMenuItemService.restoreStock(item.itemId, item.quantity)))
       const retry = await this.collection.findOne({ idempotencyKey: input.idempotencyKey })
-      if (retry) return retry
+      if (retry) {
+        await this.recordSaleMovement(retry as unknown as RetailSaleDraft)
+        return retry
+      }
       throw error
     }
+
+    // Ghi movement sau khi sale đã tồn tại. Nếu movement lỗi, request lỗi để retry
+    // có thể bổ sung movement; không trả success giả khi kiểm kê chưa được cập nhật.
+    await this.recordSaleMovement(draft)
+    return draft
   }
 
   async listSales(from?: Date, to?: Date) {

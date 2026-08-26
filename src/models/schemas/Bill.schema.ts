@@ -6,6 +6,8 @@ import type { FNBOrderLine } from '~/models/schemas/FNB.schema'
 
 export interface IBill {
   _id?: ObjectId
+  /** Nguồn doanh thu; bill phòng cũ không có field này nên mặc định là karaoke. */
+  source?: 'karaoke' | 'retail' | string
   scheduleId: ObjectId | string
   roomId: ObjectId | string
   roomType?: RoomType | string

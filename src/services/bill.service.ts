@@ -25,6 +25,7 @@ import { buildStreakGiftBillLines, wrapBillItemName } from '~/utils/streakGiftBi
 import databaseService from './database.service'
 import fnbMenuItemService from './fnbMenuItem.service'
 import fnbOrderService from './fnbOrder.service'
+import { hasPendingFnbOrderForSchedule } from './fnbPendingOrder.service'
 import { holidayService } from './holiday.service'
 
 // Cấu hình timezone và plugins cho dayjs
@@ -394,22 +395,60 @@ export class BillService {
     options: { floorBillAmountsToThousand?: boolean } = {}
   ): Promise<{ totalRevenue: number; bills: IBill[]; startDate: Date; endDate: Date }> {
     const { floorBillAmountsToThousand = true } = options
-    const bills = await databaseService.bills
-      .find({
-        startTime: {
-          $gte: startDateObj,
-          $lte: endDateObj
-        }
-      })
-      .sort({ startTime: -1 })
-      .toArray()
+    const [bills, retailSales] = await Promise.all([
+      databaseService.bills
+        .find({
+          startTime: {
+            $gte: startDateObj,
+            $lte: endDateObj
+          }
+        })
+        .sort({ startTime: -1 })
+        .toArray(),
+      databaseService.retailSales
+        .find({
+          createdAt: {
+            $gte: startDateObj,
+            $lte: endDateObj
+          }
+        })
+        .sort({ createdAt: -1 })
+        .toArray()
+    ])
 
-    if (bills.length === 0) {
+    const retailRevenueBills = retailSales.map(
+      (sale) =>
+        ({
+          _id: sale._id,
+          source: 'retail',
+          // Retail không thuộc phòng/lịch phòng; giữ giá trị rỗng để tương thích kiểu IBill cũ.
+          scheduleId: '',
+          roomId: '',
+          items: Array.isArray(sale.items)
+            ? sale.items.map((item: any) => ({
+                description: item.name,
+                price: item.price,
+                quantity: item.quantity
+              }))
+            : [],
+          totalAmount: Number(sale.totalAmount) || 0,
+          startTime: sale.createdAt,
+          endTime: sale.createdAt,
+          createdAt: sale.createdAt,
+          createdBy: sale.createdBy,
+          paymentMethod: sale.paymentMethod,
+          invoiceCode: sale.invoiceCode
+        }) as unknown as IBill
+    )
+
+    if (bills.length === 0 && retailRevenueBills.length === 0) {
       return { totalRevenue: 0, bills: [], startDate: startDateObj, endDate: endDateObj }
     }
 
     const deduped = this.dedupeBillsByScheduleForRevenue(bills)
-    const finalBills = await this.prepareRevenueBills(deduped, viewerUserId)
+    const finalBills = (await this.prepareRevenueBills([...deduped, ...retailRevenueBills], viewerUserId)).sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    )
 
     if (floorBillAmountsToThousand) {
       finalBills.forEach((bill) => {
@@ -2136,6 +2175,14 @@ export class BillService {
         throw new ErrorWithStatus({
           message: 'Missing required fields: scheduleId, roomId',
           status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      }
+
+      // Không lưu bill snapshot khi vẫn còn order FNB chưa được admin xác nhận phục vụ.
+      if (await hasPendingFnbOrderForSchedule(billData.scheduleId)) {
+        throw new ErrorWithStatus({
+          message: 'Vẫn còn order FNB đang chờ xác nhận phục vụ. Vui lòng xử lý order trước khi chốt bill.',
+          status: HTTP_STATUS_CODE.CONFLICT
         })
       }
 

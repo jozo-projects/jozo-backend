@@ -11,6 +11,12 @@ class FnbSalesMovementService {
     createdBy?: string,
     orderRef?: string
   ): Promise<void> {
+    // Retail sale dùng orderRef = idempotencyKey để retry không ghi movement trùng.
+    if (orderRef) {
+      const existing = await databaseService.fnbSalesMovements.findOne({ source, sourceId: new ObjectId(sourceId), orderRef })
+      if (existing) return
+    }
+
     const now = new Date()
     const docs: IFnbSalesMovement[] = deltas
       .filter((row) => row.delta !== 0)
@@ -176,14 +182,14 @@ class FnbSalesMovementService {
     ]
   }
 
-  /** Kiểm kê FNB: net qty đã add/bớt trên đơn karaoke trong [from, to) (fnb_sales_movements). */
+  /** Kiểm kê FNB: net qty đã bán từ karaoke và retail trong [from, to) (fnb_sales_movements). */
   private async aggregateKaraokeMovementsByRange(from: Date, to: Date): Promise<Record<string, number>> {
     const rows = await databaseService.fnbSalesMovements
       .aggregate<{ _id: ObjectId; quantity: number }>([
         {
           $match: {
             createdAt: { $gte: from, $lt: to },
-            source: 'karaoke'
+            source: { $in: ['karaoke', 'retail'] }
           }
         },
         { $group: { _id: '$itemId', quantity: { $sum: '$delta' } } }

@@ -1,6 +1,6 @@
 import { ObjectId } from 'mongodb'
 
-export type FnbSalesSource = 'karaoke' | 'coffee'
+export type FnbSalesSource = 'karaoke' | 'coffee' | 'retail'
 
 export interface IFnbSalesMovement {
   _id?: ObjectId
