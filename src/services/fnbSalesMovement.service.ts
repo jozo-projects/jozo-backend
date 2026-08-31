@@ -148,33 +148,12 @@ class FnbSalesMovementService {
             { $match: { $expr: billHasFnbExpr } },
             { $addFields: { fnbSource: '$fnbOrder' } },
             ...fnbItemsStages
-          ],
-          needHistory: [
-            { $match: { $expr: { $not: billHasFnbExpr } } },
-            {
-              $lookup: {
-                from: 'fnb_order_history',
-                let: { scheduleId: '$scheduleId' },
-                pipeline: [
-                  { $match: { $expr: { $eq: ['$roomScheduleId', '$$scheduleId'] } } },
-                  { $sort: { completedAt: -1 } },
-                  { $limit: 1 }
-                ],
-                as: 'orderHistory'
-              }
-            },
-            {
-              $addFields: {
-                fnbSource: { $ifNull: [{ $arrayElemAt: ['$orderHistory.order', 0] }, {}] }
-              }
-            },
-            ...fnbItemsStages
           ]
         }
       },
       {
         $project: {
-          bills: { $concatArrays: ['$withFnbOnBill', '$needHistory'] }
+          bills: '$withFnbOnBill'
         }
       },
       { $unwind: '$bills' },
@@ -182,14 +161,18 @@ class FnbSalesMovementService {
     ]
   }
 
-  /** Kiểm kê FNB: net qty đã bán từ karaoke và retail trong [from, to) (fnb_sales_movements). */
-  private async aggregateKaraokeMovementsByRange(from: Date, to: Date): Promise<Record<string, number>> {
+  /** Net movement theo source trong [from, to). */
+  private async aggregateMovementsBySource(
+    from: Date,
+    to: Date,
+    sources: FnbSalesSource[]
+  ): Promise<Record<string, number>> {
     const rows = await databaseService.fnbSalesMovements
       .aggregate<{ _id: ObjectId; quantity: number }>([
         {
           $match: {
             createdAt: { $gte: from, $lt: to },
-            source: { $in: ['karaoke', 'retail'] }
+            source: { $in: sources }
           }
         },
         { $group: { _id: '$itemId', quantity: { $sum: '$delta' } } }
@@ -304,18 +287,26 @@ class FnbSalesMovementService {
 
   /**
    * systemSold kiểm kê theo ngày kinh doanh VN (cắt 03:00 sáng hôm sau)
-   * = karaoke (fnb_sales_movements) + coffee (batches submittedAt).
-   * Karaoke: lúc add/bớt món trên đơn, không phụ thuộc bill đã hoàn tất.
+   * = karaoke đã chốt theo bill + retail movement + membership movement + coffee.
+   * Karaoke không dùng movement vì movement phát sinh ở từng lần chỉnh order và có thể dư
+   * khi order bị retry/void; FNB stats đã dedupe theo scheduleId và bill cuối.
    */
   async aggregateSystemSoldByDate(businessDate: string): Promise<Record<string, number>> {
     const { from, to } = getFnbBusinessDateRange(businessDate)
 
-    const [karaokeMap, coffeeMap] = await Promise.all([
-      this.aggregateKaraokeMovementsByRange(from, to),
+    const [karaokeStats, retailMap, membershipMap, coffeeMap] = await Promise.all([
+      this.aggregateKaraokeStatsByRange(from, to),
+      this.aggregateMovementsBySource(from, to, ['retail']),
+      this.aggregateMovementsBySource(from, to, ['membership']),
       this.aggregateCoffeeSoldByRange(from, to)
     ])
 
-    return this.mergeSoldMaps(karaokeMap, coffeeMap)
+    const karaokeMap: Record<string, number> = {}
+    for (const item of karaokeStats.items) {
+      karaokeMap[item.itemId] = (karaokeMap[item.itemId] ?? 0) + item.quantity
+    }
+
+    return this.mergeSoldMaps(karaokeMap, retailMap, membershipMap, coffeeMap)
   }
 
   /** systemSold theo ca nhân viên: lọc fnb_sales_movements theo createdBy trong ngày kinh doanh (cắt 03:00). */

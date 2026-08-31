@@ -271,13 +271,10 @@ class FnbOrderService {
 
     switch (period) {
       case 'day': {
-        // Đồng bộ với kiểm kê: ngày KD cắt 03:00 (không dùng 00:00–23:59 lịch).
-        // Tránh lệch phòng qua đêm — order tối hôm trước, bill chốt sau nửa đêm.
-        const businessDate = dateStr ?? getFnbBusinessDateStr(now)
-        const { from, to } = getFnbBusinessDateRange(businessDate)
-        fromDate = dayjs(from).tz(VIETNAM_TZ)
-        // getFnbBusinessDateRange trả [from, to); pipeline bill dùng $lte nên lùi 1ms.
-        toDate = dayjs(to).tz(VIETNAM_TZ).subtract(1, 'millisecond')
+        // Báo cáo bán hàng theo ngày lịch VN: 00:00–23:59:59.999.
+        // Kiểm kê ca vẫn dùng business date 03:00–03:00 ở aggregateSystemSoldByDate.
+        fromDate = baseDate.startOf('day')
+        toDate = baseDate.endOf('day')
         break
       }
       case 'week':

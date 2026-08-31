@@ -360,7 +360,12 @@ export const addStreakGiftItems = async (req: Request, res: Response, next: Next
   }
 
   try {
-    const result = await membershipService.addStreakGiftItems(scheduleId, Number(streakCount), items)
+    const result = await membershipService.addStreakGiftItems(
+      scheduleId,
+      Number(streakCount),
+      items,
+      req.decoded_authorization?.user_id
+    )
     return res.status(HTTP_STATUS_CODE.OK).json({
       message: 'Đã thêm món quà streak',
       result
@@ -391,7 +396,8 @@ export const updateStreakGiftItem = async (req: Request, res: Response, next: Ne
       scheduleId,
       Number(streakCount),
       String(itemId),
-      Number(quantity)
+      Number(quantity),
+      req.decoded_authorization?.user_id
     )
     return res.status(HTTP_STATUS_CODE.OK).json({
       message: Number(quantity) === 0 ? 'Đã xoá món quà streak' : 'Đã cập nhật số lượng món quà',
@@ -422,7 +428,12 @@ export const removeStreakGiftItem = async (req: Request, res: Response, next: Ne
   }
 
   try {
-    const result = await membershipService.removeStreakGiftItem(scheduleId, Number(streakCount), String(itemId))
+    const result = await membershipService.removeStreakGiftItem(
+      scheduleId,
+      Number(streakCount),
+      String(itemId),
+      req.decoded_authorization?.user_id
+    )
     return res.status(HTTP_STATUS_CODE.OK).json({
       message: 'Đã xoá món quà streak (hoàn kho + trả quota)',
       result

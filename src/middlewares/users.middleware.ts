@@ -15,6 +15,20 @@ const caseInsensitiveExact = (value: string) => ({
   $regex: new RegExp(`^${value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i')
 })
 
+const isValidMemberBirthDate = (value: string) => {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return false
+
+  const today = new Date()
+  let age = today.getFullYear() - date.getFullYear()
+  const birthdayHasPassed =
+    today.getMonth() > date.getMonth() ||
+    (today.getMonth() === date.getMonth() && today.getDate() >= date.getDate())
+
+  if (!birthdayHasPassed) age -= 1
+  return age >= 12 && age <= 100
+}
+
 export const checkRegisterUserExists = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { username, email } = req.body
@@ -218,6 +232,14 @@ export const registerValidator = validate(
         isISO8601: {
           options: { strict: true, strictSeparator: true },
           errorMessage: USER_MESSAGES.INVALID_DATE_OF_BIRTH
+        },
+        custom: {
+          options: (value: string) => {
+            if (!isValidMemberBirthDate(value)) {
+              throw new Error(USER_MESSAGES.INVALID_DATE_OF_BIRTH)
+            }
+            return true
+          }
         }
       },
       role: {
@@ -319,6 +341,14 @@ export const updateUserValidator = validate(
         isISO8601: {
           options: { strict: true, strictSeparator: true },
           errorMessage: USER_MESSAGES.INVALID_DATE_OF_BIRTH
+        },
+        custom: {
+          options: (value: string) => {
+            if (!isValidMemberBirthDate(value)) {
+              throw new Error(USER_MESSAGES.INVALID_DATE_OF_BIRTH)
+            }
+            return true
+          }
         }
       },
       bio: {

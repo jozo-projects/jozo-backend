@@ -20,6 +20,7 @@ import {
 } from '~/utils/common'
 import databaseService from './database.service'
 import fnBMenuItemService from './fnbMenuItem.service'
+import fnbSalesMovementService from './fnbSalesMovement.service'
 
 type StreakClaimItemInput = {
   itemId: string
@@ -1303,6 +1304,20 @@ class MembershipService {
     return { deducted, servedItems }
   }
 
+  /** Ghi nhận item phát cho member vào systemSold/FNB shift count. */
+  private async logStreakGiftMovement(
+    scheduleId: string,
+    items: Array<{ itemId: string | ObjectId; quantity: number }>,
+    staffId?: string
+  ): Promise<void> {
+    const deltas = items
+      .filter((item) => item.quantity !== 0)
+      .map((item) => ({ itemId: item.itemId.toString(), delta: item.quantity }))
+    if (deltas.length === 0) return
+
+    await fnbSalesMovementService.logDeltas(deltas, 'membership', scheduleId, staffId)
+  }
+
   private async syncStreakGiftItemsOnSchedule(
     scheduleId: ObjectId,
     streakCount: number,
@@ -1631,6 +1646,8 @@ class MembershipService {
             servedItems: [] as StreakServedItemSnapshot[]
           }
 
+    await this.logStreakGiftMovement(scheduleId, deducted, staffId)
+
     const servedAt = new Date()
     let updatedReward: RewardHistory | null = null
 
@@ -1762,7 +1779,12 @@ class MembershipService {
   }
 
   /** Thêm món vào quà streak đã claim — trừ kho, tiêu remainingQuantity. */
-  async addStreakGiftItems(scheduleId: string, streakCount: number, items: StreakClaimItemInput[]) {
+  async addStreakGiftItems(
+    scheduleId: string,
+    streakCount: number,
+    items: StreakClaimItemInput[],
+    staffId?: string
+  ) {
     const { scheduleObjectId, served } = await this.getServedStreakGiftOrThrow(scheduleId, streakCount)
     const qtyByItemId = this.aggregateItemQuantities(items)
     const addQty = [...qtyByItemId.values()].reduce((sum, q) => sum + q, 0)
@@ -1784,7 +1806,8 @@ class MembershipService {
       })
     }
 
-    const { servedItems: added } = await this.deductStreakItems(qtyByItemId)
+    const { deducted, servedItems: added } = await this.deductStreakItems(qtyByItemId)
+    await this.logStreakGiftMovement(scheduleId, deducted, staffId)
 
     const byId = new Map<string, StreakServedItemSnapshot>()
     for (const item of currentItems) {
@@ -1820,7 +1843,13 @@ class MembershipService {
    * Sửa số lượng 1 món quà. quantity=0 = xoá.
    * Tăng → trừ kho + tiêu quota; giảm → hoàn kho + trả quota.
    */
-  async updateStreakGiftItemQuantity(scheduleId: string, streakCount: number, itemId: string, quantity: number) {
+  async updateStreakGiftItemQuantity(
+    scheduleId: string,
+    streakCount: number,
+    itemId: string,
+    quantity: number,
+    staffId?: string
+  ) {
     if (!ObjectId.isValid(itemId)) {
       throw new ErrorWithStatus({
         message: 'itemId không hợp lệ',
@@ -1856,10 +1885,12 @@ class MembershipService {
     }
 
     if (delta > 0) {
-      await this.deductStreakItems(new Map([[itemId, delta]]))
+      const { deducted } = await this.deductStreakItems(new Map([[itemId, delta]]))
+      await this.logStreakGiftMovement(scheduleId, deducted, staffId)
       currentItems[idx] = { ...currentItems[idx], quantity }
     } else if (delta < 0) {
       await fnBMenuItemService.restoreStock(itemId, -delta)
+      await this.logStreakGiftMovement(scheduleId, [{ itemId, quantity: delta }], staffId)
       if (quantity === 0) {
         currentItems.splice(idx, 1)
       } else {
@@ -1883,8 +1914,8 @@ class MembershipService {
   }
 
   /** Xoá 1 món khỏi quà streak — hoàn kho + trả lại remainingQuantity. */
-  async removeStreakGiftItem(scheduleId: string, streakCount: number, itemId: string) {
-    return this.updateStreakGiftItemQuantity(scheduleId, streakCount, itemId, 0)
+  async removeStreakGiftItem(scheduleId: string, streakCount: number, itemId: string, staffId?: string) {
+    return this.updateStreakGiftItemQuantity(scheduleId, streakCount, itemId, 0, staffId)
   }
 }
 
