@@ -21,8 +21,8 @@ import fnbSalesMovementService from './fnbSalesMovement.service'
 dayjs.extend(utc)
 dayjs.extend(timezone)
 
-/** v2: period=day dùng ngày kinh doanh FNB (cắt 03:00), đồng bộ với systemSold kiểm kê. */
-const FNB_STATS_CACHE_PREFIX = 'fnb:sales-stats:v2'
+/** v3: period=day dùng ngày kinh doanh FNB (cắt 03:00), đồng bộ với systemSold kiểm kê. */
+const FNB_STATS_CACHE_PREFIX = 'fnb:sales-stats:v3'
 const FNB_STATS_CLOSED_PERIOD_TTL_SEC = 24 * 60 * 60
 const FNB_STATS_CURRENT_PERIOD_TTL_SEC = 5 * 60
 
@@ -271,10 +271,12 @@ class FnbOrderService {
 
     switch (period) {
       case 'day': {
-        // Báo cáo bán hàng theo ngày lịch VN: 00:00–23:59:59.999.
-        // Kiểm kê ca vẫn dùng business date 03:00–03:00 ở aggregateSystemSoldByDate.
-        fromDate = baseDate.startOf('day')
-        toDate = baseDate.endOf('day')
+        // Báo cáo bán hàng theo ngày kinh doanh FNB: 03:00 hôm nay → 03:00 hôm sau.
+        // Đồng bộ với systemSold trong kiểm kê ca để Stats và Count không lệch nhau.
+        const businessDate = dateStr ?? getFnbBusinessDateStr(now)
+        const range = getFnbBusinessDateRange(businessDate)
+        fromDate = dayjs(range.from).tz(VIETNAM_TZ)
+        toDate = dayjs(range.to).tz(VIETNAM_TZ).subtract(1, 'millisecond')
         break
       }
       case 'week':

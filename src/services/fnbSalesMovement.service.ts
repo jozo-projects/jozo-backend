@@ -44,16 +44,6 @@ class FnbSalesMovementService {
     return result
   }
 
-  /** Pipeline chung: bill theo ngày tạo/ghi nhận, FnB từ bill hoặc fallback history. */
-  private billHasFnbExpr() {
-    return {
-      $or: [
-        { $gt: [{ $size: { $ifNull: ['$fnbOrder.lines', []] } }, 0] },
-        { $gt: [{ $size: { $objectToArray: { $ifNull: ['$fnbOrder.drinks', {}] } } }, 0] },
-        { $gt: [{ $size: { $objectToArray: { $ifNull: ['$fnbOrder.snacks', {}] } } }, 0] }
-      ]
-    }
-  }
 
   private buildFnbItemsForStatsStages() {
     return [
@@ -101,7 +91,6 @@ class FnbSalesMovementService {
   }
 
   private buildKaraokeBillsInRangeStages(from: Date, to: Date) {
-    const billHasFnbExpr = this.billHasFnbExpr()
     const fnbItemsStages = this.buildFnbItemsForStatsStages()
 
     return [
@@ -141,12 +130,40 @@ class FnbSalesMovementService {
         }
       },
       { $replaceRoot: { newRoot: '$doc' } },
-      // Chỉ $lookup history cho bill cũ không có fnbOrder — tránh lookup trên mọi bill.
+      // Admin có thể thêm trực tiếp sau khi bill snapshot đã được tạo.
+      // fnb_orders là order hiện tại và phải được ưu tiên hơn snapshot cũ trong bills.
+      {
+        $lookup: {
+          from: 'fnb_orders',
+          let: { scheduleId: '$scheduleId' },
+          pipeline: [
+            { $match: { $expr: { $eq: ['$roomScheduleId', '$$scheduleId'] } } },
+            { $project: { _id: 0, order: 1 } }
+          ],
+          as: 'currentFnbOrder'
+        }
+      },
+      {
+        $set: {
+          fnbSource: {
+            $ifNull: [{ $arrayElemAt: ['$currentFnbOrder.order', 0] }, '$fnbOrder']
+          }
+        }
+      },
       {
         $facet: {
           withFnbOnBill: [
-            { $match: { $expr: billHasFnbExpr } },
-            { $addFields: { fnbSource: '$fnbOrder' } },
+            {
+              $match: {
+                $expr: {
+                  $or: [
+                    { $gt: [{ $size: { $ifNull: ['$fnbSource.lines', []] } }, 0] },
+                    { $gt: [{ $size: { $objectToArray: { $ifNull: ['$fnbSource.drinks', {}] } } }, 0] },
+                    { $gt: [{ $size: { $objectToArray: { $ifNull: ['$fnbSource.snacks', {}] } } }, 0] }
+                  ]
+                }
+              }
+            },
             ...fnbItemsStages
           ]
         }
