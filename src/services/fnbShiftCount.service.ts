@@ -337,12 +337,16 @@ class FnbShiftCountService {
         category,
         shifts,
         totalStockIn,
-        systemSold,
-        expectedClosing,
         latestClosing,
         latestClosingShiftNo,
         hasLatestClosing,
-        variance,
+        ...(isAdmin
+          ? {
+              systemSold,
+              expectedClosing,
+              variance
+            }
+          : {}),
         note: dayItem?.note
       })
     }
@@ -353,7 +357,7 @@ class FnbShiftCountService {
       businessDate,
       shifts: this.createShiftResponses(businessDate, docsByShift, isAdmin),
       items,
-      summary: this.buildSummary(items),
+      ...(isAdmin ? { summary: this.buildSummary(items) } : {}),
       editable
     }
   }

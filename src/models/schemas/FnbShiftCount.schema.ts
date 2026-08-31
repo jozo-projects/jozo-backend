@@ -62,11 +62,14 @@ export interface FnbShiftCountMatrixItem {
   category: 'drink' | 'snack'
   shifts: Record<FnbShiftNo, FnbShiftCountShiftCell>
   totalStockIn: number
-  systemSold: number
+  /** Chỉ trả về cho admin — số lượng bán theo hệ thống. */
+  systemSold?: number
+  /** Chỉ trả về cho admin — tồn dự kiến dựa trên số bán hệ thống. */
   expectedClosing?: number
   latestClosing: number
   latestClosingShiftNo: 0 | FnbShiftNo
   hasLatestClosing: boolean
+  /** Chỉ trả về cho admin — chênh lệch/hụt so với hệ thống. */
   variance?: number
   note?: string
 }
@@ -89,6 +92,7 @@ export interface FnbShiftCountResponse {
   businessDate: string
   shifts: Record<FnbShiftNo, FnbShiftCountShiftResponse>
   items: FnbShiftCountMatrixItem[]
-  summary: FnbShiftCountSummary
+  /** Chỉ trả về cho admin để tránh lộ dữ liệu hệ thống bán/hụt. */
+  summary?: FnbShiftCountSummary
   editable: boolean
 }
