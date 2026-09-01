@@ -7,7 +7,14 @@ import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { ErrorWithStatus } from '~/models/Error'
 import { RoomSchedule, BookingSource } from '~/models/schemas/RoomSchdedule.schema'
 import { AddSongRequestBody } from '~/models/requests/Song.request'
-import { generateUniqueBookingCode, buildBookingCodeDuplicateFilter, buildBookingCodeLookupFilter, getDateOfUseFromDate, normalizeBookingCode } from '~/utils/common'
+import {
+  generateUniqueBookingCode,
+  buildBookingCodeDuplicateFilter,
+  buildBookingCodeLookupFilter,
+  getCurrentDateOfUse,
+  getDateOfUseFromDate,
+  normalizeBookingCode
+} from '~/utils/common'
 import { parseClientRoomTypeString, roomTypeFieldToEnum } from '~/utils/roomType'
 import databaseService from './database.service'
 import { emitBookingNotification, emitScheduleChanged } from './room.service'
@@ -791,7 +798,7 @@ class OnlineBookingService {
     try {
       const normalizedCode = normalizeBookingCode(bookingCode)
       const now = new Date()
-      const targetDateOfUse = dateOfUse || dayjs.tz('Asia/Ho_Chi_Minh').format('YYYY-MM-DD')
+      const targetDateOfUse = dateOfUse || getCurrentDateOfUse()
       const dateLookupFilter = buildBookingCodeLookupFilter(bookingCode, targetDateOfUse)
 
       // Khung giờ thực tế quanh thời điểm hiện tại — không phụ thuộc chuỗi dateOfUse

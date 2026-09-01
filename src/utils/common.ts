@@ -223,6 +223,13 @@ export function getDateOfUseFromDate(date: Date): string {
 }
 
 /**
+ * Lấy ngày hiện tại theo timezone Việt Nam.
+ */
+export function getCurrentDateOfUse(): string {
+  return dayjs().tz(VN_TIMEZONE).format('YYYY-MM-DD')
+}
+
+/**
  * Filter kiểm tra trùng mã booking trong cùng ngày (kể cả bản ghi legacy chưa có dateOfUse)
  */
 export function buildBookingCodeDuplicateFilter(dateOfUse: string, bookingCode: string) {

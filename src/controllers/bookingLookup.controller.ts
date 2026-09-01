@@ -164,7 +164,7 @@ export const lookupBookingByPhone = async (req: Request, res: Response, next: Ne
 
         // Calculate if booking can be modified/cancelled
         const bookingDate = dayjs.tz(booking.booking_date, 'YYYY-MM-DD', 'Asia/Ho_Chi_Minh')
-        const now = dayjs.tz('Asia/Ho_Chi_Minh')
+        const now = dayjs().tz('Asia/Ho_Chi_Minh')
         const canModify = bookingDate.isAfter(now) // Can modify if booking is in the future
 
         return {
@@ -232,7 +232,7 @@ export const cancelBooking = async (req: Request, res: Response, next: NextFunct
 
     // Check if booking can be cancelled
     const bookingDate = dayjs.tz(booking.booking_date, 'YYYY-MM-DD', 'Asia/Ho_Chi_Minh')
-    const now = dayjs.tz('Asia/Ho_Chi_Minh')
+    const now = dayjs().tz('Asia/Ho_Chi_Minh')
 
     if (bookingDate.isBefore(now)) {
       return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
@@ -318,7 +318,7 @@ export const modifyBooking = async (req: Request, res: Response, next: NextFunct
 
     // Check if booking can be modified
     const bookingDate = dayjs.tz(booking.booking_date, 'YYYY-MM-DD', 'Asia/Ho_Chi_Minh')
-    const now = dayjs.tz('Asia/Ho_Chi_Minh')
+    const now = dayjs().tz('Asia/Ho_Chi_Minh')
 
     if (bookingDate.isBefore(now)) {
       return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
