@@ -28,8 +28,17 @@ export const protect = (roles: UserRole[]) => async (req: Request, res: Response
 
     const user = await usersServices.getUserById(decoded.user_id)
 
+    if (!user) {
+      return next(
+        new ErrorWithStatus({
+          message: AUTH_MESSAGES.INSUFFICIENT_PRIVILEGES,
+          status: HTTP_STATUS_CODE.UNAUTHORIZED
+        })
+      )
+    }
+
     // Kiểm tra quyền hạn (nếu roles được cung cấp)
-    if (roles.length && !roles.includes(user?.role || UserRole.Admin)) {
+    if (roles.length && !roles.includes(user.role)) {
       return next(
         new ErrorWithStatus({
           message: AUTH_MESSAGES.INSUFFICIENT_PRIVILEGES,

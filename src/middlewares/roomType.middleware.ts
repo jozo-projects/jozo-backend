@@ -3,7 +3,7 @@ import { checkSchema } from 'express-validator'
 import { ObjectId } from 'mongodb'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { ROOM_TYPE_MESSAGES } from '~/constants/messages'
-import { ErrorWithStatus } from '~/models/Error'
+import { EntityError, ErrorWithStatus } from '~/models/Error'
 import databaseService from '~/services/database.service'
 import { validate } from '~/utils/validation'
 
@@ -68,15 +68,22 @@ export function validateRoomTypeIds(req: Request, res: Response, next: NextFunct
   const { roomTypeIds } = req.body
 
   if (!Array.isArray(roomTypeIds) || roomTypeIds.length === 0) {
-    return res.status(400).json({ error: 'Invalid room type IDs array' })
+    return next(
+      new ErrorWithStatus({
+        message: 'Invalid room type IDs array',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
+    )
   }
 
   const invalidId = roomTypeIds.find((id) => !ObjectId.isValid(id))
   if (invalidId) {
-    throw new ErrorWithStatus({
-      message: ROOM_TYPE_MESSAGES.INVALID_ROOM_TYPE_IDS,
-      status: HTTP_STATUS_CODE.BAD_REQUEST
-    })
+    return next(
+      new ErrorWithStatus({
+        message: ROOM_TYPE_MESSAGES.INVALID_ROOM_TYPE_IDS,
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
+    )
   }
 
   // Attach validated ObjectIds to the request object for use in the controller
@@ -179,10 +186,7 @@ export const addRoomTypeValidator = (req: Request, res: Response, next: NextFunc
     }
 
     if (Object.keys(errors).length > 0) {
-      return res.status(HTTP_STATUS_CODE.UNPROCESSABLE_ENTITY).json({
-        message: 'Validation error',
-        errors
-      })
+      return next(new EntityError({ errors }))
     }
 
     next()

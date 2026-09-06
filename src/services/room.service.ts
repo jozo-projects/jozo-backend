@@ -90,7 +90,10 @@ class RoomServices {
     // Kiểm tra roomId có trùng lặp không
     const existingRoom = await databaseService.rooms.findOne({ roomId: payload.roomId })
     if (existingRoom) {
-      throw new Error(`Room ID ${payload.roomId} đã tồn tại`)
+      throw new ErrorWithStatus({
+        message: `Room ID ${payload.roomId} đã tồn tại`,
+        status: HTTP_STATUS_CODE.CONFLICT
+      })
     }
 
     const result = await databaseService.rooms.insertOne({
@@ -135,13 +138,23 @@ class RoomServices {
 
   async getRoom(id: string) {
     const result = await databaseService.rooms.findOne({ _id: new ObjectId(id) })
-    if (!result) throw new Error(ROOM_MESSAGES.ROOM_NOT_FOUND)
+    if (!result) {
+      throw new ErrorWithStatus({
+        message: ROOM_MESSAGES.ROOM_NOT_FOUND,
+        status: HTTP_STATUS_CODE.NOT_FOUND
+      })
+    }
     return result
   }
 
   async getRoomByRoomId(roomId: number) {
     const result = await databaseService.rooms.findOne({ roomId })
-    if (!result) throw new Error(ROOM_MESSAGES.ROOM_NOT_FOUND)
+    if (!result) {
+      throw new ErrorWithStatus({
+        message: ROOM_MESSAGES.ROOM_NOT_FOUND,
+        status: HTTP_STATUS_CODE.NOT_FOUND
+      })
+    }
     return result
   }
 
@@ -156,7 +169,10 @@ class RoomServices {
         _id: { $ne: new ObjectId(id) } // Loại trừ phòng hiện tại
       })
       if (existingRoom) {
-        throw new Error(`Room ID ${updateData.roomId} đã tồn tại`)
+        throw new ErrorWithStatus({
+          message: `Room ID ${updateData.roomId} đã tồn tại`,
+          status: HTTP_STATUS_CODE.CONFLICT
+        })
       }
     }
 

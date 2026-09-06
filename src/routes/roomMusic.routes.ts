@@ -34,8 +34,12 @@ import { updateLimiter } from '~/middlewares/rateLimiter.middleware'
 import { roomMusicServices } from '~/services/roomMusic.service'
 import { getMediaUrls } from '~/services/video.service'
 import { wrapRequestHandler } from '~/utils/handlers'
+import musicCategoryRouter from './musicCategory.routes'
 
 const roomMusicRouter = Router()
+
+// Mount before generic /:roomId routes so "music-categories" is never treated as a room ID.
+roomMusicRouter.use('/music-categories', musicCategoryRouter)
 
 /**
  * @description Get songs in collection

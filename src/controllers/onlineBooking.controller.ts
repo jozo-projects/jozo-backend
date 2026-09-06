@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
+import { ErrorWithStatus } from '~/models/Error'
 import { onlineBookingService } from '~/services/onlineBooking.service'
 
 /**
@@ -13,10 +14,12 @@ export const createOnlineBooking = async (req: Request, res: Response, next: Nex
 
     // Validate required fields
     if (!customerName || !customerPhone || !roomType || !startTime || !endTime) {
-      return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
-        success: false,
-        message: 'Missing required fields: customerName, customerPhone, roomType, startTime, endTime'
-      })
+      return next(
+        new ErrorWithStatus({
+          message: 'Missing required fields: customerName, customerPhone, roomType, startTime, endTime',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      )
     }
 
     const bookingRequest = {
@@ -48,10 +51,12 @@ export const lookupBookingByPhone = async (req: Request, res: Response, next: Ne
     const { phone } = req.query
 
     if (!phone || typeof phone !== 'string') {
-      return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
-        success: false,
-        message: 'Phone number is required'
-      })
+      return next(
+        new ErrorWithStatus({
+          message: 'Phone number is required',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      )
     }
 
     const result = await onlineBookingService.lookupBookingByPhone(phone)
@@ -73,10 +78,12 @@ export const cancelBooking = async (req: Request, res: Response, next: NextFunct
     const { phone } = req.body
 
     if (!phone) {
-      return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
-        success: false,
-        message: 'Phone number is required for verification'
-      })
+      return next(
+        new ErrorWithStatus({
+          message: 'Phone number is required for verification',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      )
     }
 
     const result = await onlineBookingService.cancelBooking(bookingId, phone)
@@ -110,18 +117,22 @@ export const updateQueueSongs = async (req: Request, res: Response, next: NextFu
     const missingFields = requiredFields.filter((field) => !songData[field])
 
     if (missingFields.length > 0) {
-      return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
-        success: false,
-        message: `Missing required fields: ${missingFields.join(', ')}`
-      })
+      return next(
+        new ErrorWithStatus({
+          message: `Missing required fields: ${missingFields.join(', ')}`,
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      )
     }
 
     // Validate position if provided
     if (songData.position && !['top', 'end'].includes(songData.position)) {
-      return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
-        success: false,
-        message: 'Position must be either "top" or "end"'
-      })
+      return next(
+        new ErrorWithStatus({
+          message: 'Position must be either "top" or "end"',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      )
     }
 
     const result = await onlineBookingService.updateQueueSongs(bookingId, songData)
@@ -143,10 +154,12 @@ export const checkRoomAvailability = async (req: Request, res: Response, next: N
     const { startTime, endTime, roomType } = req.query
 
     if (!startTime || !endTime || !roomType) {
-      return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
-        success: false,
-        message: 'Missing required query parameters: startTime, endTime, roomType'
-      })
+      return next(
+        new ErrorWithStatus({
+          message: 'Missing required query parameters: startTime, endTime, roomType',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      )
     }
 
     // TODO: Implement room availability check
@@ -171,18 +184,22 @@ export const removeSongFromQueue = async (req: Request, res: Response, next: Nex
     const { bookingId, index } = req.params
 
     if (!index) {
-      return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
-        success: false,
-        message: 'index is required'
-      })
+      return next(
+        new ErrorWithStatus({
+          message: 'index is required',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      )
     }
 
     const songIndex = parseInt(index)
     if (isNaN(songIndex) || songIndex < 0) {
-      return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
-        success: false,
-        message: 'index must be a valid non-negative number'
-      })
+      return next(
+        new ErrorWithStatus({
+          message: 'index must be a valid non-negative number',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      )
     }
 
     const result = await onlineBookingService.removeSongFromQueue(bookingId, songIndex)

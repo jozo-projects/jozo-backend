@@ -1,6 +1,7 @@
 import { NextFunction, Request, Response } from 'express'
 import axios from 'axios'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
+import { ErrorWithStatus } from '~/models/Error'
 import serverService from '~/services/server.service'
 import { ObjectId } from 'mongodb'
 import billService from '~/services/bill.service'
@@ -40,11 +41,12 @@ export const testPrintController = async (req: Request, res: Response, next: Nex
   } catch (error: any) {
     console.error('Test print error:', error.response?.data || error.message)
 
-    return res.status(HTTP_STATUS_CODE.INTERNAL_SERVER_ERROR).json({
-      message: 'Test print thất bại',
-      error: error.response?.data || error.message,
-      url: `${process.env.HTTP_API_URL}/print`
-    })
+    return next(
+      new ErrorWithStatus({
+        message: error.response?.data?.message || error.message || 'Test print thất bại',
+        status: HTTP_STATUS_CODE.INTERNAL_SERVER_ERROR
+      })
+    )
   }
 }
 
@@ -55,7 +57,7 @@ export const testPrintController = async (req: Request, res: Response, next: Nex
  * @method POST
  * @author QuangDoo
  */
-export const printController = async (req: Request, res: Response) => {
+export const printController = async (req: Request, res: Response, next: NextFunction) => {
   const {
     printerId,
     content,
@@ -73,14 +75,22 @@ export const printController = async (req: Request, res: Response) => {
     try {
       // Validate ObjectId format for scheduleId
       if (!ObjectId.isValid(scheduleId)) {
-        return res.status(400).json({
-          message: 'Invalid scheduleId format - must be a valid 24 character hex string'
-        })
+        return next(
+          new ErrorWithStatus({
+            message: 'Invalid scheduleId format - must be a valid 24 character hex string',
+            status: HTTP_STATUS_CODE.BAD_REQUEST
+          })
+        )
       }
 
       // Kiểm tra printerId
       if (!printerId) {
-        return res.status(400).json({ error: 'printerId is required' })
+        return next(
+          new ErrorWithStatus({
+            message: 'printerId is required',
+            status: HTTP_STATUS_CODE.BAD_REQUEST
+          })
+        )
       }
 
       // Lấy dữ liệu hóa đơn
@@ -112,16 +122,18 @@ export const printController = async (req: Request, res: Response) => {
       })
     } catch (error: any) {
       console.error('Error printing bill:', error)
-      return res.status(500).json({
-        message: 'Error printing bill',
-        error: error.message || 'Unknown error'
-      })
+      return next(error)
     }
   }
 
   // Xử lý in nội dung thông thường nếu không có scheduleId
   if (!printerId || !content) {
-    return res.status(400).json({ error: 'printerId and content are required' })
+    return next(
+      new ErrorWithStatus({
+        message: 'printerId and content are required',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
+    )
   }
 
   console.log('[printController] received:', { printerId, length: content.length })

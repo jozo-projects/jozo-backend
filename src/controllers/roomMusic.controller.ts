@@ -4,6 +4,7 @@ import { type ParamsDictionary } from 'express-serve-static-core'
 import { randomUUID } from 'crypto'
 import { searchYoutube } from '~/services/youtubeSearch.service'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
+import { ErrorWithStatus } from '~/models/Error'
 import { SONG_QUEUE_MESSAGES } from '~/constants/messages'
 import { AddSongRequestBody, MoveQueueRequestBody } from '~/models/requests/Song.request'
 import { VideoSchema } from '~/models/schemas/Video.schema'
@@ -99,9 +100,12 @@ export const saveSong = async (
 
   try {
     if (!video_id || !title || !author) {
-      return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
-        message: 'video_id, title và author là bắt buộc'
-      })
+      return next(
+        new ErrorWithStatus({
+          message: 'video_id, title và author là bắt buộc',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      )
     }
 
     const savedSong = await songService.upsertSong({
@@ -335,9 +339,12 @@ export const controlPlayback = async (req: Request<ParamsDictionary>, res: Respo
     const nowPlaying = await roomMusicServices.getNowPlaying(roomId)
 
     if (!nowPlaying) {
-      return res.status(HTTP_STATUS_CODE.NOT_FOUND).json({
-        message: SONG_QUEUE_MESSAGES.NO_SONG_IN_QUEUE
-      })
+      return next(
+        new ErrorWithStatus({
+          message: SONG_QUEUE_MESSAGES.NO_SONG_IN_QUEUE,
+          status: HTTP_STATUS_CODE.NOT_FOUND
+        })
+      )
     }
 
     // Kiểm tra nếu video gần kết thúc (còn 1.5s hoặc ít hơn)
@@ -454,9 +461,12 @@ export const playChosenSong = async (req: Request, res: Response, next: NextFunc
   const { videoIndex } = req.body
 
   if (videoIndex === undefined || videoIndex === null) {
-    return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
-      message: 'Video index is required'
-    })
+    return next(
+      new ErrorWithStatus({
+        message: 'Video index is required',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
+    )
   }
 
   try {
@@ -601,12 +611,22 @@ export const searchSongs = async (req: Request, res: Response, next: NextFunctio
 
   // Validate search query
   if (!q || typeof q !== 'string') {
-    return res.status(400).json({ error: 'Missing or invalid search query' })
+    return next(
+      new ErrorWithStatus({
+        message: 'Missing or invalid search query',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
+    )
   }
 
   // Validate limit parameter - Giảm limit tối đa để tăng tốc độ
   if (isNaN(parsedLimit) || parsedLimit < 1 || parsedLimit > 50) {
-    return res.status(400).json({ error: 'Invalid limit parameter. Must be between 1 and 50' })
+    return next(
+      new ErrorWithStatus({
+        message: 'Invalid limit parameter. Must be between 1 and 50',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
+    )
   }
 
   try {
@@ -772,12 +792,22 @@ export const searchLocalSongs = async (req: Request, res: Response, next: NextFu
 
   // Validate search query
   if (!q || typeof q !== 'string') {
-    return res.status(400).json({ error: 'Missing or invalid search query' })
+    return next(
+      new ErrorWithStatus({
+        message: 'Missing or invalid search query',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
+    )
   }
 
   // Validate limit parameter
   if (isNaN(parsedLimit) || parsedLimit < 1 || parsedLimit > 50) {
-    return res.status(400).json({ error: 'Invalid limit parameter. Must be between 1 and 50' })
+    return next(
+      new ErrorWithStatus({
+        message: 'Invalid limit parameter. Must be between 1 and 50',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
+    )
   }
 
   try {
@@ -828,12 +858,22 @@ export const searchRemoteSongs = async (req: Request, res: Response, next: NextF
 
   // Validate search query
   if (!q || typeof q !== 'string') {
-    return res.status(400).json({ error: 'Missing or invalid search query' })
+    return next(
+      new ErrorWithStatus({
+        message: 'Missing or invalid search query',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
+    )
   }
 
   // Validate limit parameter
   if (isNaN(parsedLimit) || parsedLimit < 1 || parsedLimit > 50) {
-    return res.status(400).json({ error: 'Invalid limit parameter. Must be between 1 and 50' })
+    return next(
+      new ErrorWithStatus({
+        message: 'Invalid limit parameter. Must be between 1 and 50',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
+    )
   }
 
   try {
@@ -846,12 +886,12 @@ export const searchRemoteSongs = async (req: Request, res: Response, next: NextF
     const rateLimitKey = `remote_search_429:${q.toLowerCase().trim()}:${parsedLimit}`
     const rateLimitCached = await redis.get(rateLimitKey)
     if (rateLimitCached) {
-      return res.status(503).json({
-        error: 'Search temporarily unavailable',
-        message: 'Quá tải, vui lòng thử lại sau vài phút.',
-        code: 'RATE_LIMIT',
-        duration: Date.now() - startTime
-      })
+      return next(
+        new ErrorWithStatus({
+          message: 'Quá tải, vui lòng thử lại sau vài phút.',
+          status: HTTP_STATUS_CODE.SERVICE_UNAVAILABLE
+        })
+      )
     }
 
     // Kiểm tra cache trước
@@ -1005,19 +1045,20 @@ export const searchRemoteSongs = async (req: Request, res: Response, next: NextF
 
       if (is429) {
         await redis.setex(rateLimitKey, RATE_LIMIT_CACHE_TTL, '1')
-        return res.status(503).json({
-          error: 'Search temporarily unavailable',
-          message: 'Quá tải, vui lòng thử lại sau vài phút.',
-          code: 'RATE_LIMIT',
-          duration: errorDuration
-        })
+        return next(
+          new ErrorWithStatus({
+            message: 'Quá tải, vui lòng thử lại sau vài phút.',
+            status: HTTP_STATUS_CODE.SERVICE_UNAVAILABLE
+          })
+        )
       }
 
-      res.status(HTTP_STATUS_CODE.INTERNAL_SERVER_ERROR).json({
-        error: 'Failed to search remote songs',
-        message: safeMessage,
-        duration: errorDuration
-      })
+      return next(
+        new ErrorWithStatus({
+          message: safeMessage,
+          status: HTTP_STATUS_CODE.INTERNAL_SERVER_ERROR
+        })
+      )
     }
   } catch (error) {
     console.error('[search-remote] Fatal error:', error)
@@ -1049,15 +1090,21 @@ export const getSongsInCollection = async (req: Request, res: Response, next: Ne
 
     // Validate page and limit if provided
     if (pageNum !== undefined && (isNaN(pageNum) || pageNum < 1)) {
-      return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
-        message: 'Page must be a positive number'
-      })
+      return next(
+        new ErrorWithStatus({
+          message: 'Page must be a positive number',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      )
     }
 
     if (limitNum !== undefined && (isNaN(limitNum) || limitNum < 1)) {
-      return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
-        message: 'Limit must be a positive number'
-      })
+      return next(
+        new ErrorWithStatus({
+          message: 'Limit must be a positive number',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      )
     }
 
     const result = await roomMusicServices.getSongsInCollection({
@@ -1086,17 +1133,23 @@ export const deleteSong = async (req: Request, res: Response, next: NextFunction
     const { videoId } = req.params
 
     if (!videoId) {
-      return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
-        message: 'Video ID is required'
-      })
+      return next(
+        new ErrorWithStatus({
+          message: 'Video ID is required',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      )
     }
 
     const deleted = await songService.deleteSong(videoId)
 
     if (!deleted) {
-      return res.status(HTTP_STATUS_CODE.NOT_FOUND).json({
-        message: SONG_QUEUE_MESSAGES.SONG_NOT_FOUND
-      })
+      return next(
+        new ErrorWithStatus({
+          message: SONG_QUEUE_MESSAGES.SONG_NOT_FOUND,
+          status: HTTP_STATUS_CODE.NOT_FOUND
+        })
+      )
     }
 
     return res.status(HTTP_STATUS_CODE.OK).json({
@@ -1180,15 +1233,21 @@ export const pruneSongsNotOnYoutube = async (req: Request, res: Response, next: 
     const runAsync = asyncParam === '1' || String(asyncParam).toLowerCase() === 'true'
 
     if (parsedConcurrency !== undefined && (isNaN(parsedConcurrency) || parsedConcurrency < 1 || parsedConcurrency > 8)) {
-      return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
-        message: 'Tham số concurrency phải từ 1 đến 8'
-      })
+      return next(
+        new ErrorWithStatus({
+          message: 'Tham số concurrency phải từ 1 đến 8',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      )
     }
 
     if (parsedBatch !== undefined && (isNaN(parsedBatch) || parsedBatch < 1 || parsedBatch > 200)) {
-      return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
-        message: 'Tham số batch_size phải từ 1 đến 200'
-      })
+      return next(
+        new ErrorWithStatus({
+          message: 'Tham số batch_size phải từ 1 đến 200',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      )
     }
 
     if (runAsync) {

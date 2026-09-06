@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express'
 import { ObjectId } from 'mongodb'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
+import { ErrorWithStatus } from '~/models/Error'
 import databaseService from '~/services/database.service'
 import dayjs from 'dayjs'
 import timezone from 'dayjs/plugin/timezone'
@@ -22,10 +23,12 @@ export const searchBookings = async (req: Request, res: Response, next: NextFunc
 
     // Validate phone number
     if (!phone || typeof phone !== 'string') {
-      return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
-        success: false,
-        message: 'Phone number is required'
-      })
+      return next(
+        new ErrorWithStatus({
+          message: 'Phone number is required',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      )
     }
 
     // Clean phone number (remove spaces, dashes, etc.)
@@ -112,9 +115,12 @@ export const lookupBookingByPhone = async (req: Request, res: Response, next: Ne
 
     // Validate phone number
     if (!phone || typeof phone !== 'string') {
-      return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
-        message: 'Phone number is required'
-      })
+      return next(
+        new ErrorWithStatus({
+          message: 'Phone number is required',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      )
     }
 
     // Clean phone number (remove spaces, dashes, etc.)
@@ -207,15 +213,21 @@ export const cancelBooking = async (req: Request, res: Response, next: NextFunct
     const { phone } = req.body // Verify phone number for security
 
     if (!ObjectId.isValid(bookingId)) {
-      return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
-        message: 'Invalid booking ID'
-      })
+      return next(
+        new ErrorWithStatus({
+          message: 'Invalid booking ID',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      )
     }
 
     if (!phone) {
-      return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
-        message: 'Phone number is required for verification'
-      })
+      return next(
+        new ErrorWithStatus({
+          message: 'Phone number is required for verification',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      )
     }
 
     // Find the booking
@@ -225,9 +237,12 @@ export const cancelBooking = async (req: Request, res: Response, next: NextFunct
     })
 
     if (!booking) {
-      return res.status(HTTP_STATUS_CODE.NOT_FOUND).json({
-        message: 'Booking not found or phone number does not match'
-      })
+      return next(
+        new ErrorWithStatus({
+          message: 'Booking not found or phone number does not match',
+          status: HTTP_STATUS_CODE.NOT_FOUND
+        })
+      )
     }
 
     // Check if booking can be cancelled
@@ -235,15 +250,21 @@ export const cancelBooking = async (req: Request, res: Response, next: NextFunct
     const now = dayjs().tz('Asia/Ho_Chi_Minh')
 
     if (bookingDate.isBefore(now)) {
-      return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
-        message: 'Cannot cancel past bookings'
-      })
+      return next(
+        new ErrorWithStatus({
+          message: 'Cannot cancel past bookings',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      )
     }
 
     if (booking.status !== 'pending') {
-      return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
-        message: 'Only pending bookings can be cancelled'
-      })
+      return next(
+        new ErrorWithStatus({
+          message: 'Only pending bookings can be cancelled',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      )
     }
 
     // Cancel the booking
@@ -293,15 +314,21 @@ export const modifyBooking = async (req: Request, res: Response, next: NextFunct
     const { phone, customerName, customerEmail, timeSlots } = req.body
 
     if (!ObjectId.isValid(bookingId)) {
-      return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
-        message: 'Invalid booking ID'
-      })
+      return next(
+        new ErrorWithStatus({
+          message: 'Invalid booking ID',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      )
     }
 
     if (!phone) {
-      return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
-        message: 'Phone number is required for verification'
-      })
+      return next(
+        new ErrorWithStatus({
+          message: 'Phone number is required for verification',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      )
     }
 
     // Find the booking
@@ -311,9 +338,12 @@ export const modifyBooking = async (req: Request, res: Response, next: NextFunct
     })
 
     if (!booking) {
-      return res.status(HTTP_STATUS_CODE.NOT_FOUND).json({
-        message: 'Booking not found or phone number does not match'
-      })
+      return next(
+        new ErrorWithStatus({
+          message: 'Booking not found or phone number does not match',
+          status: HTTP_STATUS_CODE.NOT_FOUND
+        })
+      )
     }
 
     // Check if booking can be modified
@@ -321,15 +351,21 @@ export const modifyBooking = async (req: Request, res: Response, next: NextFunct
     const now = dayjs().tz('Asia/Ho_Chi_Minh')
 
     if (bookingDate.isBefore(now)) {
-      return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
-        message: 'Cannot modify past bookings'
-      })
+      return next(
+        new ErrorWithStatus({
+          message: 'Cannot modify past bookings',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      )
     }
 
     if (booking.status !== 'pending') {
-      return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
-        message: 'Only pending bookings can be modified'
-      })
+      return next(
+        new ErrorWithStatus({
+          message: 'Only pending bookings can be modified',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      )
     }
 
     // Prepare update data

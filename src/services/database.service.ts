@@ -36,6 +36,7 @@ import { IFnbSalesMovement } from '~/models/schemas/FnbSalesMovement.schema'
 import { IStaffErrorPreset } from '~/models/schemas/StaffErrorPreset.schema'
 import { IStaffErrorLog } from '~/models/schemas/StaffErrorLog.schema'
 import { IBillPaymentMethodLog } from '~/models/schemas/BillPaymentMethodLog.schema'
+import { MusicCategory } from '~/models/schemas/MusicCategory.schema'
 dotenv.config()
 dotenv.config({ path: '.env.local', override: true })
 
@@ -144,6 +145,10 @@ class DatabaseService {
 
   get songs(): Collection<Song> {
     return this.db.collection('songs')
+  }
+
+  get musicCategories(): Collection<MusicCategory> {
+    return this.db.collection('musicCategories')
   }
 
   get roomSchedule(): Collection<RoomSchedule> {
