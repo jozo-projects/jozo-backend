@@ -60,6 +60,13 @@ export enum FnBCategory {
   DRINK = 'drink'
 }
 
+export enum RevenueCategory {
+  SERVICE_ROOM = 'SERVICE_ROOM',
+  FNB_RETAIL = 'FNB_RETAIL',
+  FNB_PREPARED = 'FNB_PREPARED',
+  OTHER = 'OTHER'
+}
+
 export enum RecruitmentStatus {
   Pending = 'pending',
   Reviewed = 'reviewed',

@@ -4,7 +4,9 @@ import timezone from 'dayjs/plugin/timezone'
 import utc from 'dayjs/plugin/utc'
 import express from 'express'
 
+import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { defaultErrorHandler } from '~/middlewares/error.middleware'
+import { ErrorWithStatus } from '~/models/Error'
 import databaseService from '~/services/database.service'
 import serverService from '~/services/server.service'
 
@@ -176,6 +178,15 @@ app.use('/coffee-pricing', coffeePricingRouter)
 app.use('/coffee-sessions', coffeeSessionRouter)
 app.use('/coffee-session-orders', coffeeSessionOrderRouter)
 app.use('/customization-group-templates', customizationGroupTemplateRouter)
+
+app.use((req, res, next) => {
+  next(
+    new ErrorWithStatus({
+      message: 'Not found',
+      status: HTTP_STATUS_CODE.NOT_FOUND
+    })
+  )
+})
 
 // Error handler
 app.use(defaultErrorHandler)

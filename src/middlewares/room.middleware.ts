@@ -3,7 +3,7 @@ import { checkSchema } from 'express-validator'
 import { ObjectId } from 'mongodb'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { ROOM_MESSAGES } from '~/constants/messages'
-import { ErrorWithStatus } from '~/models/Error'
+import { EntityError, ErrorWithStatus } from '~/models/Error'
 import { IAddRoomRequestBody } from '~/models/requests/Room.request'
 import databaseService from '~/services/database.service'
 import { validate } from '~/utils/validation'
@@ -50,15 +50,23 @@ export const validateFiles = (req: Request, res: Response, next: NextFunction) =
   const files = req.files as Express.Multer.File[]
 
   if (files && files.length > 5) {
-    return res.status(400).json({
-      errors: [{ msg: 'Maximum 5 files allowed' }]
-    })
+    return next(
+      new EntityError({
+        errors: {
+          files: { msg: 'Maximum 5 files allowed' }
+        }
+      })
+    )
   }
 
   if (files && !files.every((file) => file.mimetype.startsWith('image/'))) {
-    return res.status(400).json({
-      errors: [{ msg: 'All files must be images' }]
-    })
+    return next(
+      new EntityError({
+        errors: {
+          files: { msg: 'All files must be images' }
+        }
+      })
+    )
   }
 
   next()
@@ -195,10 +203,7 @@ export const addRoomValidator = (req: Request, res: Response, next: NextFunction
     }
 
     if (Object.keys(errors).length > 0) {
-      return res.status(HTTP_STATUS_CODE.UNPROCESSABLE_ENTITY).json({
-        message: 'Validation error',
-        errors
-      })
+      return next(new EntityError({ errors }))
     }
 
     next()

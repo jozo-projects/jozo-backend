@@ -1,13 +1,18 @@
 import { ObjectId } from 'mongodb'
-import databaseService from './database.service'
+import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
+import { ErrorWithStatus } from '~/models/Error'
 import { FnbMenu } from '~/models/schemas/FnBMenu.schema'
+import databaseService from './database.service'
 
 class InventoryService {
   async updateStock(itemId: string, quantity: number, operation: 'add' | 'subtract'): Promise<FnbMenu | null> {
     const item = await databaseService.fnbMenu.findOne({ _id: new ObjectId(itemId) })
     if (!item) return null
     if (!item.inventory) {
-      throw new Error('Item has no inventory')
+      throw new ErrorWithStatus({
+        message: 'Item has no inventory',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
     }
 
     const currentQuantity = item.inventory.quantity
@@ -17,7 +22,10 @@ class InventoryService {
       newQuantity = currentQuantity + quantity
     } else if (operation === 'subtract') {
       if (currentQuantity < quantity) {
-        throw new Error('Insufficient stock')
+        throw new ErrorWithStatus({
+          message: 'Insufficient stock',
+          status: HTTP_STATUS_CODE.CONFLICT
+        })
       }
       newQuantity = currentQuantity - quantity
     }

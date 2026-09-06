@@ -8,7 +8,7 @@ import isSameOrBefore from 'dayjs/plugin/isSameOrBefore'
 import timezone from 'dayjs/plugin/timezone'
 import utc from 'dayjs/plugin/utc'
 import { ObjectId } from 'mongodb'
-import { DayType, PaymentMethod, RoomScheduleStatus, RoomType, UserRole } from '~/constants/enum'
+import { DayType, PaymentMethod, RevenueCategory, RoomScheduleStatus, RoomType, UserRole } from '~/constants/enum'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { ErrorWithStatus } from '~/models/Error'
 import { IBill } from '~/models/schemas/Bill.schema'
@@ -27,6 +27,17 @@ import fnbMenuItemService from './fnbMenuItem.service'
 import fnbOrderService from './fnbOrder.service'
 import { hasPendingFnbOrderForSchedule } from './fnbPendingOrder.service'
 import { holidayService } from './holiday.service'
+import { createRoomBillRevenuePersistence } from './revenueCheckout.persistence'
+import { persistRoomBillWithRevenue } from './roomBillRevenue.service'
+import {
+  addRevenueCategoryTotals,
+  emptyRevenueCategoryTotals,
+  enrichBillItemsForRevenue,
+  fnbRevenueTotal,
+  isPositiveRevenueBillItem,
+  summarizeBillRevenueByCategory,
+  type RevenueCategoryTotals
+} from '~/utils/revenueBillClassification'
 
 // Cấu hình timezone và plugins cho dayjs
 dayjs.extend(utc)
@@ -393,7 +404,15 @@ export class BillService {
     endDateObj: Date,
     viewerUserId?: string,
     options: { floorBillAmountsToThousand?: boolean } = {}
-  ): Promise<{ totalRevenue: number; bills: IBill[]; startDate: Date; endDate: Date }> {
+  ): Promise<{
+    totalRevenue: number
+    serviceRoomRevenue: number
+    fnbRevenue: number
+    byCategory: RevenueCategoryTotals
+    bills: Array<IBill & { revenueBreakdown: RevenueCategoryTotals }>
+    startDate: Date
+    endDate: Date
+  }> {
     const { floorBillAmountsToThousand = true } = options
     const [bills, retailSales] = await Promise.all([
       databaseService.bills
@@ -425,10 +444,13 @@ export class BillService {
           scheduleId: '',
           roomId: '',
           items: Array.isArray(sale.items)
-            ? sale.items.map((item: any) => ({
+            ? sale.items.map((item: any, index: number) => ({
                 description: item.name,
                 price: item.price,
-                quantity: item.quantity
+                quantity: item.quantity,
+                productId: item.itemId,
+                sourceLineRef: `retail:${item.itemId}:${index}`,
+                classificationSource: 'PRODUCT_SNAPSHOT' as const
               }))
             : [],
           totalAmount: Number(sale.totalAmount) || 0,
@@ -442,7 +464,15 @@ export class BillService {
     )
 
     if (bills.length === 0 && retailRevenueBills.length === 0) {
-      return { totalRevenue: 0, bills: [], startDate: startDateObj, endDate: endDateObj }
+      return {
+        totalRevenue: 0,
+        serviceRoomRevenue: 0,
+        fnbRevenue: 0,
+        byCategory: emptyRevenueCategoryTotals(),
+        bills: [],
+        startDate: startDateObj,
+        endDate: endDateObj
+      }
     }
 
     const deduped = this.dedupeBillsByScheduleForRevenue(bills)
@@ -456,10 +486,21 @@ export class BillService {
       })
     }
 
-    const totalRevenue = finalBills.reduce((sum, bill) => sum + bill.totalAmount, 0)
+    const billsWithBreakdown = finalBills.map((bill) => ({
+      ...bill,
+      revenueBreakdown: summarizeBillRevenueByCategory(bill)
+    }))
+    const byCategory = billsWithBreakdown.reduce(
+      (totals, bill) => addRevenueCategoryTotals(totals, bill.revenueBreakdown),
+      emptyRevenueCategoryTotals()
+    )
+    const totalRevenue = billsWithBreakdown.reduce((sum, bill) => sum + bill.totalAmount, 0)
     return {
       totalRevenue,
-      bills: finalBills,
+      serviceRoomRevenue: byCategory[RevenueCategory.SERVICE_ROOM],
+      fnbRevenue: fnbRevenueTotal(byCategory),
+      byCategory,
+      bills: billsWithBreakdown,
       startDate: startDateObj,
       endDate: endDateObj
     }
@@ -788,6 +829,11 @@ export class BillService {
       discountName?: string
       isStreakGift?: boolean
       streakCount?: number
+      productId?: string
+      sourceLineRef?: string
+      revenueCategory?: RevenueCategory
+      classificationSource?: 'PRODUCT_SNAPSHOT' | 'ROOM_RULE'
+      inventoryTracked?: boolean
     }> = []
 
     // Sắp xếp các khung giờ theo thời gian bắt đầu
@@ -1010,7 +1056,11 @@ export class BillService {
         description,
         quantity: overlapHoursRounded,
         price: priceEntry.price,
-        totalPrice: slotServiceFee
+        totalPrice: slotServiceFee,
+        sourceLineRef: `room:${timeSlotItems.length}`,
+        revenueCategory: RevenueCategory.SERVICE_ROOM,
+        classificationSource: 'ROOM_RULE',
+        inventoryTracked: false
       })
     }
 
@@ -1032,11 +1082,17 @@ export class BillService {
             .filter(Boolean)
             .join(' · ')
           const description = extra ? `${menuItem.name} (${extra})` : menuItem.name
+          const catalogItem = await fnbMenuItemService.getMenuItemById(line.itemId)
           timeSlotItems.push({
             description,
             quantity,
             price,
-            totalPrice
+            totalPrice,
+            productId: line.itemId,
+            sourceLineRef: `fnb:${line.lineId || `${line.itemId}:${timeSlotItems.length}`}`,
+            revenueCategory: catalogItem?.revenueCategory,
+            classificationSource: catalogItem ? 'PRODUCT_SNAPSHOT' : undefined,
+            inventoryTracked: catalogItem?.inventoryTracked
           })
         }
       }
@@ -1200,7 +1256,13 @@ export class BillService {
         discountPercentage: item.discountPercentage,
         discountName: item.discountName,
         isStreakGift: item.isStreakGift,
-        streakCount: item.streakCount
+        streakCount: item.streakCount,
+        productId: item.productId,
+        sourceLineRef: item.sourceLineRef,
+        revenueCategory: item.revenueCategory,
+        classificationSource: item.classificationSource,
+        inventoryTracked: item.inventoryTracked,
+        grossAmount: Math.round(item.totalPrice)
       })),
       totalAmount, // ĐÃ SỬA: tổng tiền đã trừ discount
       giftDiscountAmount: giftDiscountAmount > 0 ? giftDiscountAmount : undefined,
@@ -1404,15 +1466,18 @@ export class BillService {
     startDate: string,
     endDate: string,
     viewerUserId?: string
-  ): Promise<{ totalRevenue: number; bills: any[]; startDate: Date; endDate: Date }> {
+  ): Promise<{
+    totalRevenue: number
+    serviceRoomRevenue: number
+    fnbRevenue: number
+    byCategory: RevenueCategoryTotals
+    bills: Array<IBill & { revenueBreakdown: RevenueCategoryTotals }>
+    startDate: Date
+    endDate: Date
+  }> {
     try {
       const { start, end } = this.parseInclusiveVnDayRange(startDate, endDate)
-      return (await this.aggregateRevenueInStartTimeRange(start, end, viewerUserId)) as {
-        totalRevenue: number
-        bills: any[]
-        startDate: Date
-        endDate: Date
-      }
+      return await this.aggregateRevenueInStartTimeRange(start, end, viewerUserId)
     } catch (error) {
       console.error('[DOANH THU] Lỗi khi tính doanh thu:', error)
       throw error
@@ -2302,7 +2367,7 @@ export class BillService {
 
       // 5. Chuẩn bị bill để lưu
       const now = new Date()
-      const billToSave: IBill = {
+      const billToSave = enrichBillItemsForRevenue({
         ...billData,
         _id: billData._id ? new ObjectId(billData._id) : new ObjectId(),
         scheduleId: new ObjectId(billData.scheduleId),
@@ -2317,10 +2382,14 @@ export class BillService {
         paymentMethod: normalizePaymentMethod(billData.paymentMethod),
         membership: persistedMembership || billData.membership,
         membershipDiscountAmount: persistedMembershipDiscountAmount || billData.membershipDiscountAmount
-      }
+      })
 
-      // 6. Lưu bill vào database
-      await databaseService.bills.insertOne(billToSave)
+      // 6. Lưu bill và đóng sổ doanh thu (phòng / F&B) trong một transaction.
+      if ((billToSave.items ?? []).some(isPositiveRevenueBillItem)) {
+        await persistRoomBillWithRevenue(billToSave, createRoomBillRevenuePersistence())
+      } else {
+        await databaseService.bills.insertOne(billToSave)
+      }
 
       // 7. Tự động tích điểm membership (nếu có customerPhone và chưa tích điểm trước đó)
       const membershipResult: {

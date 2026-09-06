@@ -150,6 +150,9 @@ export const getRevenueByRange = async (req: Request, res: Response) => {
         startDate: revenueData.startDate,
         endDate: revenueData.endDate,
         totalRevenue: revenueData.totalRevenue,
+        serviceRoomRevenue: revenueData.serviceRoomRevenue,
+        fnbRevenue: revenueData.fnbRevenue,
+        byCategory: revenueData.byCategory,
         billCount: revenueData.bills.length,
         bills: revenueData.bills
       }

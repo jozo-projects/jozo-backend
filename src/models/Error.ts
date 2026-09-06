@@ -1,20 +1,21 @@
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { USER_MESSAGES } from '~/constants/messages'
 
-interface ErrorsType {
+export interface ErrorsType {
   [key: string]: {
     msg: string
     [key: string]: any
   }
 }
 
-export class ErrorWithStatus {
-  message: string
+export class ErrorWithStatus extends Error {
   status: number
 
   constructor({ message, status }: { message: string; status: number }) {
-    this.message = message
+    super(message)
     this.status = status
+    this.name = 'ErrorWithStatus'
+    Object.setPrototypeOf(this, new.target.prototype)
   }
 }
 
@@ -29,6 +30,7 @@ export class EntityError extends ErrorWithStatus {
     errors: ErrorsType
   }) {
     super({ message, status: HTTP_STATUS_CODE.UNPROCESSABLE_ENTITY })
+    this.name = 'EntityError'
     this.errors = errors
   }
 }

@@ -9,6 +9,9 @@ import { normalizePaymentMethod } from '~/utils/paymentMethod'
 import { wrapBillItemName } from '~/utils/streakGiftBillLines'
 import { generateInvoiceCode, removeVietnameseTones, TextPrinter } from './bill.service'
 import fnbSalesMovementService from './fnbSalesMovement.service'
+import { loadClassifiedMenuItems } from './revenueCheckout.persistence'
+import { persistRetailSaleRevenue } from './retailSaleRevenue.service'
+import revenueTransactionService from './revenueTransaction.service'
 
 dayjs.extend(utc)
 dayjs.extend(timezone)
@@ -235,7 +238,10 @@ class RetailSaleService {
   async createSale(input: RetailSaleDraftInput) {
     await this.ensureInitialized()
     const existing = await this.collection.findOne({ idempotencyKey: input.idempotencyKey })
-    if (existing) return existing
+    if (existing) {
+      await this.recordSaleRevenue(existing as unknown as RetailSaleDraft)
+      return existing
+    }
 
     const products = await this.getProducts()
     const productMap = new Map(products.map((product) => [product.itemId, product]))
@@ -263,15 +269,23 @@ class RetailSaleService {
       const retry = await this.collection.findOne({ idempotencyKey: input.idempotencyKey })
       if (retry) {
         await this.recordSaleMovement(retry as unknown as RetailSaleDraft)
+        await this.recordSaleRevenue(retry as unknown as RetailSaleDraft)
         return retry
       }
       throw error
     }
 
-    // Ghi movement sau khi sale đã tồn tại. Nếu movement lỗi, request lỗi để retry
-    // có thể bổ sung movement; không trả success giả khi kiểm kê chưa được cập nhật.
+    // Ghi movement và sổ doanh thu sau khi sale đã tồn tại. Retry bổ sung các bước còn thiếu.
     await this.recordSaleMovement(draft)
+    await this.recordSaleRevenue(draft)
     return draft
+  }
+
+  private async recordSaleRevenue(sale: RetailSaleDraft): Promise<void> {
+    await persistRetailSaleRevenue(sale, {
+      loadProducts: loadClassifiedMenuItems,
+      closeRevenue: (input) => revenueTransactionService.closeRevenueTransaction(input)
+    })
   }
 
   async listSales(from?: Date, to?: Date) {

@@ -5,6 +5,34 @@ import fnbMenuService from '~/services/fnbMenu.service'
 import { uploadImageToCloudinary, deleteImageFromCloudinary } from '~/services/cloudinary.service'
 import CloudinaryResponse from '~/models/CloudinaryResponse'
 import { Variant } from '~/models/schemas/FnBMenu.schema'
+import { RevenueCategory, UserRole } from '~/constants/enum'
+import { ErrorWithStatus } from '~/models/Error'
+
+const parseRevenueCategory = (value: unknown): RevenueCategory | undefined => {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || value.length === 0 || !Object.values(RevenueCategory).includes(value as RevenueCategory)) {
+    throw new ErrorWithStatus({ message: 'Revenue category không hợp lệ', status: HTTP_STATUS_CODE.BAD_REQUEST })
+  }
+  return value as RevenueCategory
+}
+
+const parseInventoryTracked = (value: unknown): boolean | undefined => {
+  if (value === undefined) return undefined
+  if (typeof value === 'boolean') return value
+  if (value === 'true') return true
+  if (value === 'false') return false
+  throw new ErrorWithStatus({ message: 'inventoryTracked phải là boolean', status: HTTP_STATUS_CODE.BAD_REQUEST })
+}
+
+const parseVariantRevenueCategory = (variant: Record<string, unknown>, parentValue: unknown) =>
+  parseRevenueCategory(
+    Object.prototype.hasOwnProperty.call(variant, 'revenueCategory') ? variant.revenueCategory : parentValue
+  )
+
+const parseVariantInventoryTracked = (variant: Record<string, unknown>, parentValue: unknown) =>
+  parseInventoryTracked(
+    Object.prototype.hasOwnProperty.call(variant, 'inventoryTracked') ? variant.inventoryTracked : parentValue
+  )
 
 /**
  * @description Get all menu items
@@ -54,7 +82,18 @@ const processPrice = (price: string | number): number => {
  */
 export const createMenuItem = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { name, price, description, category, createdAt, inventory, hasVariants, variants } = req.body
+    const {
+      name,
+      price,
+      description,
+      category,
+      revenueCategory,
+      inventoryTracked,
+      createdAt,
+      inventory,
+      hasVariants,
+      variants
+    } = req.body
     const files = req.files as Express.Multer.File[] | undefined
 
     // Kiểm tra nếu không có file hình ảnh
@@ -128,6 +167,8 @@ export const createMenuItem = async (req: Request, res: Response, next: NextFunc
             price: variant.price ? processPrice(variant.price) : numericPrice,
             isAvailable: variant.isAvailable ?? true,
             image: variantImageUrl,
+            revenueCategory: parseVariantRevenueCategory(variant, revenueCategory),
+            inventoryTracked: parseVariantInventoryTracked(variant, inventoryTracked),
             inventory: {
               quantity: variant.inventory?.quantity || 0,
               unit: variant.inventory?.unit || 'piece',
@@ -160,6 +201,8 @@ export const createMenuItem = async (req: Request, res: Response, next: NextFunc
       description: description || '',
       image: imageUrl,
       category,
+      revenueCategory: parseRevenueCategory(revenueCategory),
+      inventoryTracked: parseInventoryTracked(inventoryTracked),
       hasVariants: hasVariants || false,
       variants: processedVariants,
       ...(processedInventory && { inventory: processedInventory }),
@@ -186,13 +229,41 @@ export const createMenuItem = async (req: Request, res: Response, next: NextFunc
  */
 export const updateMenuItem = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { name, price, description, image, category, inventory, hasVariants, variants } = req.body
+    const {
+      name,
+      price,
+      description,
+      image,
+      category,
+      revenueCategory,
+      inventoryTracked,
+      inventory,
+      hasVariants,
+      variants
+    } = req.body
+    const hasCategoryInput =
+      Object.prototype.hasOwnProperty.call(req.body, 'revenueCategory') ||
+      (Array.isArray(variants) &&
+        variants.some((variant) => Object.prototype.hasOwnProperty.call(variant, 'revenueCategory')))
+    const classificationContext = hasCategoryInput
+      ? {
+          actorId: req.decoded_authorization?.user_id ?? '',
+          actorRole: UserRole.Admin,
+          reason: typeof req.body.reason === 'string' ? req.body.reason.trim() : ''
+        }
+      : undefined
     const files = req.files as Express.Multer.File[] | undefined
     const menuItem: any = {
       name,
       description,
       category,
       updatedAt: new Date()
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body, 'revenueCategory')) {
+      menuItem.revenueCategory = parseRevenueCategory(revenueCategory)
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body, 'inventoryTracked')) {
+      menuItem.inventoryTracked = parseInventoryTracked(inventoryTracked)
     }
 
     // Xử lý giá nếu được cung cấp
@@ -242,6 +313,8 @@ export const updateMenuItem = async (req: Request, res: Response, next: NextFunc
               price: variant.price ? processPrice(variant.price) : menuItem.price,
               isAvailable: variant.isAvailable ?? true,
               image: variantImageUrl,
+              revenueCategory: parseRevenueCategory(variant.revenueCategory),
+              inventoryTracked: parseInventoryTracked(variant.inventoryTracked),
               inventory: {
                 quantity: variant.inventory?.quantity || 0,
                 unit: variant.inventory?.unit || 'piece',
@@ -289,7 +362,7 @@ export const updateMenuItem = async (req: Request, res: Response, next: NextFunc
       menuItem.image = image
     }
 
-    const result = await fnbMenuService.updateFnbMenu(req.params.id, menuItem)
+    const result = await fnbMenuService.updateFnbMenu(req.params.id, menuItem, classificationContext)
     return res.status(HTTP_STATUS_CODE.OK).json({
       message: 'Update FNB menu item successfully',
       result

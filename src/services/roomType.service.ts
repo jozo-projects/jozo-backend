@@ -1,7 +1,10 @@
+import { ObjectId } from 'mongodb'
+import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
+import { ROOM_TYPE_MESSAGES } from '~/constants/messages'
+import { ErrorWithStatus } from '~/models/Error'
 import { AddRoomTypeRequestBody } from '~/models/requests/RoomType.request'
 import RoomType from '~/models/schemas/RoomType.schema'
 import databaseService from './database.service'
-import { ObjectId } from 'mongodb'
 
 class RoomTypeServices {
   async addRoomType(payload: AddRoomTypeRequestBody) {
@@ -68,12 +71,18 @@ class RoomTypeServices {
 
   async getRoomTypeById(roomTypeId: string) {
     if (!ObjectId.isValid(roomTypeId)) {
-      throw new Error('Invalid ID format')
+      throw new ErrorWithStatus({
+        message: ROOM_TYPE_MESSAGES.INVALID_ROOM_TYPE_ID,
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
     }
 
     const result = await databaseService.roomTypes.findOne({ _id: new ObjectId(roomTypeId) })
     if (!result) {
-      throw new Error('Room type not found')
+      throw new ErrorWithStatus({
+        message: ROOM_TYPE_MESSAGES.ROOM_TYPE_NOT_FOUND,
+        status: HTTP_STATUS_CODE.NOT_FOUND
+      })
     }
 
     return new RoomType(result)

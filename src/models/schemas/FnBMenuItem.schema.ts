@@ -7,7 +7,7 @@ export interface Inventory {
   lastUpdated: Date
 }
 
-import { FnBCategory } from '~/constants/enum'
+import { FnBCategory, RevenueCategory } from '~/constants/enum'
 
 /** Tuỳ chọn trong một nhóm (đặt hàng gửi groupKey + optionKey). */
 export interface FnBMenuCustomizationOption {
@@ -44,6 +44,10 @@ export interface FnBMenuItem {
   price: number
   image?: string // URL ảnh từ Cloudinary
   category: FnBCategory // snack hoặc drink
+  /** Accounting classification persisted on every sellable SKU. */
+  revenueCategory?: RevenueCategory
+  /** Whether a positive sale of this SKU must produce an inventory movement. */
+  inventoryTracked?: boolean
   inventory: Inventory
   /** Cấu hình tuỳ chọn theo dòng đơn (selections trên FNBOrderLine). */
   customizationGroups?: FnBMenuCustomizationGroup[]
