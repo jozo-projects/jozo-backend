@@ -3,6 +3,29 @@ import { ObjectId } from 'mongodb'
 import { RoomType } from '~/constants/enum'
 import { GiftBundleItem, GiftType } from '~/models/schemas/Gift.schema'
 import type { FNBOrderLine } from '~/models/schemas/FNB.schema'
+import type { RevenueCategory } from '~/constants/enum'
+import type { RevenueClassificationSource } from '~/models/schemas/Revenue.schema'
+
+export interface IBillItem {
+  description: string
+  price: number
+  quantity: number
+  originalPrice?: number
+  discountPercentage?: number
+  discountName?: string
+  /** Internal immutable-accounting snapshot metadata; additive for API compatibility. */
+  productId?: string
+  sourceLineRef?: string
+  revenueCategory?: RevenueCategory
+  classificationSource?: RevenueClassificationSource
+  inventoryTracked?: boolean
+  grossAmount?: number
+  discountAmount?: number
+  netAmount?: number
+  /** Line quà streak (0đ) — in bill nhóm theo mốc, không lặp prefix. */
+  isStreakGift?: boolean
+  streakCount?: number
+}
 
 export interface IBill {
   _id?: ObjectId
@@ -11,17 +34,7 @@ export interface IBill {
   scheduleId: ObjectId | string
   roomId: ObjectId | string
   roomType?: RoomType | string
-  items: Array<{
-    description: string
-    price: number
-    quantity: number
-    originalPrice?: number
-    discountPercentage?: number
-    discountName?: string
-    /** Line quà streak (0đ) — in bill nhóm theo mốc, không lặp prefix. */
-    isStreakGift?: boolean
-    streakCount?: number
-  }>
+  items: IBillItem[]
   totalAmount: number
   giftDiscountAmount?: number
   /** Số tiền giảm từ membership tier (đã trừ vào totalAmount). */
@@ -94,16 +107,7 @@ export class Bill {
   _id?: ObjectId
   scheduleId!: ObjectId
   roomId!: ObjectId
-  items!: Array<{
-    description: string
-    price: number
-    quantity: number
-    originalPrice?: number
-    discountPercentage?: number
-    discountName?: string
-    isStreakGift?: boolean
-    streakCount?: number
-  }>
+  items!: IBillItem[]
   totalAmount!: number
   giftDiscountAmount?: number
   membershipDiscountAmount?: number

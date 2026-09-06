@@ -1,4 +1,5 @@
 import { ObjectId } from 'mongodb'
+import { RevenueCategory } from '~/constants/enum'
 
 export interface Inventory {
   quantity: number
@@ -14,6 +15,8 @@ export interface Variant {
   isAvailable: boolean
   inventory: Inventory
   image?: string // Thêm trường hình ảnh cho variant
+  revenueCategory?: RevenueCategory
+  inventoryTracked?: boolean
 }
 
 export interface FnbMenu {
@@ -23,6 +26,8 @@ export interface FnbMenu {
   description: string
   image: string
   category: string
+  revenueCategory?: RevenueCategory
+  inventoryTracked?: boolean
   hasVariants: boolean
   variants?: Variant[] // Chỉ được sử dụng khi hasVariants = true
   inventory?: Inventory // Optional trong schema, nhưng sẽ được validate trong controller
@@ -46,6 +51,8 @@ export class FnbMenuModel implements FnbMenu {
     public variants?: Variant[],
     public _id?: ObjectId,
     public createdAt: Date = new Date(),
-    public updatedAt?: Date
+    public updatedAt?: Date,
+    public revenueCategory?: RevenueCategory,
+    public inventoryTracked?: boolean
   ) {}
 }

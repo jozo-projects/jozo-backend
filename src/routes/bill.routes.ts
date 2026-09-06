@@ -23,7 +23,7 @@ const billRouter = Router()
 
 /**
  * @route GET /bill/revenue
- * @description Doanh thu theo khoảng: query startDate, endDate (ISO). Một ngày: hai tham số cùng ngày.
+ * @description Doanh thu theo khoảng: query startDate, endDate (ISO). Một ngày: hai tham số cùng ngày. Trả thêm serviceRoomRevenue, fnbRevenue, byCategory.
  * @access Private
  */
 billRouter.get('/revenue', protect([UserRole.Admin, UserRole.Staff]), wrapRequestHandler(getRevenueByRange))

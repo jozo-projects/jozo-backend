@@ -1,12 +1,14 @@
 import { FnBMenuItem } from '~/models/schemas/FnBMenuItem.schema'
 import databaseService from './database.service'
-import { ObjectId, Collection } from 'mongodb'
-import { FnBCategory } from '~/constants/enum'
+import { ObjectId, Collection, ClientSession } from 'mongodb'
+import { FnBCategory, RevenueCategory, UserRole } from '~/constants/enum'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { FNB_MENU_MESSAGES } from '~/constants/messages'
 import { ErrorWithStatus } from '~/models/Error'
 import type { FNBOrder } from '~/models/schemas/FNB.schema'
 import { aggregateQuantitiesByItemId } from '~/utils/fnbOrderLines'
+import revenueAuditService from './revenueAudit.service'
+import { RevenueClassificationChangeContext } from '~/models/requests/RevenueClassification.request'
 
 const COLLECTION_NAME = 'fnb_menu_item'
 
@@ -18,6 +20,26 @@ export const ACTIVE_MENU_ITEM_FILTER = { isActive: { $ne: false } }
 
 export function isMenuItemActive(item: FnBMenuItem): boolean {
   return item.isActive !== false
+}
+
+function isRevenueCategory(value: unknown): value is RevenueCategory {
+  return typeof value === 'string' && Object.values(RevenueCategory).includes(value as RevenueCategory)
+}
+
+function assertValidClassification(item: Partial<FnBMenuItem>, requireForSellable = false): void {
+  if (item.revenueCategory !== undefined && !isRevenueCategory(item.revenueCategory)) {
+    throw new ErrorWithStatus({ message: 'Revenue category không hợp lệ', status: HTTP_STATUS_CODE.BAD_REQUEST })
+  }
+  if (item.inventoryTracked !== undefined && typeof item.inventoryTracked !== 'boolean') {
+    throw new ErrorWithStatus({ message: 'inventoryTracked phải là boolean', status: HTTP_STATUS_CODE.BAD_REQUEST })
+  }
+  const isActiveSellable = requireForSellable && item.hasVariant !== true && item.isActive !== false
+  if (isActiveSellable && (!item.revenueCategory || item.inventoryTracked === undefined)) {
+    throw new ErrorWithStatus({
+      message: 'Sản phẩm đang bán phải có revenueCategory và inventoryTracked',
+      status: HTTP_STATUS_CODE.BAD_REQUEST
+    })
+  }
 }
 
 const EXTRA_MENU_ITEM_FIELDS = ['quantity', 'existingImage'] as const
@@ -46,14 +68,19 @@ class FnBMenuItemService {
     return databaseService.getCollection<FnBMenuItem>(COLLECTION_NAME)
   }
 
-  async createMenuItem(item: FnBMenuItem): Promise<FnBMenuItem> {
-    const result = await this.collection.insertOne(item)
+  async createMenuItem(item: FnBMenuItem, session?: ClientSession): Promise<FnBMenuItem> {
+    assertValidClassification(item, true)
+    const result = session
+      ? await this.collection.insertOne(item, { session })
+      : await this.collection.insertOne(item)
     item._id = result.insertedId
     return item
   }
 
-  async getMenuItemById(id: string): Promise<FnBMenuItem | null> {
-    const item = await this.collection.findOne({ _id: new ObjectId(id) })
+  async getMenuItemById(id: string, session?: ClientSession): Promise<FnBMenuItem | null> {
+    const item = session
+      ? await this.collection.findOne({ _id: new ObjectId(id) }, { session })
+      : await this.collection.findOne({ _id: new ObjectId(id) })
     return item || null
   }
 
@@ -73,29 +100,87 @@ class FnBMenuItemService {
     return await this.collection.find({ ...ROOT_PARENT_ID_FILTER, ...ACTIVE_MENU_ITEM_FILTER }).toArray()
   }
 
-  async updateMenuItem(id: string, data: Partial<FnBMenuItem>): Promise<FnBMenuItem | null> {
-    await this.collection.updateOne({ _id: new ObjectId(id) }, { $set: data })
-    return this.getMenuItemById(id)
+  async updateMenuItem(
+    id: string,
+    data: Partial<FnBMenuItem>,
+    classificationContext?: RevenueClassificationChangeContext,
+    session?: ClientSession
+  ): Promise<FnBMenuItem | null> {
+    assertValidClassification(data)
+    if (data.revenueCategory !== undefined && !session) {
+      return databaseService.withTransaction((transactionSession) =>
+        this.updateMenuItem(id, data, classificationContext, transactionSession)
+      )
+    }
+    const current = await this.getMenuItemById(id, session)
+    if (!current) return null
+
+    const categoryChanged = data.revenueCategory !== undefined && data.revenueCategory !== current.revenueCategory
+    if (categoryChanged) {
+      const reason = classificationContext?.reason.trim()
+      const actorId = classificationContext?.actorId.trim()
+      if (!reason || !actorId) {
+        throw new ErrorWithStatus({
+          message: 'Thay đổi revenueCategory yêu cầu Admin và lý do',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      }
+      if (classificationContext?.actorRole !== UserRole.Admin) {
+        throw new ErrorWithStatus({ message: 'Forbidden', status: HTTP_STATUS_CODE.FORBIDDEN })
+      }
+    }
+
+    if (
+      data.revenueCategory !== undefined ||
+      data.inventoryTracked !== undefined ||
+      data.isActive === true ||
+      (current.hasVariant === true && data.hasVariant === false)
+    ) {
+      assertValidClassification({ ...current, ...data }, true)
+    }
+    const write = async (transactionSession?: ClientSession) => {
+      if (transactionSession) {
+        await this.collection.updateOne({ _id: new ObjectId(id) }, { $set: data }, { session: transactionSession })
+      } else {
+        await this.collection.updateOne({ _id: new ObjectId(id) }, { $set: data })
+      }
+
+      if (categoryChanged) {
+        await revenueAuditService.recordProductCategoryChange({
+          entityId: id,
+          oldValue: current.revenueCategory ?? null,
+          newValue: data.revenueCategory!,
+          reason: classificationContext!.reason.trim(),
+          changedBy: classificationContext!.actorId.trim(),
+          changedAt: new Date(),
+          session: transactionSession
+        })
+      }
+    }
+
+    if (categoryChanged && !session) await databaseService.withTransaction(write)
+    else await write(session)
+    return this.collection.findOne({ _id: new ObjectId(id) }, session ? { session } : undefined)
   }
 
-  async deleteMenuItem(id: string): Promise<DeleteMenuItemResult | null> {
-    const item = await this.getMenuItemById(id)
+  async deleteMenuItem(id: string, session?: ClientSession): Promise<DeleteMenuItemResult | null> {
+    const item = await this.getMenuItemById(id, session)
     if (!item) return null
 
-    const variants = await this.getVariantsByParentId(id)
+    const variants = await this.getVariantsByParentId(id, session)
     const deletedVariantIds = variants.map((variant) => variant._id!.toString())
 
     if (deletedVariantIds.length > 0) {
-      await this.collection.deleteMany({ parentId: id })
+      await this.collection.deleteMany({ parentId: id }, session ? { session } : undefined)
     }
 
-    await this.collection.deleteOne({ _id: new ObjectId(id) })
+    await this.collection.deleteOne({ _id: new ObjectId(id) }, session ? { session } : undefined)
 
     return { item, deletedVariantIds }
   }
 
-  async getVariantsByParentId(parentId: string): Promise<FnBMenuItem[]> {
-    const variants = await this.collection.find({ parentId: parentId }).toArray()
+  async getVariantsByParentId(parentId: string, session?: ClientSession): Promise<FnBMenuItem[]> {
+    const variants = await this.collection.find({ parentId: parentId }, session ? { session } : undefined).toArray()
 
     return variants
   }
@@ -107,8 +192,8 @@ class FnBMenuItemService {
     return await this.collection.find({ parentId, ...ACTIVE_MENU_ITEM_FILTER }).toArray()
   }
 
-  async getVariantByNameAndParentId(name: string, parentId: string): Promise<FnBMenuItem | null> {
-    const variant = await this.collection.findOne({ name: name, parentId: parentId })
+  async getVariantByNameAndParentId(name: string, parentId: string, session?: ClientSession): Promise<FnBMenuItem | null> {
+    const variant = await this.collection.findOne({ name: name, parentId: parentId }, session ? { session } : undefined)
     return variant || null
   }
 
