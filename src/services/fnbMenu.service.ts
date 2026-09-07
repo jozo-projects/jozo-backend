@@ -20,18 +20,22 @@ function assertExactCategories(menu: Partial<FnbMenu>): void {
   }
   for (const variant of menu.variants ?? []) {
     if (variant.revenueCategory !== undefined && !isRevenueCategory(variant.revenueCategory)) {
-      throw new ErrorWithStatus({ message: 'Revenue category variant không hợp lệ', status: HTTP_STATUS_CODE.BAD_REQUEST })
+      throw new ErrorWithStatus({
+        message: 'Revenue category variant không hợp lệ',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
     }
     if (variant.inventoryTracked !== undefined && typeof variant.inventoryTracked !== 'boolean') {
-      throw new ErrorWithStatus({ message: 'inventoryTracked variant phải là boolean', status: HTTP_STATUS_CODE.BAD_REQUEST })
+      throw new ErrorWithStatus({
+        message: 'inventoryTracked variant phải là boolean',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
     }
   }
 }
 
 function assertNewSellableSkusClassified(menu: FnbMenu): void {
-  const skus = menu.hasVariants
-    ? (menu.variants ?? []).filter((variant) => variant.isAvailable !== false)
-    : [menu]
+  const skus = menu.hasVariants ? (menu.variants ?? []).filter((variant) => variant.isAvailable !== false) : [menu]
   if (skus.some((sku) => !sku.revenueCategory || sku.inventoryTracked === undefined)) {
     throw new ErrorWithStatus({
       message: 'Mỗi sản phẩm đang bán phải có revenueCategory và inventoryTracked',
@@ -129,11 +133,20 @@ class FnbMenuService {
     const hasCategoryCommand =
       menu.revenueCategory !== undefined ||
       (menu.variants ?? []).some((variant) => variant.revenueCategory !== undefined)
-    if (hasCategoryCommand && !session) {
+    if (hasCategoryCommand && session === undefined) {
       return databaseService.withTransaction((transactionSession) =>
-        this.updateFnbMenu(id, menu, classificationContext, transactionSession)
+        this.commitFnbMenuUpdate(id, menu, classificationContext, transactionSession)
       )
     }
+    return this.commitFnbMenuUpdate(id, menu, classificationContext, session)
+  }
+
+  private async commitFnbMenuUpdate(
+    id: string,
+    menu: Partial<FnbMenu>,
+    classificationContext: RevenueClassificationChangeContext | undefined,
+    session?: ClientSession
+  ): Promise<FnbMenu | null> {
     const menuToUpdate = await databaseService.fnbMenu.findOne(
       { _id: new ObjectId(id) },
       session ? { session } : undefined
@@ -167,7 +180,11 @@ class FnbMenuService {
 
     const categoryChanges: Array<{ entityId: string; oldValue: RevenueCategory | null; newValue: RevenueCategory }> = []
     if (menu.revenueCategory !== undefined && menu.revenueCategory !== menuToUpdate.revenueCategory) {
-      categoryChanges.push({ entityId: id, oldValue: menuToUpdate.revenueCategory ?? null, newValue: menu.revenueCategory })
+      categoryChanges.push({
+        entityId: id,
+        oldValue: menuToUpdate.revenueCategory ?? null,
+        newValue: menu.revenueCategory
+      })
     }
     const oldVariantsByName = new Map((menuToUpdate.variants ?? []).map((variant) => [variant.name, variant]))
     for (const variant of menu.variants ?? []) {

@@ -45,10 +45,15 @@ describe('FnBMenuItem revenue classification', () => {
     expect(collection.insertOne).not.toHaveBeenCalled()
   })
 
-  it('requires every new active sellable SKU to persist its own category', async () => {
-    const unclassified = { ...baseItem, revenueCategory: undefined } as unknown as FnBMenuItem
-    await expect(fnBMenuItemService.createMenuItem(unclassified)).rejects.toMatchObject({ status: 400 })
-    expect(collection.insertOne).not.toHaveBeenCalled()
+  it('defaults unclassified new sellable SKUs to FNB_RETAIL so existing create forms keep working', async () => {
+    const unclassified = { ...baseItem, revenueCategory: undefined, inventoryTracked: undefined } as unknown as FnBMenuItem
+    collection.insertOne.mockResolvedValue({ insertedId: itemId })
+
+    await expect(fnBMenuItemService.createMenuItem(unclassified)).resolves.toMatchObject({
+      revenueCategory: RevenueCategory.FNB_RETAIL,
+      inventoryTracked: true
+    })
+    expect(collection.insertOne).toHaveBeenCalled()
   })
 
   it('requires a non-empty reason and actor when the category changes', async () => {
@@ -106,6 +111,76 @@ describe('FnBMenuItem revenue classification', () => {
     expect(revenueAuditService.recordProductCategoryChange).not.toHaveBeenCalled()
   })
 
+  it('ignores echoed first-time classification so quantity updates do not require a reason', async () => {
+    collection.findOne.mockResolvedValue({
+      ...baseItem,
+      revenueCategory: undefined,
+      inventoryTracked: undefined
+    })
+    const inventory = { quantity: 8, lastUpdated: new Date('2026-09-07T00:00:00Z') }
+
+    await fnBMenuItemService.updateMenuItem(itemId.toString(), {
+      revenueCategory: RevenueCategory.FNB_RETAIL,
+      inventoryTracked: true,
+      inventory
+    })
+
+    expect(collection.updateOne).toHaveBeenCalledWith(
+      { _id: itemId },
+      { $set: { inventory } },
+      expect.anything()
+    )
+    expect(revenueAuditService.recordProductCategoryChange).not.toHaveBeenCalled()
+  })
+
+  it('allows editing an unclassified active item when the form echoes isActive', async () => {
+    collection.findOne.mockResolvedValue({
+      ...baseItem,
+      revenueCategory: undefined,
+      inventoryTracked: undefined,
+      isActive: true
+    })
+    const inventory = { quantity: 8, lastUpdated: new Date('2026-09-07T00:00:00Z') }
+
+    await expect(
+      fnBMenuItemService.updateMenuItem(itemId.toString(), {
+        isActive: true,
+        revenueCategory: RevenueCategory.FNB_RETAIL,
+        inventoryTracked: true,
+        inventory
+      })
+    ).resolves.toMatchObject({ _id: itemId })
+
+    expect(collection.updateOne).toHaveBeenCalledWith(
+      { _id: itemId },
+      { $set: { isActive: true, inventory } },
+      expect.anything()
+    )
+  })
+
+  it('ignores an echoed different category when updating quantity without a reason', async () => {
+    collection.findOne.mockResolvedValue({
+      ...baseItem,
+      revenueCategory: RevenueCategory.FNB_PREPARED,
+      inventoryTracked: true
+    })
+    const inventory = { quantity: 8, lastUpdated: new Date('2026-09-07T00:00:00Z') }
+
+    await expect(
+      fnBMenuItemService.updateMenuItem(itemId.toString(), {
+        revenueCategory: RevenueCategory.FNB_RETAIL,
+        inventory
+      })
+    ).resolves.toMatchObject({ _id: itemId })
+
+    expect(collection.updateOne).toHaveBeenCalledWith(
+      { _id: itemId },
+      { $set: { inventory } },
+      expect.anything()
+    )
+    expect(revenueAuditService.recordProductCategoryChange).not.toHaveBeenCalled()
+  })
+
   it('does not require a reason when the supplied category is unchanged', async () => {
     await fnBMenuItemService.updateMenuItem(itemId.toString(), {
       name: 'Coke Zero',
@@ -113,6 +188,23 @@ describe('FnBMenuItem revenue classification', () => {
     })
     expect(collection.updateOne).toHaveBeenCalled()
     expect(revenueAuditService.recordProductCategoryChange).not.toHaveBeenCalled()
+  })
+
+  it('updates quantity when standalone Mongo retries the write without a session', async () => {
+    jest.mocked(databaseService.withTransaction).mockImplementation(async (work: any) => work(undefined))
+    const inventory = { quantity: 8, lastUpdated: new Date('2026-09-07T00:00:00Z') }
+
+    await expect(
+      fnBMenuItemService.updateMenuItem(itemId.toString(), {
+        revenueCategory: RevenueCategory.FNB_RETAIL,
+        inventory
+      })
+    ).resolves.toMatchObject({ _id: itemId })
+
+    expect(collection.updateOne).toHaveBeenCalledWith(
+      { _id: itemId },
+      { $set: { revenueCategory: RevenueCategory.FNB_RETAIL, inventory } }
+    )
   })
 
   it('rejects an arbitrary actor id without an explicit Admin command context', async () => {

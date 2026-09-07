@@ -129,23 +129,18 @@ export const createMenuItem = async (req: Request, res: Response, next: NextFunc
           throw new ErrorWithStatus({ message: 'Variant không hợp lệ', status: HttpStatusCode.BadRequest })
         }
         const normalized = { ...variant }
-        normalized.revenueCategory = parseRevenueCategory(
-          Object.prototype.hasOwnProperty.call(variant, 'revenueCategory')
-            ? variant.revenueCategory
-            : body.revenueCategory
-        )
-        normalized.inventoryTracked = parseInventoryTracked(
-          Object.prototype.hasOwnProperty.call(variant, 'inventoryTracked')
-            ? variant.inventoryTracked
-            : body.inventoryTracked
-        )
-        const active = parseIsActive(variant.isActive) ?? true
-        if (active && (!normalized.revenueCategory || normalized.inventoryTracked === undefined)) {
-          throw new ErrorWithStatus({
-            message: 'Variant đang bán phải có revenueCategory và inventoryTracked',
-            status: HttpStatusCode.BadRequest
-          })
-        }
+        normalized.revenueCategory =
+          parseRevenueCategory(
+            Object.prototype.hasOwnProperty.call(variant, 'revenueCategory')
+              ? variant.revenueCategory
+              : body.revenueCategory
+          ) ?? RevenueCategory.FNB_RETAIL
+        normalized.inventoryTracked =
+          parseInventoryTracked(
+            Object.prototype.hasOwnProperty.call(variant, 'inventoryTracked')
+              ? variant.inventoryTracked
+              : body.inventoryTracked
+          ) ?? true
         return normalized
       })
 
@@ -241,8 +236,8 @@ export const createMenuItem = async (req: Request, res: Response, next: NextFunc
       price: Number(body.price),
       image: imageUrl || undefined,
       category: (body.category as FnBCategory) || FnBCategory.SNACK,
-      revenueCategory: parseRevenueCategory(body.revenueCategory),
-      inventoryTracked: parseInventoryTracked(body.inventoryTracked),
+      revenueCategory: parseRevenueCategory(body.revenueCategory) ?? RevenueCategory.FNB_RETAIL,
+      inventoryTracked: parseInventoryTracked(body.inventoryTracked) ?? true,
       inventory: {
         quantity: Number(body.quantity),
         minStock: body.minStock ? Number(body.minStock) : undefined,
@@ -504,11 +499,9 @@ export const updateMenuItem = async (req: Request, res: Response, next: NextFunc
             throw new ErrorWithStatus({ message: 'Variant không thuộc sản phẩm cha', status: HttpStatusCode.BadRequest })
           }
           const active = parseIsActive(variant.isActive) ?? existing?.isActive ?? true
-          if (!existing && active && (!variant.revenueCategory || variant.inventoryTracked === undefined)) {
-            throw new ErrorWithStatus({
-              message: 'Variant mới/đổi tên phải có revenueCategory và inventoryTracked',
-              status: HttpStatusCode.BadRequest
-            })
+          if (!existing && active) {
+            variant.revenueCategory = variant.revenueCategory ?? RevenueCategory.FNB_RETAIL
+            variant.inventoryTracked = variant.inventoryTracked ?? true
           }
         }
       }

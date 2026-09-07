@@ -42,6 +42,64 @@ function assertValidClassification(item: Partial<FnBMenuItem>, requireForSellabl
   }
 }
 
+function hasClassificationReason(context?: RevenueClassificationChangeContext): boolean {
+  return Boolean(context?.reason.trim() && context?.actorId.trim())
+}
+
+const CLASSIFICATION_UPDATE_KEYS = new Set(['revenueCategory', 'inventoryTracked'])
+
+function hasOperationalUpdate(data: Partial<FnBMenuItem>): boolean {
+  return Object.keys(data).some(
+    (key) => !CLASSIFICATION_UPDATE_KEYS.has(key) && data[key as keyof FnBMenuItem] !== undefined
+  )
+}
+
+/**
+ * Form edits (quantity, name, image) often echo revenueCategory, including a default
+ * that differs from the stored value. Without a reason, ignore that echo so stock
+ * updates are not blocked. A classification-only payload still requires Admin + reason.
+ */
+function prepareClassificationUpdate(
+  data: Partial<FnBMenuItem>,
+  current: FnBMenuItem,
+  classificationContext?: RevenueClassificationChangeContext
+): { data: Partial<FnBMenuItem>; categoryChanged: boolean } {
+  const next = { ...data }
+  const categoryChanged = next.revenueCategory !== undefined && next.revenueCategory !== current.revenueCategory
+
+  if (categoryChanged && !hasClassificationReason(classificationContext)) {
+    if (current.revenueCategory == null || hasOperationalUpdate(next)) {
+      delete next.revenueCategory
+    } else {
+      throw new ErrorWithStatus({
+        message: 'Thay đổi revenueCategory yêu cầu Admin và lý do',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
+    }
+  }
+
+  if (
+    categoryChanged &&
+    hasClassificationReason(classificationContext) &&
+    classificationContext?.actorRole !== UserRole.Admin
+  ) {
+    throw new ErrorWithStatus({ message: 'Forbidden', status: HTTP_STATUS_CODE.FORBIDDEN })
+  }
+
+  if (
+    next.inventoryTracked !== undefined &&
+    current.inventoryTracked === undefined &&
+    !hasClassificationReason(classificationContext)
+  ) {
+    delete next.inventoryTracked
+  }
+
+  return {
+    data: next,
+    categoryChanged: Boolean(next.revenueCategory !== undefined && next.revenueCategory !== current.revenueCategory)
+  }
+}
+
 const EXTRA_MENU_ITEM_FIELDS = ['quantity', 'existingImage'] as const
 
 export interface DeleteMenuItemResult {
@@ -69,10 +127,13 @@ class FnBMenuItemService {
   }
 
   async createMenuItem(item: FnBMenuItem, session?: ClientSession): Promise<FnBMenuItem> {
+    const isActiveSellable = item.hasVariant !== true && item.isActive !== false
+    if (isActiveSellable) {
+      item.revenueCategory = item.revenueCategory ?? RevenueCategory.FNB_RETAIL
+      item.inventoryTracked = item.inventoryTracked ?? true
+    }
     assertValidClassification(item, true)
-    const result = session
-      ? await this.collection.insertOne(item, { session })
-      : await this.collection.insertOne(item)
+    const result = session ? await this.collection.insertOne(item, { session }) : await this.collection.insertOne(item)
     item._id = result.insertedId
     return item
   }
@@ -107,37 +168,30 @@ class FnBMenuItemService {
     session?: ClientSession
   ): Promise<FnBMenuItem | null> {
     assertValidClassification(data)
-    if (data.revenueCategory !== undefined && !session) {
+    if (data.revenueCategory !== undefined && session === undefined) {
       return databaseService.withTransaction((transactionSession) =>
-        this.updateMenuItem(id, data, classificationContext, transactionSession)
+        this.commitMenuItemUpdate(id, data, classificationContext, transactionSession)
       )
     }
+    return this.commitMenuItemUpdate(id, data, classificationContext, session)
+  }
+
+  private async commitMenuItemUpdate(
+    id: string,
+    data: Partial<FnBMenuItem>,
+    classificationContext: RevenueClassificationChangeContext | undefined,
+    session?: ClientSession
+  ): Promise<FnBMenuItem | null> {
     const current = await this.getMenuItemById(id, session)
     if (!current) return null
 
-    const categoryChanged = data.revenueCategory !== undefined && data.revenueCategory !== current.revenueCategory
-    if (categoryChanged) {
-      const reason = classificationContext?.reason.trim()
-      const actorId = classificationContext?.actorId.trim()
-      if (!reason || !actorId) {
-        throw new ErrorWithStatus({
-          message: 'Thay đổi revenueCategory yêu cầu Admin và lý do',
-          status: HTTP_STATUS_CODE.BAD_REQUEST
-        })
-      }
-      if (classificationContext?.actorRole !== UserRole.Admin) {
-        throw new ErrorWithStatus({ message: 'Forbidden', status: HTTP_STATUS_CODE.FORBIDDEN })
-      }
-    }
+    const prepared = prepareClassificationUpdate(data, current, classificationContext)
+    data = prepared.data
+    const categoryChanged = prepared.categoryChanged
 
-    if (
-      data.revenueCategory !== undefined ||
-      data.inventoryTracked !== undefined ||
-      data.isActive === true ||
-      (current.hasVariant === true && data.hasVariant === false)
-    ) {
-      assertValidClassification({ ...current, ...data }, true)
-    }
+    // Existing catalog rows may predate classification. Checkout already defaults
+    // unclassified F&B to FNB_RETAIL, so ordinary edits must not require these fields.
+    assertValidClassification(data)
     const write = async (transactionSession?: ClientSession) => {
       if (transactionSession) {
         await this.collection.updateOne({ _id: new ObjectId(id) }, { $set: data }, { session: transactionSession })
@@ -192,7 +246,11 @@ class FnBMenuItemService {
     return await this.collection.find({ parentId, ...ACTIVE_MENU_ITEM_FILTER }).toArray()
   }
 
-  async getVariantByNameAndParentId(name: string, parentId: string, session?: ClientSession): Promise<FnBMenuItem | null> {
+  async getVariantByNameAndParentId(
+    name: string,
+    parentId: string,
+    session?: ClientSession
+  ): Promise<FnBMenuItem | null> {
     const variant = await this.collection.findOne({ name: name, parentId: parentId }, session ? { session } : undefined)
     return variant || null
   }
@@ -202,9 +260,7 @@ class FnBMenuItemService {
   }
 
   async getActiveMenuItemsByCategory(category: FnBCategory): Promise<FnBMenuItem[]> {
-    return await this.collection
-      .find({ category, ...ROOT_PARENT_ID_FILTER, ...ACTIVE_MENU_ITEM_FILTER })
-      .toArray()
+    return await this.collection.find({ category, ...ROOT_PARENT_ID_FILTER, ...ACTIVE_MENU_ITEM_FILTER }).toArray()
   }
 
   async isMenuItemEffectivelyActive(item: FnBMenuItem): Promise<boolean> {
@@ -253,9 +309,7 @@ class FnBMenuItemService {
    * Item orderable còn hàng: leaf/variant (không list parent hasVariant),
    * active (+ parent active), inventory.quantity > 0.
    */
-  async getSelectableStockItems(options?: {
-    category?: FnBCategory
-  }): Promise<
+  async getSelectableStockItems(options?: { category?: FnBCategory }): Promise<
     Array<{
       itemId: string
       name: string
@@ -281,9 +335,7 @@ class FnBMenuItemService {
     ]
     const parents =
       parentIds.length > 0
-        ? await this.collection
-            .find({ _id: { $in: parentIds.map((id) => new ObjectId(id)) } })
-            .toArray()
+        ? await this.collection.find({ _id: { $in: parentIds.map((id) => new ObjectId(id)) } }).toArray()
         : []
     const parentById = new Map(parents.map((p) => [p._id!.toString(), p]))
 
@@ -390,9 +442,7 @@ class FnBMenuItemService {
     const needRemoveExtraFields: Array<{ item: FnBMenuItem; fields: string[] }> = []
 
     for (const item of allItems) {
-      const fields = EXTRA_MENU_ITEM_FIELDS.filter(
-        (field) => field in (item as unknown as Record<string, unknown>)
-      )
+      const fields = EXTRA_MENU_ITEM_FIELDS.filter((field) => field in (item as unknown as Record<string, unknown>))
       if (fields.length > 0) {
         needRemoveExtraFields.push({ item, fields: [...fields] })
       }
@@ -406,10 +456,7 @@ class FnBMenuItemService {
       }
 
       for (const item of needNormalizeParentId) {
-        await this.collection.updateOne(
-          { _id: item._id },
-          { $set: { parentId: null, updatedAt: new Date() } }
-        )
+        await this.collection.updateOne({ _id: item._id }, { $set: { parentId: null, updatedAt: new Date() } })
       }
 
       for (const { item, fields } of needRemoveExtraFields) {
