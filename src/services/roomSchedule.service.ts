@@ -7,6 +7,7 @@ import { ErrorWithStatus } from '~/models/Error'
 import { IRoomScheduleRequestBody, IRoomScheduleRequestQuery } from '~/models/requests/RoomSchedule.request'
 import { BookingSource, RoomSchedule } from '~/models/schemas/RoomSchdedule.schema'
 import { generateUniqueBookingCode, parseDate, buildBookingCodeDuplicateFilter, getDateOfUseFromDate } from '~/utils/common'
+import { pickCurrentRoomScheduleForClientFnb } from '~/utils/currentRoomSchedule'
 import databaseService from './database.service'
 import fnbOrderService from './fnbOrder.service'
 import redis from './redis.service'
@@ -73,6 +74,20 @@ class RoomScheduleService {
 
     console.log('Final query:', query)
     return await databaseService.roomSchedule.find(query).toArray()
+  }
+
+  /**
+   * Tablet/client FNB chỉ có roomId. Ưu tiên phiên In Use đang chiếm phòng,
+   * không gắn món vào booking tương lai chỉ vì createdAt mới hơn.
+   */
+  async findCurrentScheduleForClientFnb(roomObjectId: ObjectId, now = new Date()): Promise<RoomSchedule | null> {
+    const candidates = await databaseService.roomSchedule
+      .find({
+        roomId: roomObjectId,
+        status: { $in: [RoomScheduleStatus.Booked, RoomScheduleStatus.InUse] }
+      })
+      .toArray()
+    return pickCurrentRoomScheduleForClientFnb(candidates, now)
   }
 
   /**
