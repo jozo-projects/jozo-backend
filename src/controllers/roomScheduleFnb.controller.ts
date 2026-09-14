@@ -3,12 +3,12 @@ import { ObjectId } from 'mongodb'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { FNB_MESSAGES } from '~/constants/messages'
 import { ErrorWithStatus } from '~/models/Error'
-import { RoomScheduleStatus } from '~/constants/enum'
 import fnbOrderService from '~/services/fnbOrder.service'
 import fnbMenuItemService from '~/services/fnbMenuItem.service'
 import fnbSalesMovementService from '~/services/fnbSalesMovement.service'
 import databaseService from '~/services/database.service'
 import { roomMusicServices } from '~/services/roomMusic.service'
+import { roomScheduleService } from '~/services/roomSchedule.service'
 import {
   aggregateLinesToLegacyMaps,
   aggregateQuantitiesByItemId,
@@ -20,6 +20,20 @@ import {
   setPlainLineQuantity
 } from '~/utils/fnbOrderLines'
 import { assertValidFnbOrderPayload } from '~/utils/validateFnbOrderPayload'
+
+async function requireCurrentClientFnbSchedule(
+  room: { _id: ObjectId; roomName?: string },
+  roomLabel: string | number
+) {
+  const currentSchedule = await roomScheduleService.findCurrentScheduleForClientFnb(room._id)
+  if (!currentSchedule) {
+    throw new ErrorWithStatus({
+      message: `No active session (booked or in use) found for room ${room.roomName || roomLabel}`,
+      status: HTTP_STATUS_CODE.NOT_FOUND
+    })
+  }
+  return currentSchedule
+}
 
 /**
  * @description SUBMIT client cart - MERGE vào order hiện tại (cộng dồn)
@@ -63,25 +77,7 @@ export const submitClientCart = async (req: Request, res: Response, next: NextFu
       })
     }
 
-    // Find current active schedule for the room
-    const now = new Date()
-    const currentSchedule = await databaseService.roomSchedule.findOne(
-      {
-        roomId: room._id,
-        status: { $in: [RoomScheduleStatus.Booked, RoomScheduleStatus.InUse] },
-        endTime: { $gt: now }
-      },
-      {
-        sort: { createdAt: -1 }
-      }
-    )
-
-    if (!currentSchedule) {
-      throw new ErrorWithStatus({
-        message: `No active session (booked or in use) found for room ${room.roomName || roomId}`,
-        status: HTTP_STATUS_CODE.NOT_FOUND
-      })
-    }
+    const currentSchedule = await requireCurrentClientFnbSchedule(room, roomId)
 
     const currentOrder = await fnbOrderService.getFnbOrdersByRoomSchedule(currentSchedule._id.toString())
 
@@ -274,27 +270,7 @@ export const addClientFnbOrderItems = async (req: Request, res: Response, next: 
       })
     }
 
-    // Find current active schedule for the room (booked or in use)
-    // Dựa vào endTime > now để lọc schedule còn hiệu lực
-    // Sort theo createdAt để lấy schedule mới nhất
-    const now = new Date()
-    const currentSchedule = await databaseService.roomSchedule.findOne(
-      {
-        roomId: room._id,
-        status: { $in: [RoomScheduleStatus.Booked, RoomScheduleStatus.InUse] },
-        endTime: { $gt: now } // Chỉ lấy schedule chưa kết thúc
-      },
-      {
-        sort: { createdAt: -1 } // Lấy schedule mới nhất
-      }
-    )
-
-    if (!currentSchedule) {
-      throw new ErrorWithStatus({
-        message: `No active session (booked or in use) found for room ${room.roomName || roomId}`,
-        status: HTTP_STATUS_CODE.NOT_FOUND
-      })
-    }
+    const currentSchedule = await requireCurrentClientFnbSchedule(room, roomId)
 
     const currentOrder = await fnbOrderService.getFnbOrdersByRoomSchedule(currentSchedule._id.toString())
     const currentNorm = normalizeFnbOrder(currentOrder?.order)
@@ -509,25 +485,7 @@ export const removeClientFnbOrderItems = async (req: Request, res: Response, nex
       })
     }
 
-    // Find current active schedule for the room
-    const now = new Date()
-    const currentSchedule = await databaseService.roomSchedule.findOne(
-      {
-        roomId: room._id,
-        status: { $in: [RoomScheduleStatus.Booked, RoomScheduleStatus.InUse] },
-        endTime: { $gt: now }
-      },
-      {
-        sort: { createdAt: -1 }
-      }
-    )
-
-    if (!currentSchedule) {
-      throw new ErrorWithStatus({
-        message: `No active session (booked or in use) found for room ${room.roomName || roomId}`,
-        status: HTTP_STATUS_CODE.NOT_FOUND
-      })
-    }
+    const currentSchedule = await requireCurrentClientFnbSchedule(room, roomId)
 
     const currentOrder = await fnbOrderService.getFnbOrdersByRoomSchedule(currentSchedule._id.toString())
 
@@ -709,25 +667,7 @@ export const setClientFnbOrder = async (req: Request, res: Response, next: NextF
       })
     }
 
-    // Find current active schedule for the room
-    const now = new Date()
-    const currentSchedule = await databaseService.roomSchedule.findOne(
-      {
-        roomId: room._id,
-        status: { $in: [RoomScheduleStatus.Booked, RoomScheduleStatus.InUse] },
-        endTime: { $gt: now }
-      },
-      {
-        sort: { createdAt: -1 }
-      }
-    )
-
-    if (!currentSchedule) {
-      throw new ErrorWithStatus({
-        message: `No active session (booked or in use) found for room ${room.roomName || roomId}`,
-        status: HTTP_STATUS_CODE.NOT_FOUND
-      })
-    }
+    const currentSchedule = await requireCurrentClientFnbSchedule(room, roomId)
 
     const currentOrder = await fnbOrderService.getFnbOrdersByRoomSchedule(currentSchedule._id.toString())
 
@@ -951,27 +891,7 @@ export const upsertClientFnbOrderItem = async (req: Request, res: Response, next
       })
     }
 
-    // Find current active schedule for the room (booked or in use)
-    // Dựa vào endTime > now để lọc schedule còn hiệu lực
-    // Sort theo createdAt để lấy schedule mới nhất
-    const now = new Date()
-    const currentSchedule = await databaseService.roomSchedule.findOne(
-      {
-        roomId: room._id,
-        status: { $in: [RoomScheduleStatus.Booked, RoomScheduleStatus.InUse] },
-        endTime: { $gt: now } // Chỉ lấy schedule chưa kết thúc
-      },
-      {
-        sort: { createdAt: -1 } // Lấy schedule mới nhất
-      }
-    )
-
-    if (!currentSchedule) {
-      throw new ErrorWithStatus({
-        message: `No active session found for room ${room.roomName || roomIdNum}`,
-        status: HTTP_STATUS_CODE.NOT_FOUND
-      })
-    }
+    const currentSchedule = await requireCurrentClientFnbSchedule(room, roomIdNum)
 
     // Get current order
     const currentOrder = await fnbOrderService.getFnbOrdersByRoomSchedule(currentSchedule._id.toString())
@@ -1168,27 +1088,7 @@ export const getClientFnbOrderByRoomSchedule = async (req: Request, res: Respons
       })
     }
 
-    // Find current active schedule for the room (booked or in use)
-    // Dựa vào endTime > now để lọc schedule còn hiệu lực
-    // Sort theo createdAt để lấy schedule mới nhất
-    const now = new Date()
-    const currentSchedule = await databaseService.roomSchedule.findOne(
-      {
-        roomId: room._id,
-        status: { $in: [RoomScheduleStatus.Booked, RoomScheduleStatus.InUse] },
-        endTime: { $gt: now } // Chỉ lấy schedule chưa kết thúc
-      },
-      {
-        sort: { createdAt: -1 } // Lấy schedule mới nhất
-      }
-    )
-
-    if (!currentSchedule) {
-      throw new ErrorWithStatus({
-        message: `No active session (booked or in use) found for room ${room.roomName || roomId}`,
-        status: HTTP_STATUS_CODE.NOT_FOUND
-      })
-    }
+    const currentSchedule = await requireCurrentClientFnbSchedule(room, roomId)
 
     // Get order for the found roomScheduleId
     const result = await fnbOrderService.getFnbOrdersByRoomSchedule(currentSchedule._id.toString())
