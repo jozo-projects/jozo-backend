@@ -21,10 +21,7 @@ import {
 } from '~/utils/fnbOrderLines'
 import { assertValidFnbOrderPayload } from '~/utils/validateFnbOrderPayload'
 
-async function requireCurrentClientFnbSchedule(
-  room: { _id: ObjectId; roomName?: string },
-  roomLabel: string | number
-) {
+async function requireCurrentClientFnbSchedule(room: { _id: ObjectId; roomName?: string }, roomLabel: string | number) {
   const currentSchedule = await roomScheduleService.findCurrentScheduleForClientFnb(room._id)
   if (!currentSchedule) {
     throw new ErrorWithStatus({
