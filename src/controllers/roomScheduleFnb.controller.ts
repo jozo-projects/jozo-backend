@@ -1,8 +1,9 @@
 import { NextFunction, Request, Response } from 'express'
-import { ObjectId } from 'mongodb'
+import { ObjectId, WithId } from 'mongodb'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { FNB_MESSAGES } from '~/constants/messages'
 import { ErrorWithStatus } from '~/models/Error'
+import { RoomSchedule } from '~/models/schemas/RoomSchdedule.schema'
 import fnbOrderService from '~/services/fnbOrder.service'
 import fnbMenuItemService from '~/services/fnbMenuItem.service'
 import fnbSalesMovementService from '~/services/fnbSalesMovement.service'
@@ -21,9 +22,12 @@ import {
 } from '~/utils/fnbOrderLines'
 import { assertValidFnbOrderPayload } from '~/utils/validateFnbOrderPayload'
 
-async function requireCurrentClientFnbSchedule(room: { _id: ObjectId; roomName?: string }, roomLabel: string | number) {
+async function requireCurrentClientFnbSchedule(
+  room: { _id: ObjectId; roomName?: string },
+  roomLabel: string | number
+): Promise<WithId<RoomSchedule>> {
   const currentSchedule = await roomScheduleService.findCurrentScheduleForClientFnb(room._id)
-  if (!currentSchedule) {
+  if (!currentSchedule?._id) {
     throw new ErrorWithStatus({
       message: `No active session (booked or in use) found for room ${room.roomName || roomLabel}`,
       status: HTTP_STATUS_CODE.NOT_FOUND

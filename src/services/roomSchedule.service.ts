@@ -1,4 +1,4 @@
-import { ObjectId } from 'mongodb'
+import { ObjectId, WithId } from 'mongodb'
 // import { IRoomScheduleRequestBody, IRoomScheduleRequestQuery } from '~/models/requests/RoomSchedule.request'
 import dayjs from 'dayjs'
 import { RoomScheduleStatus, RoomStatus, RoomType } from '~/constants/enum'
@@ -80,7 +80,10 @@ class RoomScheduleService {
    * Tablet/client FNB chỉ có roomId. Ưu tiên phiên In Use đang chiếm phòng,
    * không gắn món vào booking tương lai chỉ vì createdAt mới hơn.
    */
-  async findCurrentScheduleForClientFnb(roomObjectId: ObjectId, now = new Date()): Promise<RoomSchedule | null> {
+  async findCurrentScheduleForClientFnb(
+    roomObjectId: ObjectId,
+    now = new Date()
+  ): Promise<WithId<RoomSchedule> | null> {
     const candidates = await databaseService.roomSchedule
       .find({
         roomId: roomObjectId,
