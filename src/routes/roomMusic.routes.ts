@@ -22,6 +22,7 @@ import {
   normalizeSongsLibrary,
   pruneSongsNotOnYoutube,
   requestEndSessionPrintBill,
+  hidePhotoDisplay,
   saveSong,
   searchSongs,
   searchLocalSongs,
@@ -260,6 +261,7 @@ roomMusicRouter.post('/:roomId/send-notification', wrapRequestHandler(sendNotifi
  * @author QuangDoo
  */
 roomMusicRouter.post('/:roomId/request-end', wrapRequestHandler(requestEndSessionPrintBill))
+roomMusicRouter.post('/:roomId/photo-display/hide', wrapRequestHandler(hidePhotoDisplay))
 
 /**
  * @description Stream video

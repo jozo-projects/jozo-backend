@@ -10,6 +10,7 @@ import { AddSongRequestBody, MoveQueueRequestBody } from '~/models/requests/Song
 import { VideoSchema } from '~/models/schemas/Video.schema'
 import redis from '~/services/redis.service'
 import { roomMusicServices } from '~/services/roomMusic.service'
+import { roomScheduleService } from '~/services/roomSchedule.service'
 import { songService } from '~/services/song.service'
 import { songPruneJobService } from '~/services/songPruneJob.service'
 import serverService from '~/services/server.service'
@@ -1290,4 +1291,12 @@ export const pruneSongsNotOnYoutube = async (req: Request, res: Response, next: 
   } catch (error) {
     next(error)
   }
+}
+
+
+export const hidePhotoDisplay = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const result = await roomScheduleService.hidePhotoDisplayByRoom(req.params.roomId)
+    return res.status(HTTP_STATUS_CODE.OK).json({ message: 'Photo display hidden', result })
+  } catch (error) { next(error) }
 }

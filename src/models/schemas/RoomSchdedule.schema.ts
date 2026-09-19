@@ -3,6 +3,15 @@ import { RoomScheduleStatus, RoomType } from '~/constants/enum'
 import { AddSongRequestBody } from '~/models/requests/Song.request'
 import { ScheduleGift } from '~/models/schemas/Gift.schema'
 
+export type PhotoDisplayState = 'hidden' | 'showing' | 'deleted'
+
+export interface SchedulePhoto {
+  id: string
+  url: string
+  publicId: string
+  position: number
+}
+
 export interface StreakGiftServedItem {
   itemId: ObjectId
   name: string
@@ -61,6 +70,10 @@ export class RoomSchedule {
   note?: string
   source?: BookingSource
   giftEnabled?: boolean
+  photoDisplayState?: PhotoDisplayState
+  photos?: SchedulePhoto[]
+  photoDisplayUpdatedAt?: Date
+  photoDisplayUpdatedBy?: string
 
   // Khuyến mãi đã chọn lúc booked — dùng lại khi mở modal thanh toán
   promotionId?: ObjectId
@@ -153,6 +166,8 @@ export class RoomSchedule {
 
     // Cờ quà tặng: chỉ còn giftEnabled
     this.giftEnabled = giftEnabled ?? false
+    this.photoDisplayState = 'hidden'
+    this.photos = []
 
     // Khởi tạo lịch sử đổi phòng
     this.roomChangeLogs = []

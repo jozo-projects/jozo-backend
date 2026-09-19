@@ -1,4 +1,5 @@
 import { Router } from 'express'
+import multer from 'multer'
 import { UserRole } from '~/constants/enum'
 import {
   cancelSchedule,
@@ -6,7 +7,11 @@ import {
   createSchedule,
   getSchedules,
   getSchedulesByRoom,
-  updateSchedule
+  updateSchedule,
+  getPhotoDisplayState,
+  setPhotoDisplayState,
+  uploadSchedulePhoto,
+  deleteSchedulePhotos
 } from '~/controllers/roomSchedule.controller'
 import { protect } from '~/middlewares/auth.middleware'
 import {
@@ -17,6 +22,7 @@ import {
 import { wrapRequestHandler } from '~/utils/handlers'
 
 const roomScheduleRouter = Router()
+const photoUpload = multer({ storage: multer.memoryStorage(), limits: { files: 1, fileSize: 10 * 1024 * 1024 } })
 
 // API endpoint lấy lịch phòng
 roomScheduleRouter.get('/', protect([UserRole.Admin, UserRole.Staff]), wrapRequestHandler(getSchedules))
@@ -36,6 +42,12 @@ roomScheduleRouter.post(
   createScheduleValidator,
   wrapRequestHandler(createSchedule)
 )
+
+// Photo display is staff-controlled and independent of schedule status.
+roomScheduleRouter.get('/:id/photo-display', protect([UserRole.Admin, UserRole.Staff]), wrapRequestHandler(getPhotoDisplayState))
+roomScheduleRouter.put('/:id/photo-display', protect([UserRole.Admin, UserRole.Staff]), wrapRequestHandler(setPhotoDisplayState))
+roomScheduleRouter.post('/:id/photos', protect([UserRole.Admin, UserRole.Staff]), photoUpload.single('file'), wrapRequestHandler(uploadSchedulePhoto))
+roomScheduleRouter.delete('/:id/photos', protect([UserRole.Admin, UserRole.Staff]), wrapRequestHandler(deleteSchedulePhotos))
 
 // API endpoint cập nhật lịch phòng
 roomScheduleRouter.put(

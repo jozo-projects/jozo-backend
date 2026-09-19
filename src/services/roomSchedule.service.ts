@@ -10,6 +10,7 @@ import { generateUniqueBookingCode, parseDate, buildBookingCodeDuplicateFilter, 
 import { pickCurrentRoomScheduleForClientFnb } from '~/utils/currentRoomSchedule'
 import databaseService from './database.service'
 import fnbOrderService from './fnbOrder.service'
+import { deleteImageFromCloudinary, uploadImageToCloudinary } from './cloudinary.service'
 import redis from './redis.service'
 import {
   assertRoomNotInMaintenance,
@@ -489,7 +490,7 @@ class RoomScheduleService {
 
     // Nếu đang cập nhật trạng thái thành "Finished", chỉ xóa cache (không tự tạo bill)
     if (schedule.status === RoomScheduleStatus.Finished && currentSchedule.status !== RoomScheduleStatus.Finished) {
-      // Bỏ dòng xóa cache để tránh lag
+      await this.deleteSchedulePhotos(id)
       await this.clearRoomCache(currentSchedule.roomId.toString())
     }
 
@@ -928,6 +929,54 @@ class RoomScheduleService {
       console.error('Error auto-creating schedules from new booking:', error)
       throw error
     }
+  }
+
+  async hidePhotoDisplayByRoom(roomIndex: string) {
+    const room = await databaseService.rooms.findOne({ roomId: Number(roomIndex) })
+    if (!room) throw new ErrorWithStatus({ message: 'Room not found', status: HTTP_STATUS_CODE.NOT_FOUND })
+    const schedule = await databaseService.roomSchedule.findOne({ roomId: room._id, status: { $in: [RoomScheduleStatus.Booked, RoomScheduleStatus.InUse] }, photos: { $exists: true, $ne: [] }, photoDisplayState: { $ne: 'deleted' } }, { sort: { startTime: -1 } })
+    if (!schedule?._id) return { hidden: false, reason: 'no_active_photo_schedule' }
+    await this.setPhotoDisplayState(schedule._id.toString(), 'hidden')
+    return { hidden: true, scheduleId: schedule._id.toString() }
+  }
+
+  async getPhotoDisplayState(id: string) {
+    const schedule = await databaseService.roomSchedule.findOne({ _id: new ObjectId(id) })
+    if (!schedule) throw new ErrorWithStatus({ message: 'Schedule not found', status: HTTP_STATUS_CODE.NOT_FOUND })
+    return { scheduleId: id, roomId: schedule.roomId.toString(), state: schedule.photoDisplayState ?? 'hidden', photos: schedule.photos ?? [] }
+  }
+
+  async setPhotoDisplayState(id: string, state: 'hidden' | 'showing', actorId?: string) {
+    const schedule = await databaseService.roomSchedule.findOne({ _id: new ObjectId(id) })
+    if (!schedule) throw new ErrorWithStatus({ message: 'Schedule not found', status: HTTP_STATUS_CODE.NOT_FOUND })
+    if (schedule.photoDisplayState === 'deleted') throw new ErrorWithStatus({ message: 'Schedule photos have been deleted', status: HTTP_STATUS_CODE.GONE })
+    const result = await databaseService.roomSchedule.updateOne({ _id: new ObjectId(id) }, { $set: { photoDisplayState: state, photoDisplayUpdatedAt: new Date(), ...(actorId ? { photoDisplayUpdatedBy: actorId } : {}) } })
+    const room = await databaseService.rooms.findOne({ _id: schedule.roomId })
+    const roomId = room?.roomId != null ? String(room.roomId) : schedule.roomId.toString()
+    roomEventEmitter.emit(state === 'showing' ? 'photo_display_started' : 'photo_display_hidden', { roomId, scheduleId: id, state, photos: state === 'showing' ? schedule.photos ?? [] : [] })
+    return result.modifiedCount > 0
+  }
+
+  async uploadSchedulePhoto(id: string, fileBuffer: Buffer, actorId?: string) {
+    const schedule = await databaseService.roomSchedule.findOne({ _id: new ObjectId(id) })
+    if (!schedule) throw new ErrorWithStatus({ message: 'Schedule not found', status: HTTP_STATUS_CODE.NOT_FOUND })
+    if (schedule.photoDisplayState === 'deleted') throw new ErrorWithStatus({ message: 'Schedule photos have been deleted', status: HTTP_STATUS_CODE.GONE })
+    const uploaded = await uploadImageToCloudinary(fileBuffer, `room-schedules/${id}/photos`) as { url?: string; publicId?: string }
+    if (!uploaded.url || !uploaded.publicId) throw new ErrorWithStatus({ message: 'Image upload failed', status: HTTP_STATUS_CODE.INTERNAL_SERVER_ERROR })
+    const photo = { id: uploaded.publicId, url: uploaded.url, publicId: uploaded.publicId, position: (schedule.photos ?? []).length }
+    await databaseService.roomSchedule.updateOne({ _id: new ObjectId(id) }, { $set: { photos: [...(schedule.photos ?? []), photo], photoDisplayState: schedule.photoDisplayState ?? 'hidden', photoDisplayUpdatedAt: new Date(), ...(actorId ? { photoDisplayUpdatedBy: actorId } : {}) } })
+    return photo
+  }
+
+  async deleteSchedulePhotos(id: string) {
+    const schedule = await databaseService.roomSchedule.findOne({ _id: new ObjectId(id) })
+    if (!schedule) return false
+    await Promise.all((schedule.photos ?? []).map((photo) => deleteImageFromCloudinary(photo.publicId)))
+    await databaseService.roomSchedule.updateOne({ _id: new ObjectId(id) }, { $set: { photos: [], photoDisplayState: 'deleted', photoDisplayUpdatedAt: new Date() } })
+    const room = await databaseService.rooms.findOne({ _id: schedule.roomId })
+    const roomId = room?.roomId != null ? String(room.roomId) : schedule.roomId.toString()
+    roomEventEmitter.emit('photo_display_deleted', { roomId, scheduleId: id, state: 'deleted', photos: [] })
+    return true
   }
 
   /** Khớp field roomType trên physical room không phân biệt hoa thường (vd. dorm vs Dorm) */

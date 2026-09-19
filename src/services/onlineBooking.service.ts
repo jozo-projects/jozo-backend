@@ -19,6 +19,7 @@ import { parseClientRoomTypeString, roomTypeFieldToEnum } from '~/utils/roomType
 import databaseService from './database.service'
 import { emitBookingNotification, emitScheduleChanged } from './room.service'
 import fnbOrderService from './fnbOrder.service'
+import { uploadImageToCloudinary } from './cloudinary.service'
 
 dayjs.extend(utc)
 dayjs.extend(timezone)
@@ -31,6 +32,8 @@ interface OnlineBookingRequest {
   startTime: string // ISO string hoặc datetime format (YYYY-MM-DD HH:mm:ss) - sẽ được parse theo timezone Việt Nam
   endTime: string // ISO string hoặc datetime format (YYYY-MM-DD HH:mm:ss) - sẽ được parse theo timezone Việt Nam
   note?: string
+  photoConsent?: boolean
+  photoFiles?: Express.Multer.File[]
 }
 
 interface RoomAvailabilityResult {
@@ -376,6 +379,17 @@ class OnlineBookingService {
 
       // Lưu vào database
       const result = await databaseService.roomSchedule.insertOne(newSchedule)
+
+      if (requestWithType.photoConsent && requestWithType.photoFiles?.length) {
+        const uploadedPhotos = await Promise.all(requestWithType.photoFiles.map(async (file, index) => {
+          const uploaded = await uploadImageToCloudinary(file.buffer, `room-schedules/${result.insertedId.toString()}/photos`) as { url?: string; publicId?: string }
+          if (!uploaded.url || !uploaded.publicId) throw new Error('Photo upload failed')
+          return { id: uploaded.publicId, url: uploaded.url, publicId: uploaded.publicId, position: index }
+        }))
+        await databaseService.roomSchedule.updateOne({ _id: result.insertedId }, { $set: { photos: uploadedPhotos, photoDisplayState: 'hidden' } })
+        newSchedule.photos = uploadedPhotos
+        newSchedule.photoDisplayState = 'hidden'
+      }
 
       // Tự động tạo FNB order trống cho booking online
       try {

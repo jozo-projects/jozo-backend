@@ -1,6 +1,6 @@
 import dayjs from 'dayjs'
 import { Filter, ModifyResult, ObjectId } from 'mongodb'
-import { FnBCategory, MembershipTier, RewardSource } from '~/constants/enum'
+import { FnBCategory, MembershipTier, RewardSource, UserRole } from '~/constants/enum'
 import {
   MembershipConfig,
   IMembershipConfig,
@@ -914,7 +914,11 @@ class MembershipService {
   async listMembers(options: { page?: number; limit?: number; search?: string }) {
     const page = Math.max(1, Number(options.page) || 1)
     const limit = Math.min(1000, Math.max(1, Number(options.limit) || 20))
-    const filter: Filter<User> = {}
+    // Membership data must never include admin/staff accounts. Keep the
+    // legacy `user` role readable while new member accounts use `client`.
+    const filter: Filter<User> = {
+      role: { $in: [UserRole.Client, UserRole.User] }
+    }
 
     if (options.search) {
       const keyword = options.search.trim()
@@ -944,7 +948,7 @@ class MembershipService {
 
     return {
       items,
-      pagination: { page, limit, total }
+      pagination: { page, limit, total, total_pages: Math.ceil(total / limit) }
     }
   }
 

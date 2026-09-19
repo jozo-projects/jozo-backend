@@ -46,6 +46,18 @@ export const RoomSocket = (io: Server) => {
     io.to(roomId).emit('videos_turned_off', { status: 'off' })
   })
 
+  roomEventEmitter.on('photo_display_started', (payload) => {
+    io.to(payload.roomId).emit('photo_display_started', payload)
+  })
+
+  roomEventEmitter.on('photo_display_hidden', (payload) => {
+    io.to(payload.roomId).emit('photo_display_hidden', payload)
+  })
+
+  roomEventEmitter.on('photo_display_deleted', (payload) => {
+    io.to(payload.roomId).emit('photo_display_deleted', payload)
+  })
+
   // Gift claimed -> thông báo cho admin/staff (management room)
   roomEventEmitter.on('gift_claimed', ({ roomId, scheduleId, gift }) => {
     io.to('management').emit('gift_claimed', { roomId, scheduleId, gift })

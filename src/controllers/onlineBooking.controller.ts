@@ -11,6 +11,8 @@ import { onlineBookingService } from '~/services/onlineBooking.service'
 export const createOnlineBooking = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { customerName, customerPhone, customerEmail, roomType, startTime, endTime, note } = req.body
+    const photoConsent = req.body.photoConsent === 'true' || req.body.photoConsent === true
+    const photoFiles = Array.isArray(req.files) ? req.files : []
 
     // Validate required fields
     if (!customerName || !customerPhone || !roomType || !startTime || !endTime) {
@@ -29,7 +31,9 @@ export const createOnlineBooking = async (req: Request, res: Response, next: Nex
       roomType,
       startTime,
       endTime,
-      note
+      note,
+      photoConsent,
+      photoFiles: photoConsent ? photoFiles : []
     }
 
     const result = await onlineBookingService.createOnlineBooking(bookingRequest)

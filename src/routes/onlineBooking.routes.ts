@@ -1,4 +1,5 @@
 import express from 'express'
+import multer from 'multer'
 import {
   createOnlineBooking,
   lookupBookingByPhone,
@@ -12,6 +13,7 @@ import { bookingLimiter, lookupLimiter, updateLimiter } from '~/middlewares/rate
 import { wrapRequestHandler } from '~/utils/handlers'
 
 const onlineBookingRouter = express.Router()
+const bookingPhotoUpload = multer({ storage: multer.memoryStorage(), limits: { files: 1, fileSize: 10 * 1024 * 1024 } })
 
 /**
  * @description Tạo booking online với tự động nâng cấp phòng
@@ -19,7 +21,7 @@ const onlineBookingRouter = express.Router()
  * @method POST
  * @rate_limit 25 requests per hour (theo phone, fallback IP)
  */
-onlineBookingRouter.post('/online', bookingLimiter(), wrapRequestHandler(createOnlineBooking))
+onlineBookingRouter.post('/online', bookingLimiter(), bookingPhotoUpload.array('photos', 1), wrapRequestHandler(createOnlineBooking))
 
 /**
  * @description Tra cứu booking bằng số điện thoại

@@ -156,3 +156,30 @@ export const convertBookingToSchedules = async (req: Request, res: Response, nex
     next(error)
   }
 }
+
+
+export const getPhotoDisplayState = async (req: Request, res: Response, next: NextFunction) => {
+  try { res.status(HTTP_STATUS_CODE.OK).json({ result: await roomScheduleService.getPhotoDisplayState(req.params.id) }) } catch (err) { next(err) }
+}
+
+export const setPhotoDisplayState = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const state = req.body.state
+    if (state !== 'hidden' && state !== 'showing') return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({ message: 'state must be hidden or showing' })
+    await roomScheduleService.setPhotoDisplayState(req.params.id, state, req.decoded_authorization?.user_id)
+    res.status(HTTP_STATUS_CODE.OK).json({ message: 'Photo display state updated' })
+  } catch (err) { next(err) }
+}
+
+export const uploadSchedulePhoto = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!req.file) return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({ message: 'Photo file is required' })
+    const photo = await roomScheduleService.uploadSchedulePhoto(req.params.id, req.file.buffer, req.decoded_authorization?.user_id)
+    res.status(HTTP_STATUS_CODE.CREATED).json({ result: photo })
+  } catch (err) { next(err) }
+}
+
+
+export const deleteSchedulePhotos = async (req: Request, res: Response, next: NextFunction) => {
+  try { await roomScheduleService.deleteSchedulePhotos(req.params.id); res.status(HTTP_STATUS_CODE.OK).json({ message: 'Schedule photos deleted' }) } catch (err) { next(err) }
+}
