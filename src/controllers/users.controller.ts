@@ -13,6 +13,7 @@ import { usersServices } from '~/services/users.services'
 import { hashPassword } from '~/utils/crypto'
 import { signToken } from '~/utils/jwt'
 import databaseService from '~/services/database.service'
+import { upsertAccountFromUser } from '~/services/account-projection.service'
 import { IUser } from '~/models/schemas/User.schema'
 import { uploadImageToCloudinary } from '~/services/cloudinary.service'
 import CloudinaryResponse from '~/models/CloudinaryResponse'
@@ -74,6 +75,7 @@ export const registerController = async (
 
     // Insert the new user into the database using the native MongoDB driver
     const insertResult = await databaseService.users.insertOne(userDocument)
+    await upsertAccountFromUser({ ...userDocument, _id: insertResult.insertedId })
 
     // Create a payload for the JWT tokens; adjust the payload properties as needed
     const payload = {

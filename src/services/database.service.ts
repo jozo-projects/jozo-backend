@@ -205,6 +205,22 @@ export class DatabaseService {
     return this.#db.collection('users')
   }
 
+  /**
+   * New identity/domain collections. The legacy `users` collection remains
+   * untouched and is intentionally kept for backward compatibility.
+   */
+  get accounts(): Collection<Document> {
+    return this.#db.collection('accounts')
+  }
+
+  get memberProfiles(): Collection<Document> {
+    return this.#db.collection('members')
+  }
+
+  get staffProfiles(): Collection<Document> {
+    return this.#db.collection('staff_profiles')
+  }
+
   get roomTypes(): Collection<RoomType> {
     return this.#db.collection('roomTypes')
   }

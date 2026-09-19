@@ -7,6 +7,7 @@ import { hashPassword, verifyPassword } from '~/utils/crypto'
 import { signToken, verifyToken } from '~/utils/jwt'
 import databaseService from './database.service'
 import { sendResetPasswordEmail, sendWelcomeEmail } from './email.service'
+import { upsertAccountFromUser, syncAccountFields } from './account-projection.service'
 import { ObjectId } from 'mongodb'
 
 class UsersServices {
@@ -125,7 +126,12 @@ class UsersServices {
     }
 
     if (query.role) {
-      filter.role = query.role
+      const roles = String(query.role)
+        .split(',')
+        .map((role) => role.trim())
+        .filter(Boolean)
+
+      filter.role = roles.length > 1 ? { $in: roles } : roles[0]
     }
 
     // Build sort
@@ -235,6 +241,8 @@ class UsersServices {
       throw new Error(USER_MESSAGES.USER_NOT_FOUND)
     }
 
+    await upsertAccountFromUser({ ...existingUser, ...updateData, _id: existingUser._id })
+
     // Return updated user
     return await this.getUserById(userId)
   }
@@ -281,6 +289,10 @@ class UsersServices {
         }
       }
     )
+    await syncAccountFields(user._id, {
+      forgot_password_token: forgotPasswordToken as string,
+      updated_at: new Date()
+    })
 
     // Gửi email với link reset password
     await sendResetPasswordEmail(user.email, forgotPasswordToken as string)
@@ -327,6 +339,12 @@ class UsersServices {
       throw new Error(USER_MESSAGES.INVALID_FORGOT_PASSWORD_TOKEN)
     }
 
+    await syncAccountFields(user._id, {
+      password: hashedPassword,
+      forgot_password_token: undefined,
+      updated_at: new Date()
+    })
+
     return { message: USER_MESSAGES.RESET_PASSWORD_SUCCESS }
   }
 
@@ -358,6 +376,11 @@ class UsersServices {
     if (result.modifiedCount === 0) {
       throw new Error(USER_MESSAGES.USER_NOT_FOUND)
     }
+
+    await syncAccountFields(new ObjectId(userId), {
+      password: hashedNewPassword,
+      updated_at: new Date()
+    })
 
     return { message: USER_MESSAGES.CHANGE_PASSWORD_SUCCESS }
   }
