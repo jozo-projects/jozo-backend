@@ -39,6 +39,7 @@ import { IBillPaymentMethodLog } from '~/models/schemas/BillPaymentMethodLog.sch
 import { MusicCategory } from '~/models/schemas/MusicCategory.schema'
 import { RevenueAuditLog } from '~/models/schemas/RevenueAuditLog.schema'
 import { RevenueTransaction } from '~/models/schemas/Revenue.schema'
+import { SupportRequest } from '~/models/schemas/SupportRequest.schema'
 dotenv.config()
 dotenv.config({ path: '.env.local', override: true })
 
@@ -94,7 +95,8 @@ export async function ensureRevenueLedgerIndexes(collection: RevenueIndexCollect
   const actualIndexes = await collection.listIndexes().toArray()
   for (const required of REQUIRED_REVENUE_INDEXES) {
     const actual = actualIndexes.find((index) => index.name === required.name)
-    const exactKey = actual && JSON.stringify(Object.entries(actual.key)) === JSON.stringify(Object.entries(required.key))
+    const exactKey =
+      actual && JSON.stringify(Object.entries(actual.key)) === JSON.stringify(Object.entries(required.key))
     if (!actual || !exactKey || Boolean(actual.unique) !== required.unique) {
       throw new Error(`REVENUE_LEDGER_INDEX_VERIFICATION_FAILED:${required.name}`)
     }
@@ -160,6 +162,9 @@ export class DatabaseService {
       await this.#db.collection('fnb_order_history').createIndex({ roomScheduleId: 1, completedAt: -1 })
       await this.#db.collection('revenue_audit_logs').createIndex({ entityType: 1, entityId: 1, changedAt: -1 })
       await this.#db.collection('revenue_audit_logs').createIndex({ changedAt: -1 })
+      await this.#db.collection('support_requests').createIndex({ requestId: 1 }, { unique: true })
+      await this.#db.collection('support_requests').createIndex({ roomId: 1, createdAt: -1 })
+      await this.#db.collection('support_requests').createIndex({ status: 1, createdAt: 1, timedOutAt: 1 })
     } catch (error) {
       console.log(`[DB]   Connection FAILED to ${dbHost}!`)
       console.error(error)
@@ -379,6 +384,10 @@ export class DatabaseService {
 
   get revenueAuditLogs(): Collection<RevenueAuditLog> {
     return this.#db.collection('revenue_audit_logs')
+  }
+
+  get supportRequests(): Collection<SupportRequest> {
+    return this.#db.collection('support_requests')
   }
 
   /** Narrow append/read capability; callers never receive Mongo's mutable Collection object. */

@@ -45,6 +45,7 @@ import membershipRouter from '~/routes/membership.routes'
 
 import { finishSchedulerInADay } from '~/jobs/bookingScheduler'
 import { startSongPruneScheduler } from '~/jobs/songPruneScheduler'
+import { startSupportRequestScheduler } from '~/jobs/supportRequestScheduler'
 
 // Thiết lập timezone cho dayjs
 dayjs.extend(utc)
@@ -196,6 +197,7 @@ app.use(defaultErrorHandler)
 finishSchedulerInADay()
 // startShiftScheduler() — không dùng nữa
 startSongPruneScheduler()
+startSupportRequestScheduler()
 
 app.listen(port, () => {
   console.log(`Server is running at http://localhost:${port}`)

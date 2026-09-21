@@ -31,6 +31,15 @@ import {
   streamVideo,
   updateQueue
 } from '~/controllers/roomMusic.controller'
+import {
+  acknowledgeSupportRequestController,
+  closeUnsupportedSupportRequestController,
+  createSupportRequestController,
+  getActiveSupportRequestsController,
+  getAllSupportRequestHistoryController,
+  getSupportRequestHistoryController,
+  resolveSupportRequestController
+} from '~/controllers/supportRequest.controller'
 import { updateLimiter } from '~/middlewares/rateLimiter.middleware'
 import { roomMusicServices } from '~/services/roomMusic.service'
 import { getMediaUrls } from '~/services/video.service'
@@ -41,6 +50,66 @@ const roomMusicRouter = Router()
 
 // Mount before generic /:roomId routes so "music-categories" is never treated as a room ID.
 roomMusicRouter.use('/music-categories', musicCategoryRouter)
+
+/**
+ * @description Khách tạo một yêu cầu hỗ trợ mới
+ * @path /room-music/:roomId/support-requests
+ * @method POST
+ */
+roomMusicRouter.post('/:roomId/support-requests', wrapRequestHandler(createSupportRequestController))
+
+/**
+ * @description Lấy yêu cầu hỗ trợ đang active để khôi phục sau reload/reconnect
+ * @path /room-music/:roomId/support-requests/active
+ * @method GET
+ */
+roomMusicRouter.get('/:roomId/support-requests/active', wrapRequestHandler(getActiveSupportRequestsController))
+
+roomMusicRouter.get(
+  '/support-requests/history',
+  protect([UserRole.Admin, UserRole.Staff]),
+  wrapRequestHandler(getAllSupportRequestHistoryController)
+)
+
+/**
+ * @description Lấy lịch sử yêu cầu hỗ trợ của phòng
+ * @path /room-music/:roomId/support-requests/history
+ * @method GET
+ */
+roomMusicRouter.get(
+  '/:roomId/support-requests/history',
+  protect([UserRole.Admin, UserRole.Staff]),
+  wrapRequestHandler(getSupportRequestHistoryController)
+)
+
+/**
+ * @description Nhân viên nhận yêu cầu hỗ trợ
+ * @path /room-music/support-requests/:requestId/acknowledge
+ * @method POST
+ */
+roomMusicRouter.post(
+  '/support-requests/:requestId/acknowledge',
+  protect([UserRole.Admin, UserRole.Staff]),
+  wrapRequestHandler(acknowledgeSupportRequestController)
+)
+
+/**
+ * @description Nhân viên kết thúc yêu cầu hỗ trợ với nội dung xử lý
+ * @path /room-music/support-requests/:requestId/resolve
+ * @method POST
+ */
+roomMusicRouter.post(
+  '/support-requests/:requestId/resolve',
+  protect([UserRole.Admin, UserRole.Staff]),
+  wrapRequestHandler(resolveSupportRequestController)
+)
+
+/** Đóng request đã được ghi nhận là không hỗ trợ; record lịch sử vẫn được giữ. */
+roomMusicRouter.post(
+  '/support-requests/:requestId/close',
+  protect([UserRole.Admin, UserRole.Staff]),
+  wrapRequestHandler(closeUnsupportedSupportRequestController)
+)
 
 /**
  * @description Get songs in collection

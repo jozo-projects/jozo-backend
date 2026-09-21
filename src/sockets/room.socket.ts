@@ -107,6 +107,17 @@ export const RoomSocket = (io: Server) => {
       io.to('management').emit('order_served_notification', notification)
     } else if (notification.type === 'request_end') {
       io.to('management').emit('request_end_notification', notification)
+    } else if (
+      notification.type === 'support_request_created' ||
+      notification.type === 'support_request_not_supported' ||
+      notification.type === 'support_request_acknowledged' ||
+      notification.type === 'support_request_resolved' ||
+      notification.type === 'support_request_closed'
+    ) {
+      io.to('management').emit(notification.type, notification)
+      if (notification.roomId) {
+        io.to(notification.roomId).emit(notification.type, notification)
+      }
     } else {
       io.to('management').emit('notification', notification)
     }
