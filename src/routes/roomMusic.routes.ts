@@ -227,7 +227,7 @@ roomMusicRouter.post('/:roomId/play-chosen-song', wrapRequestHandler(playChosenS
  */
 roomMusicRouter.post(
   '/:sourceRoomId/move-queue',
-  protect([UserRole.Admin, UserRole.Staff]),
+  protect([UserRole.Admin]),
   wrapRequestHandler(moveQueueBetweenRooms)
 )
 

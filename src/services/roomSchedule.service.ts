@@ -19,7 +19,6 @@ import {
   roomEventEmitter,
   type ScheduleChangeAction
 } from './room.service'
-// import { roomMusicServices } from './roomMusic.service' // tạm tắt auto-move queue khi đổi phòng
 
 type ClientBooking = {
   _id?: string | ObjectId
@@ -500,22 +499,6 @@ class RoomScheduleService {
         this.clearRoomCache(currentSchedule.roomId.toString()),
         this.clearRoomCache(schedule.newRoomId)
       ])
-
-      // TẠM TẮT: auto move queue khi đổi phòng.
-      // Lý do: Admin FE đã gọi POST /room-music/:source/move-queue khi chuyển phòng.
-      // Hai path (BE auto + FE API) chạy song song → nghi ngờ rare case wipe nhạc nhầm phòng.
-      // Giữ API move-queue để FE chủ động gọi; bật lại đoạn này khi đã xác minh không còn double-call.
-      // try {
-      //   const [fromRoom, toRoom] = await Promise.all([
-      //     databaseService.rooms.findOne({ _id: currentSchedule.roomId }),
-      //     databaseService.rooms.findOne({ _id: new ObjectId(schedule.newRoomId) })
-      //   ])
-      //   if (fromRoom?.roomId != null && toRoom?.roomId != null) {
-      //     await roomMusicServices.moveQueueBetweenRooms(String(fromRoom.roomId), String(toRoom.roomId))
-      //   }
-      // } catch (error) {
-      //   console.error('Failed to move song queue when changing room:', error)
-      // }
     }
 
     if (result.modifiedCount > 0) {

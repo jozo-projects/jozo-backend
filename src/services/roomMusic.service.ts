@@ -730,22 +730,11 @@ class RoomMusicServices {
     }
 
     const sourceQueueKey = `room_${sourceRoomId}_queue`
-    const sourceNowPlayingKey = `room_${sourceRoomId}_now_playing`
     const targetQueueKey = `room_${targetRoomId}_queue`
 
-    const [nowPlayingRaw, queueRaw] = await Promise.all([
-      redis.get(sourceNowPlayingKey),
-      redis.lrange(sourceQueueKey, 0, -1)
-    ])
-
-    const nowPlaying = nowPlayingRaw ? JSON.parse(nowPlayingRaw) : null
+    const queueRaw = await redis.lrange(sourceQueueKey, 0, -1)
     const sourceQueue = queueRaw.map((item: string) => JSON.parse(item))
-
-    const songsToMove: AddSongRequestBody[] = []
-    if (nowPlaying) {
-      songsToMove.push(this.normalizeSongForQueue(nowPlaying))
-    }
-    songsToMove.push(...sourceQueue.map((song) => this.normalizeSongForQueue(song)))
+    const songsToMove = sourceQueue.map((song) => this.normalizeSongForQueue(song))
 
     if (songsToMove.length === 0) {
       const targetQueue = (await redis.lrange(targetQueueKey, 0, -1)).map((item: string) => JSON.parse(item))
@@ -759,17 +748,11 @@ class RoomMusicServices {
 
     await redis.rpush(targetQueueKey, ...songsToMove.map((song) => JSON.stringify(song)))
 
-    await Promise.all([
-      redis.del(sourceQueueKey),
-      redis.del(sourceNowPlayingKey),
-      redis.del(`room_${sourceRoomId}_playback`),
-      redis.del(`room_${sourceRoomId}_current_time`)
-    ])
+    await redis.del(sourceQueueKey)
 
     const targetQueue = (await redis.lrange(targetQueueKey, 0, -1)).map((item: string) => JSON.parse(item))
 
     roomEventEmitter.emit('queue_updated', { roomId: sourceRoomId, queue: [] })
-    roomEventEmitter.emit('now_playing', { roomId: sourceRoomId, nowPlaying: null })
     roomEventEmitter.emit('queue_updated', { roomId: targetRoomId, queue: targetQueue })
 
     return {

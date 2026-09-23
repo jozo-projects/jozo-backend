@@ -32,6 +32,7 @@ export const RoomSocket = (io: Server) => {
   // Listen for room events
   roomEventEmitter.on('queue_updated', ({ roomId, queue }) => {
     io.to(roomId).emit('queue_updated', queue)
+    io.to('management').emit('room_queue_updated', { roomId, queue })
   })
 
   roomEventEmitter.on('now_playing', ({ roomId, nowPlaying }) => {

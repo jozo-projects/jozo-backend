@@ -26,6 +26,7 @@ export interface IRoomScheduleRequestBody {
   // Trường mở rộng để đổi phòng
   newRoomId?: string
   roomChangeNote?: string
+
   // Thông tin khách hàng
   customerName?: string | null
   customerPhone?: string | null

@@ -49,7 +49,6 @@ roomScheduleRouter.put('/:id/photo-display', protect([UserRole.Admin, UserRole.S
 roomScheduleRouter.post('/:id/photos', protect([UserRole.Admin, UserRole.Staff]), photoUpload.single('file'), wrapRequestHandler(uploadSchedulePhoto))
 roomScheduleRouter.delete('/:id/photos', protect([UserRole.Admin, UserRole.Staff]), wrapRequestHandler(deleteSchedulePhotos))
 
-// API endpoint cập nhật lịch phòng
 roomScheduleRouter.put(
   '/:id',
   protect([UserRole.Admin, UserRole.Staff]),
