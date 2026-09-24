@@ -1,39 +1,45 @@
-import * as SibApiV3Sdk from '@getbrevo/brevo'
+import { Resend } from 'resend'
 import { getClientUrl } from '~/utils/common'
 
-// Initialize Brevo API client
-const apiInstance = new SibApiV3Sdk.TransactionalEmailsApi()
-apiInstance.setApiKey(SibApiV3Sdk.TransactionalEmailsApiApiKeys.apiKey, process.env.BREVO_API_KEY || '')
+const resend = new Resend(process.env.RESEND_API_KEY || '')
 
 export interface EmailData {
   to: string
   subject: string
   html: string
   text?: string
+  replyTo?: string
 }
 
 export const sendEmail = async (emailData: EmailData) => {
+  const from = process.env.RESEND_FROM_EMAIL
+  if (!from) {
+    throw new Error('RESEND_FROM_EMAIL is not configured')
+  }
+
+  if (!process.env.RESEND_API_KEY) {
+    throw new Error('RESEND_API_KEY is not configured')
+  }
+
   try {
-    const sendSmtpEmail = new SibApiV3Sdk.SendSmtpEmail()
+    const replyTo = emailData.replyTo || process.env.RESEND_REPLY_TO_EMAIL
+    const result = await resend.emails.send({
+      from,
+      to: emailData.to,
+      subject: emailData.subject,
+      html: emailData.html,
+      ...(emailData.text ? { text: emailData.text } : {}),
+      ...(replyTo ? { replyTo } : {})
+    })
 
-    sendSmtpEmail.subject = emailData.subject
-    sendSmtpEmail.htmlContent = emailData.html
-    sendSmtpEmail.sender = {
-      name: 'Jozo',
-      email: process.env.BREVO_FROM_EMAIL || 'noreply@yourdomain.com'
+    if (result.error) {
+      throw new Error(`Resend email error: ${result.error.message}`)
     }
-    sendSmtpEmail.to = [
-      {
-        email: emailData.to,
-        name: emailData.to.split('@')[0] // Use email prefix as name
-      }
-    ]
 
-    const result = await apiInstance.sendTransacEmail(sendSmtpEmail)
-    console.log('Email sent successfully:', result)
+    console.log('Email sent successfully:', result.data?.id)
     return result
   } catch (error) {
-    console.error('Error sending email:', error)
+    console.error('Error sending email with Resend:', error)
     throw error
   }
 }
