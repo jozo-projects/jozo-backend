@@ -165,6 +165,8 @@ export class DatabaseService {
       await this.#db.collection('support_requests').createIndex({ requestId: 1 }, { unique: true })
       await this.#db.collection('support_requests').createIndex({ roomId: 1, createdAt: -1 })
       await this.#db.collection('support_requests').createIndex({ status: 1, createdAt: 1, timedOutAt: 1 })
+      await this.#db.collection('messenger_messages').createIndex({ messageId: 1 }, { unique: true })
+      await this.#db.collection('messenger_messages').createIndex({ createdAt: -1 })
     } catch (error) {
       console.log(`[DB]   Connection FAILED to ${dbHost}!`)
       console.error(error)
@@ -320,6 +322,10 @@ export class DatabaseService {
 
   get notifications(): Collection<Notification> {
     return this.#db.collection('notifications')
+  }
+
+  get messengerMessages(): Collection {
+    return this.#db.collection('messenger_messages')
   }
 
   get membershipConfigs(): Collection<MembershipConfig> {

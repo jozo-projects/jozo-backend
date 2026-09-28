@@ -5,6 +5,7 @@ import { ICoffeeSession } from './models/schemas/CoffeeSession.schema'
 
 declare module 'express' {
   interface Request {
+    rawBody?: Buffer
     user?: User
     roomTypeIds?: ObjectId[]
     roomTypeId?: ObjectId

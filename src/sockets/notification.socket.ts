@@ -5,10 +5,7 @@ export const NotificationSocket = (io: Server) => {
   // Listen for notification created events
   notificationEventEmitter.on('notification_created', ({ userId, notification }) => {
     // Emit notification to the specific user
-    io.to(`user:${userId}`).emit('new_notification', {
-      notification,
-      message: 'Bạn có thông báo mới'
-    })
+    io.to(`user:${userId}`).emit('new_notification', notification)
 
     console.log(`📬 Notification sent to user:${userId}`)
   })

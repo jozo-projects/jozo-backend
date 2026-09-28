@@ -13,6 +13,11 @@ export interface INotification {
     shiftType?: string
     status?: string
     actionUrl?: string
+    messageId?: string
+    senderId?: string
+    messageText?: string
+    pageId?: string
+    receivedAt?: string
     [key: string]: any
   }
   isRead: boolean // Đã đọc chưa
@@ -31,6 +36,11 @@ export class Notification {
     shiftType?: string
     status?: string
     actionUrl?: string
+    messageId?: string
+    senderId?: string
+    messageText?: string
+    pageId?: string
+    receivedAt?: string
     [key: string]: any
   }
   isRead: boolean

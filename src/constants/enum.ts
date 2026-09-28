@@ -109,7 +109,8 @@ export enum NotificationType {
   SCHEDULE_CREATED_BY_ADMIN = 'schedule_created_by_admin',
   SCHEDULE_APPROVED = 'schedule_approved',
   SCHEDULE_REJECTED = 'schedule_rejected',
-  SCHEDULE_STATUS_UPDATED = 'schedule_status_updated'
+  SCHEDULE_STATUS_UPDATED = 'schedule_status_updated',
+  MESSENGER_MESSAGE_RECEIVED = 'messenger_message_received'
 }
 
 export enum MembershipTier {

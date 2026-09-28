@@ -2,7 +2,7 @@ import cors from 'cors'
 import dayjs from 'dayjs'
 import timezone from 'dayjs/plugin/timezone'
 import utc from 'dayjs/plugin/utc'
-import express from 'express'
+import express, { Request } from 'express'
 
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { defaultErrorHandler } from '~/middlewares/error.middleware'
@@ -42,6 +42,8 @@ import roomScheduleRouter from '~/routes/roomSchedule.routes'
 import roomTypeRouter from '~/routes/roomType.routes'
 import usersRouter from '~/routes/users.routes'
 import membershipRouter from '~/routes/membership.routes'
+import messengerWebhookRouter from '~/routes/messenger.routes'
+import messengerMessagesRouter from '~/routes/messengerMessages.routes'
 
 import { finishSchedulerInADay } from '~/jobs/bookingScheduler'
 import { startSongPruneScheduler } from '~/jobs/songPruneScheduler'
@@ -143,7 +145,13 @@ app.use((req, res, next) => {
 app.use(cors(corsOptions))
 
 // Body parser
-app.use(express.json())
+app.use(
+  express.json({
+    verify: (req, _res, buffer) => {
+      ;(req as Request).rawBody = Buffer.from(buffer)
+    }
+  })
+)
 
 // Các route
 app.use('/users', usersRouter)
@@ -174,6 +182,8 @@ app.use('/employee-schedules', employeeScheduleRouter)
 app.use('/staff-error-logs', staffErrorLogRouter)
 app.use('/notifications', notificationRouter)
 app.use('/membership', membershipRouter)
+app.use('/integrations/messenger', messengerWebhookRouter)
+app.use('/messenger-messages', messengerMessagesRouter)
 app.use('/coffee-tables', coffeeTableRouter)
 app.use('/coffee-pricing', coffeePricingRouter)
 app.use('/coffee-sessions', coffeeSessionRouter)
