@@ -13,8 +13,12 @@ const isValidMetaSignature = (req: Request): boolean => {
 
   const signature = req.header('x-hub-signature-256') || ''
   const usedRawBody = Boolean(req.rawBody?.length)
-  const expected = `sha256=${crypto.createHmac('sha256', appSecret).update(req.rawBody || Buffer.from(JSON.stringify(req.body))).digest('hex')}`
-  const valid = signature.length === expected.length && crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))
+  const expected = `sha256=${crypto
+    .createHmac('sha256', appSecret)
+    .update(req.rawBody || Buffer.from(JSON.stringify(req.body)))
+    .digest('hex')}`
+  const valid =
+    signature.length === expected.length && crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))
   console.log('[messenger] signature check', {
     valid,
     hasSignatureHeader: Boolean(signature),
@@ -36,10 +40,7 @@ export const verifyMessengerWebhookController = (req: Request, res: Response) =>
     verifyTokenMatches: Boolean(configuredVerifyToken) && verifyToken === configuredVerifyToken
   })
 
-  const verification = verifyMessengerWebhook(
-    { mode, verifyToken, challenge },
-    configuredVerifyToken
-  )
+  const verification = verifyMessengerWebhook({ mode, verifyToken, challenge }, configuredVerifyToken)
 
   if (!verification.ok) {
     console.log('[messenger] GET /webhook rejected')
@@ -66,10 +67,9 @@ export const receiveMessengerWebhookController = async (req: Request, res: Respo
     }
 
     const configuredPageId = process.env.META_PAGE_ID
-    if (!isMessengerPageAllowed(req.body?.entry, configuredPageId)) {
+    if (configuredPageId && req.body?.entry?.some((entry: any) => String(entry?.id) !== configuredPageId)) {
       console.log('[messenger] POST /webhook rejected: page id mismatch', {
         configuredPageId,
-        entryIsArray: Array.isArray(req.body?.entry),
         entryIds: entries.map((entry: any) => String(entry?.id || ''))
       })
       return res.status(HTTP_STATUS_CODE.FORBIDDEN).json({ message: 'Invalid page id' })

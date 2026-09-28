@@ -1,13 +1,18 @@
-import { extractMessengerMessages, isMessengerPageAllowed, verifyMessengerWebhook } from '~/integrations/messengerWebhook'
+import {
+  extractMessengerMessages,
+  isMessengerPageAllowed,
+  verifyMessengerWebhook
+} from '~/integrations/messengerWebhook'
 
 describe('Messenger webhook contract', () => {
   it('returns the challenge only for the configured verify token', () => {
-    expect(
-      verifyMessengerWebhook({ mode: 'subscribe', verifyToken: 'secret', challenge: '123' }, 'secret')
-    ).toEqual({ ok: true, challenge: '123' })
-    expect(
-      verifyMessengerWebhook({ mode: 'subscribe', verifyToken: 'wrong', challenge: '123' }, 'secret')
-    ).toEqual({ ok: false })
+    expect(verifyMessengerWebhook({ mode: 'subscribe', verifyToken: 'secret', challenge: '123' }, 'secret')).toEqual({
+      ok: true,
+      challenge: '123'
+    })
+    expect(verifyMessengerWebhook({ mode: 'subscribe', verifyToken: 'wrong', challenge: '123' }, 'secret')).toEqual({
+      ok: false
+    })
   })
 
   it('extracts inbound text messages from a Page webhook payload', () => {
