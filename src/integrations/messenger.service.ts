@@ -23,10 +23,7 @@ export const buildMessengerMessagesFilter = (search?: string): Record<string, un
   const escapedSearch = normalizedSearch.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')
 
   return {
-    $or: [
-      { text: { $regex: escapedSearch, $options: 'i' } },
-      { senderId: { $regex: escapedSearch, $options: 'i' } }
-    ]
+    $or: [{ text: { $regex: escapedSearch, $options: 'i' } }, { senderId: { $regex: escapedSearch, $options: 'i' } }]
   }
 }
 

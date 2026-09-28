@@ -1,4 +1,4 @@
-import { extractMessengerMessages, verifyMessengerWebhook } from '~/integrations/messengerWebhook'
+import { extractMessengerMessages, isMessengerPageAllowed, verifyMessengerWebhook } from '~/integrations/messengerWebhook'
 
 describe('Messenger webhook contract', () => {
   it('returns the challenge only for the configured verify token', () => {
@@ -38,6 +38,16 @@ describe('Messenger webhook contract', () => {
         timestamp: 1710000000000
       }
     ])
+  })
+
+  it('rejects a webhook whose entry is missing or not the configured page', () => {
+    expect(isMessengerPageAllowed([{ id: 'page-1' }], 'page-1')).toBe(true)
+    expect(isMessengerPageAllowed([], 'page-1')).toBe(true)
+    expect(isMessengerPageAllowed(undefined, undefined)).toBe(true)
+    expect(isMessengerPageAllowed(undefined, 'page-1')).toBe(false)
+    expect(isMessengerPageAllowed({ id: 'page-1' }, 'page-1')).toBe(false)
+    expect(isMessengerPageAllowed([{ id: 'other-page' }], 'page-1')).toBe(false)
+    expect(isMessengerPageAllowed([{ id: 'page-1' }, { id: 'other-page' }], 'page-1')).toBe(false)
   })
 
   it('ignores delivery/read/postback events without an inbound message', () => {

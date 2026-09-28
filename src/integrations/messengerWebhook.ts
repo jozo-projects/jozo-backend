@@ -28,6 +28,12 @@ export const verifyMessengerWebhook = (
   return { ok: true, challenge: input.challenge }
 }
 
+export const isMessengerPageAllowed = (entry: unknown, configuredPageId?: string): boolean => {
+  if (!configuredPageId) return true
+  if (!Array.isArray(entry)) return false
+  return entry.every((item) => String(item?.id) === configuredPageId)
+}
+
 export const extractMessengerMessages = (payload: any): MessengerInboundMessage[] => {
   if (payload?.object !== 'page' || !Array.isArray(payload.entry)) return []
 

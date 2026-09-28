@@ -7,6 +7,15 @@ describe('Messenger message management', () => {
     })
   })
 
+  it('escapes regex metacharacters in the search term', () => {
+    expect(buildMessengerMessagesFilter('a.*+?^${}()|[]\\')).toEqual({
+      $or: [
+        { text: { $regex: 'a\\.\\*\\+\\?\\^\\$\\{\\}\\(\\)\\|\\[\\]\\\\', $options: 'i' } },
+        { senderId: { $regex: 'a\\.\\*\\+\\?\\^\\$\\{\\}\\(\\)\\|\\[\\]\\\\', $options: 'i' } }
+      ]
+    })
+  })
+
   it('returns an empty filter when search is blank', () => {
     expect(buildMessengerMessagesFilter('   ')).toEqual({})
   })

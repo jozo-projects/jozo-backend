@@ -66,9 +66,10 @@ export const receiveMessengerWebhookController = async (req: Request, res: Respo
     }
 
     const configuredPageId = process.env.META_PAGE_ID
-    if (configuredPageId && req.body?.entry?.some((entry: any) => String(entry?.id) !== configuredPageId)) {
+    if (!isMessengerPageAllowed(req.body?.entry, configuredPageId)) {
       console.log('[messenger] POST /webhook rejected: page id mismatch', {
         configuredPageId,
+        entryIsArray: Array.isArray(req.body?.entry),
         entryIds: entries.map((entry: any) => String(entry?.id || ''))
       })
       return res.status(HTTP_STATUS_CODE.FORBIDDEN).json({ message: 'Invalid page id' })
