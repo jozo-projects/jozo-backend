@@ -5,6 +5,7 @@ import { roomMusicServices, roomMusicEventEmitter } from '~/services/roomMusic.s
 import { songPruneJobEventEmitter } from '~/services/songPruneJob.service'
 import { roomEventEmitter } from '~/services/room.service'
 import { roomDevicePresenceService } from '~/services/roomDevicePresence.service'
+import { songService } from '~/services/song.service'
 
 interface CommandPayload {
   action: string
@@ -26,6 +27,9 @@ interface NowPlayingData {
   duration: number
   timestamp: number
   isPlaying: boolean
+  media_id?: string
+  hls_url?: string
+  media_status?: string
 }
 
 export const RoomSocket = (io: Server) => {
@@ -224,6 +228,7 @@ export const RoomSocket = (io: Server) => {
           console.log(`Play song request in room ${roomId}:`, payload)
 
           // Tạo object now playing với cấu trúc mới
+          const media = (await songService.getSavedSongsByVideoIds([payload.videoId]))[payload.videoId]
           const nowPlaying: NowPlayingData = {
             video_id: payload.videoId,
             title: payload.title,
@@ -231,7 +236,10 @@ export const RoomSocket = (io: Server) => {
             author: payload.author,
             duration: payload.duration,
             timestamp: Date.now(),
-            isPlaying: true
+            isPlaying: true,
+            ...(media?.media_id ? { media_id: media.media_id } : {}),
+            ...(media?.hls_url ? { hls_url: media.hls_url } : {}),
+            ...(media?.media_status ? { media_status: media.media_status } : {})
           }
 
           // Lưu trạng thái mới vào Redis
@@ -253,19 +261,33 @@ export const RoomSocket = (io: Server) => {
       }
     )
 
-    // Xử lý sự kiện song_ended
-    socket.on('song_ended', async ({ roomId }) => {
+    // Xử lý sự kiện song_ended.
+    // Bài vừa hết vẫn còn trong now_playing — chỉ bỏ qua khi queue còn bài
+    // (control sẽ gọi play-next). Queue trống thì xóa và báo client về màn chờ.
+    socket.on('song_ended', async ({ roomId, videoId }: { roomId: string; videoId?: string }) => {
       try {
-        const currentNowPlaying = await roomMusicServices.getNowPlaying(roomId)
         const queue = await roomMusicServices.getSongsInQueue(roomId)
 
-        if (!currentNowPlaying && queue.length === 0) {
-          // Chỉ xóa now_playing khi không còn bài hát nào trong hàng đợi và không có bài đang phát
-          await redis.del(`room_${roomId}_now_playing`)
-          io.to(roomId).emit('now_playing_cleared')
+        if (queue.length > 0) {
+          return
         }
 
-        console.log(`Cleared now playing state for room ${roomId}`)
+        const currentNowPlaying = await roomMusicServices.getNowPlaying(roomId)
+        // song_ended của nhạc chờ / video cũ không được xóa bài vừa play_song.
+        if (
+          videoId &&
+          currentNowPlaying?.video_id &&
+          videoId !== currentNowPlaying.video_id
+        ) {
+          return
+        }
+
+        await Promise.all([
+          redis.del(`room_${roomId}_now_playing`),
+          redis.del(`room_${roomId}_current_time`),
+          redis.del(`room_${roomId}_playback`)
+        ])
+        io.to(roomId).emit('now_playing_cleared')
       } catch (error) {
         console.error(`Failed to clear now playing state for room ${roomId}:`, error)
         socket.emit('error', { message: 'Failed to clear now playing state', error })

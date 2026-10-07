@@ -10,6 +10,11 @@ export interface AddSongRequestBody {
   format_type?: 'hls' | 'progressive'
   headers?: Record<string, string>
   required_headers?: Record<string, string>
+  media_id?: string
+  hls_url?: string
+  media_status?: 'pending' | 'downloading' | 'encoding' | 'uploading' | 'ready' | 'failed'
+  timestamp?: number
+  currentTime?: number
 }
 
 export interface MoveQueueRequestBody {

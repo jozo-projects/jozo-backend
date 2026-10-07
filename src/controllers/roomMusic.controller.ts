@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { NextFunction, Request, Response } from 'express'
+import dotenv from 'dotenv'
 import { type ParamsDictionary } from 'express-serve-static-core'
 import { randomUUID } from 'crypto'
 import { searchYoutube } from '~/services/youtubeSearch.service'
@@ -8,6 +9,7 @@ import { ErrorWithStatus } from '~/models/Error'
 import { SONG_QUEUE_MESSAGES } from '~/constants/messages'
 import { AddSongRequestBody, MoveQueueRequestBody } from '~/models/requests/Song.request'
 import { VideoSchema } from '~/models/schemas/Video.schema'
+import { Song } from '~/models/schemas/Song.schema'
 import redis from '~/services/redis.service'
 import { roomMusicServices } from '~/services/roomMusic.service'
 import { roomScheduleService } from '~/services/roomSchedule.service'
@@ -15,6 +17,41 @@ import { songService } from '~/services/song.service'
 import { songPruneJobService } from '~/services/songPruneJob.service'
 import serverService from '~/services/server.service'
 import { fetchVideoInfo } from '~/utils/common'
+
+dotenv.config()
+dotenv.config({ path: '.env.local', override: true })
+
+export const updateMediaCallback = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const expectedToken = process.env.MEDIA_WORKER_CALLBACK_TOKEN
+    const receivedToken = req.header('x-media-worker-token')
+    if (!expectedToken || receivedToken !== expectedToken) {
+      return res.status(HTTP_STATUS_CODE.UNAUTHORIZED).json({ message: 'Invalid media worker callback token' })
+    }
+
+    const { videoId, mediaId, status, hlsUrl } = req.body ?? {}
+    const allowedStatuses = new Set(['pending', 'downloading', 'encoding', 'uploading', 'ready', 'failed'])
+    if (
+      typeof videoId !== 'string' ||
+      typeof mediaId !== 'string' ||
+      typeof status !== 'string' ||
+      !allowedStatuses.has(status)
+    ) {
+      return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({ message: 'Invalid media callback payload' })
+    }
+
+    const mediaStatus = status as NonNullable<Song['media_status']>
+    const savedSong = await songService.updateMediaMetadata({
+      video_id: videoId,
+      media_id: mediaId,
+      media_status: mediaStatus,
+      ...(typeof hlsUrl === 'string' && hlsUrl ? { hls_url: hlsUrl } : {})
+    })
+    return res.status(HTTP_STATUS_CODE.OK).json({ result: savedSong })
+  } catch (error) {
+    return next(error)
+  }
+}
 
 /**
  * @description Add song to queue
@@ -240,19 +277,26 @@ export const playNextSong = async (req: Request, res: Response, next: NextFuncti
       )
     ])
 
+    const transitionNowPlaying =
+      (await roomMusicServices.getNowPlaying(roomId)) || {
+        ...nowPlaying,
+        currentTime: 0,
+        timestamp: Date.now()
+      }
+
     // Emit các sự kiện theo thứ tự
     serverService.io.to(roomId).emit('queue_updated', queue)
 
     // 2. Reset và load video mới
     serverService.io.to(roomId).emit('video_event', {
       event: 'play',
-      videoId: nowPlaying?.video_id,
+      videoId: transitionNowPlaying?.video_id,
       currentTime: 0
     })
 
     // 3. Cập nhật thông tin now playing
     serverService.io.to(roomId).emit('play_song', {
-      ...nowPlaying,
+      ...transitionNowPlaying,
       isPlaying: true,
       currentTime: 0,
       timestamp: Date.now()
@@ -262,7 +306,7 @@ export const playNextSong = async (req: Request, res: Response, next: NextFuncti
       message: SONG_QUEUE_MESSAGES.SONG_IS_NOW_PLAYING,
       result: {
         nowPlaying: {
-          ...nowPlaying,
+          ...transitionNowPlaying,
           currentTime: 0,
           timestamp: Date.now()
         },
@@ -437,6 +481,18 @@ export const updateQueue = async (req: Request, res: Response, next: NextFunctio
  * @method GET
  * @author QuangDoo
  */
+export const getLocalSongNames = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const titles = await roomMusicServices.getLocalSongNames(
+      String(req.query.keyword || ''),
+      req.query.isKaraoke === 'true'
+    )
+    res.status(HTTP_STATUS_CODE.OK).json({ message: SONG_QUEUE_MESSAGES.GET_SONG_NAME_SUCCESS, result: titles })
+  } catch (error) {
+    next(error)
+  }
+}
+
 export const getSongName = async (req: Request, res: Response, next: NextFunction) => {
   const { isKaraoke, keyword } = req.query
 
@@ -1233,7 +1289,10 @@ export const pruneSongsNotOnYoutube = async (req: Request, res: Response, next: 
     const omitVideoIds = omit_ids === '1' || String(omit_ids).toLowerCase() === 'true'
     const runAsync = asyncParam === '1' || String(asyncParam).toLowerCase() === 'true'
 
-    if (parsedConcurrency !== undefined && (isNaN(parsedConcurrency) || parsedConcurrency < 1 || parsedConcurrency > 8)) {
+    if (
+      parsedConcurrency !== undefined &&
+      (isNaN(parsedConcurrency) || parsedConcurrency < 1 || parsedConcurrency > 8)
+    ) {
       return next(
         new ErrorWithStatus({
           message: 'Tham số concurrency phải từ 1 đến 8',
@@ -1293,10 +1352,11 @@ export const pruneSongsNotOnYoutube = async (req: Request, res: Response, next: 
   }
 }
 
-
 export const hidePhotoDisplay = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const result = await roomScheduleService.hidePhotoDisplayByRoom(req.params.roomId)
     return res.status(HTTP_STATUS_CODE.OK).json({ message: 'Photo display hidden', result })
-  } catch (error) { next(error) }
+  } catch (error) {
+    next(error)
+  }
 }

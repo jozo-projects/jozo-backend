@@ -114,7 +114,7 @@ class RoomMusicServices {
         return { nowPlaying: null, queue: [] }
       }
 
-      const song = JSON.parse(nowPlaying)
+      const song = (await this.attachMediaMetadata([JSON.parse(nowPlaying) as AddSongRequestBody]))[0]
       const timestamp = Date.now()
       const duration = song.duration || 0
 
@@ -129,7 +129,9 @@ class RoomMusicServices {
       pipeline.expire(nowPlayingKey, 3600) // Set expiration for 1 hour
       await pipeline.exec()
 
-      const updatedQueue = (await redis.lrange(queueKey, 0, -1)).map((item: string) => JSON.parse(item))
+      const updatedQueue = await this.attachMediaMetadata(
+        (await redis.lrange(queueKey, 0, -1)).map((item: string) => JSON.parse(item) as AddSongRequestBody)
+      )
 
       // Lưu bài hát vào collection songs (id gốc ổn định)
       try {
@@ -141,6 +143,7 @@ class RoomMusicServices {
           url: song.url,
           thumbnail: song.thumbnail
         })
+        await songService.recordPlayback(song.video_id)
       } catch (error) {
         this.logger.error('Failed to save song when playing next', error)
       }
@@ -160,7 +163,8 @@ class RoomMusicServices {
    */
   async getSongsInQueue(roomId: string): Promise<AddSongRequestBody[]> {
     const queueKey = `room_${roomId}_queue`
-    return (await redis.lrange(queueKey, 0, -1)).map((item: string) => JSON.parse(item))
+    const queue = (await redis.lrange(queueKey, 0, -1)).map((item: string) => JSON.parse(item) as AddSongRequestBody)
+    return this.attachMediaMetadata(queue)
   }
 
   /**
@@ -185,10 +189,25 @@ class RoomMusicServices {
       parsedNowPlaying.duration || 0 // Không vượt quá duration
     )
 
+    const enriched = await this.attachMediaMetadata([parsedNowPlaying])
     return {
-      ...parsedNowPlaying,
+      ...enriched[0],
       currentTime
     }
+  }
+
+  private async attachMediaMetadata(songs: AddSongRequestBody[]): Promise<AddSongRequestBody[]> {
+    if (!songs.length) return songs
+    const saved = await songService.getSavedSongsByVideoIds(songs.map((song) => song.video_id))
+    return songs.map((song) => {
+      const media = saved[song.video_id]
+      return {
+        ...song,
+        ...(media?.media_id ? { media_id: media.media_id } : {}),
+        ...(media?.hls_url ? { hls_url: media.hls_url } : {}),
+        ...(media?.media_status ? { media_status: media.media_status } : {})
+      }
+    })
   }
 
   /**
@@ -279,7 +298,9 @@ class RoomMusicServices {
     const nowPlayingKey = `room_${roomId}_now_playing`
 
     // Lấy danh sách bài hát trong hàng đợi
-    const queue = (await redis.lrange(queueKey, 0, -1)).map((item: string) => JSON.parse(item))
+    const queue = await this.attachMediaMetadata(
+      (await redis.lrange(queueKey, 0, -1)).map((item: string) => JSON.parse(item) as AddSongRequestBody)
+    )
 
     // Kiểm tra nếu index hợp lệ
     if (index < 0 || index >= queue.length) {
@@ -323,6 +344,7 @@ class RoomMusicServices {
         url: chosenSong.url,
         thumbnail: chosenSong.thumbnail
       })
+      await songService.recordPlayback(chosenSong.video_id)
     } catch (error) {
       this.logger.error('Failed to save song when playing chosen song', error)
     }
@@ -331,9 +353,35 @@ class RoomMusicServices {
     return { nowPlaying: nowPlayingData, queue }
   }
 
+  async getLocalSongNames(keyword: string, isKaraoke: boolean = false): Promise<string[]> {
+    const clean = keyword.trim()
+    if (clean.length < 2) return []
+
+    // searchSongs returns candidates ordered by play_count; stable partition keeps popularity within each group.
+    const songs = await songService.searchSongs(clean, 20)
+    if (isKaraoke) {
+      songs.sort((a, b) => Number(/karaoke/i.test(b.title)) - Number(/karaoke/i.test(a.title)))
+    }
+    const unique = new Set<string>()
+    const titles: string[] = []
+    for (const song of songs) {
+      const title = song.title.trim()
+      const key = title
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/đ/gi, 'd')
+        .toLowerCase()
+      if (!key || unique.has(key)) continue
+      unique.add(key)
+      titles.push(title)
+      if (titles.length === 12) break
+    }
+    return titles
+  }
+
   async getSongName(keyword: string, isKaraoke: boolean = false): Promise<string[]> {
     try {
-      const cacheKey = `search_results_${this.searchService.normalizeKeyword(keyword)}_${isKaraoke ? 'karaoke' : 'normal'}`
+      const cacheKey = `search_results_v2_${this.searchService.normalizeKeyword(keyword)}_${isKaraoke ? 'karaoke' : 'normal'}`
 
       // Try to get from cache first
       const cachedResults = await this.cacheService.get(cacheKey)
@@ -653,10 +701,11 @@ class RoomMusicServices {
       // Tính toán pagination
       const total = searchResults.length
       const paginatedResults = searchResults.slice(skip, skip + limitNum)
+      const enrichedResults = await this.attachMediaMetadata(paginatedResults as AddSongRequestBody[])
       const hasMoreResults = total >= maxSearchLimit // Nếu đạt max limit, có thể còn nhiều kết quả hơn
 
       return {
-        songs: paginatedResults,
+        songs: enrichedResults,
         pagination: {
           page: pageNum,
           limit: limitNum,
@@ -674,8 +723,10 @@ class RoomMusicServices {
       databaseService.songs.countDocuments({})
     ])
 
+    const songsWithMedia = await this.attachMediaMetadata(songs as AddSongRequestBody[])
+
     return {
-      songs,
+      songs: songsWithMedia,
       pagination: {
         page: pageNum,
         limit: limitNum,

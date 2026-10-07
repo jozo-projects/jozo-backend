@@ -62,6 +62,7 @@ class SongService {
       )
       await databaseService.songs.createIndex({ title_normalized: 1 }, { name: 'title_normalized_idx' })
       await databaseService.songs.createIndex({ author_normalized: 1 }, { name: 'author_normalized_idx' })
+      await databaseService.songs.createIndex({ play_count: -1, _id: 1 }, { name: 'song_play_count_idx' })
     } catch (error) {
       this.logger.error('Failed to ensure song indexes', error)
     }
@@ -183,7 +184,7 @@ class SongService {
     return { match_score: score, is_phrase_match: phraseHit, recall, precision }
   }
 
-  async upsertSong(song: Omit<Song, 'created_at' | 'updated_at'>): Promise<Song> {
+  async upsertSong(song: Omit<Song, 'created_at' | 'updated_at' | 'play_count' | 'last_played_at'>): Promise<Song> {
     const now = new Date()
     const payload: Partial<Song> = {
       ...song,
@@ -219,6 +220,13 @@ class SongService {
     return new SongSchema(result)
   }
 
+  async recordPlayback(videoId: string): Promise<void> {
+    await databaseService.songs.updateOne(
+      { video_id: videoId },
+      { $inc: { play_count: 1 }, $set: { last_played_at: new Date() } }
+    )
+  }
+
   async getSavedSongsByVideoIds(videoIds: string[]): Promise<Record<string, Song>> {
     if (!videoIds.length) return {}
     const cursor = databaseService.songs.find({ video_id: { $in: videoIds } })
@@ -228,6 +236,37 @@ class SongService {
       acc[song.video_id] = song
       return acc
     }, {})
+  }
+
+  async updateMediaMetadata(input: {
+    video_id: string
+    media_id: string
+    hls_url?: string
+    media_status: NonNullable<Song['media_status']>
+  }): Promise<Song> {
+    const now = new Date()
+    const result = await databaseService.songs.findOneAndUpdate(
+      { video_id: input.video_id },
+      {
+        $set: {
+          media_id: input.media_id,
+          ...(input.hls_url ? { hls_url: input.hls_url } : {}),
+          media_status: input.media_status,
+          hls_updated_at: now,
+          updated_at: now
+        },
+        $setOnInsert: {
+          video_id: input.video_id,
+          title: input.video_id,
+          author: 'Jozo music',
+          created_at: now
+        }
+      },
+      { upsert: true, returnDocument: 'after' }
+    )
+
+    if (!result) throw new Error('Media metadata upsert failed')
+    return new SongSchema(result)
   }
 
   async searchSongs(
@@ -268,12 +307,14 @@ class SongService {
               duration: 1,
               url: 1,
               thumbnail: 1,
+              play_count: 1,
+              last_played_at: 1,
               created_at: 1,
               updated_at: 1
             }
           }
         )
-        .sort({ score: { $meta: 'textScore' }, created_at: -1 })
+        .sort({ play_count: -1, created_at: -1, _id: 1 })
         .limit(limit)
 
       const textSongs = await textCursor.toArray()
@@ -284,16 +325,8 @@ class SongService {
           return { ...(song as Song), match_score: scored.match_score, is_phrase_match: scored.is_phrase_match }
         })
 
-        // Sắp xếp: phrase match trước, match_score giảm dần, sau đó ưu tiên bài add gần nhất
-        return scoredSongs.sort((a, b) => {
-          if (a.is_phrase_match && !b.is_phrase_match) return -1
-          if (!a.is_phrase_match && b.is_phrase_match) return 1
-          const scoreDiff = b.match_score - a.match_score
-          if (scoreDiff !== 0) return scoreDiff
-          const aTime = a.created_at ? new Date(a.created_at).getTime() : 0
-          const bTime = b.created_at ? new Date(b.created_at).getTime() : 0
-          return bTime - aTime
-        })
+        // MongoDB đã xếp theo số lượt phát trên toàn bộ kết quả khớp, trước limit.
+        return scoredSongs
       }
     } catch (error) {
       this.logger.warn?.('Text search failed, fallback to regex', error)
@@ -325,34 +358,20 @@ class SongService {
     const cursor = databaseService.songs
       .find(query)
       .collation({ locale: 'en', strength: 1 })
-      .sort({ created_at: -1, updated_at: -1 })
+      .sort({ play_count: -1, created_at: -1, _id: 1 })
       .limit(limit)
 
     const songs = await cursor.toArray()
 
-    // Scoring để ưu tiên cụm liền mạch và độ phủ tốt
-    const scored = songs.map((song) => {
+    // Chấm điểm để giữ metadata cho API; không xếp lại sau kết quả MongoDB.
+    return songs.map((song) => {
       const scored = this.computeMatchScore(keyword, song.title, song.author)
-      return { song, ...scored }
+      return {
+        ...new SongSchema(song),
+        match_score: scored.match_score,
+        is_phrase_match: scored.is_phrase_match
+      }
     })
-
-    const filtered = scored.filter((item) => item.recall >= 0.6)
-    const toUse = (filtered.length > 0 ? filtered : scored).sort((a, b) => {
-      if (a.is_phrase_match && !b.is_phrase_match) return -1
-      if (!a.is_phrase_match && b.is_phrase_match) return 1
-      const scoreDiff = b.match_score - a.match_score
-      if (scoreDiff !== 0) return scoreDiff
-      // Ưu tiên bài add gần nhất
-      const aTime = a.song?.created_at ? new Date(a.song.created_at).getTime() : 0
-      const bTime = b.song?.created_at ? new Date(b.song.created_at).getTime() : 0
-      return bTime - aTime
-    })
-
-    return toUse.map((item) => ({
-      ...new SongSchema(item.song),
-      match_score: item.match_score,
-      is_phrase_match: item.is_phrase_match
-    }))
   }
 
   async deleteSong(video_id: string, options?: { log?: boolean }): Promise<boolean> {

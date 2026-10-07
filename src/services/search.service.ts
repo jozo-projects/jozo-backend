@@ -109,7 +109,7 @@ export class SearchService {
       const uniqueResults = results
         .sort((a, b) => b.score - a.score)
         .filter((result, index, self) => index === self.findIndex((r) => r.title === result.title))
-        .slice(0, 5)
+        .slice(0, 12)
 
       // Format results
       return uniqueResults.map((result) => {

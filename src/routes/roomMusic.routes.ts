@@ -9,6 +9,7 @@ import {
   deleteSong,
   getBillByRoom,
   getSongName,
+  getLocalSongNames,
   getSongsInCollection,
   getSongsInQueue,
   getVideoInfo,
@@ -29,7 +30,8 @@ import {
   searchRemoteSongs,
   sendNotification,
   streamVideo,
-  updateQueue
+  updateQueue,
+  updateMediaCallback
 } from '~/controllers/roomMusic.controller'
 import {
   acknowledgeSupportRequestController,
@@ -47,6 +49,8 @@ import { wrapRequestHandler } from '~/utils/handlers'
 import musicCategoryRouter from './musicCategory.routes'
 
 const roomMusicRouter = Router()
+
+roomMusicRouter.post('/internal/media-callback', wrapRequestHandler(updateMediaCallback))
 
 // Mount before generic /:roomId routes so "music-categories" is never treated as a room ID.
 roomMusicRouter.use('/music-categories', musicCategoryRouter)
@@ -297,6 +301,7 @@ roomMusicRouter.get('/search-songs/remote', wrapRequestHandler(searchRemoteSongs
  * @method GET
  * @author QuangDoo
  */
+roomMusicRouter.get('/:roomId/autocomplete/local', wrapRequestHandler(getLocalSongNames))
 roomMusicRouter.get('/:roomId/autocomplete', wrapRequestHandler(getSongName))
 
 /**

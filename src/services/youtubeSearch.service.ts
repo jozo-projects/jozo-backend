@@ -165,12 +165,72 @@ function dedupAndLimit(list: YoutubeSearchVideo[], limit: number): YoutubeSearch
   return out
 }
 
-/**
- * Search YouTube — chỉ dùng yt-search (để test).
- */
+type InnertubeSearchClient = {
+  // eslint-disable-next-line no-unused-vars -- signature for the external search client
+  search: (query: string, options: { type: 'video' }) => Promise<{ videos: unknown[] }>
+}
+let innertubePromise: Promise<InnertubeSearchClient> | null = null
+
+function getInnertube() {
+  if (!innertubePromise) {
+    const { Innertube } = require('youtubei.js')
+    innertubePromise = Innertube.create({
+      retrieve_player: false,
+      generate_session_locally: true,
+      lang: 'vi',
+      location: 'VN'
+    }).catch((error: unknown) => {
+      innertubePromise = null
+      throw error
+    })
+  }
+  return innertubePromise!
+}
+
+async function searchInnertube(query: string, limit: number): Promise<YoutubeSearchResult> {
+  const innertube = await getInnertube()
+  const result = await innertube.search(query, { type: 'video' })
+  const videos: YoutubeSearchVideo[] = []
+  for (const video of result.videos || []) {
+    const node = video as {
+      title?: unknown
+      video_id?: string
+      content_id?: string
+      is_live?: boolean
+      duration?: { seconds?: number } | number
+      best_thumbnail?: { url?: string }
+      author?: { name?: string }
+      view_count?: { text?: string }
+    }
+    const videoId = node.video_id || node.content_id
+    const title = String(node.title || '').trim()
+    if (!videoId || !title || node.is_live) continue
+    const duration = node.duration
+    const seconds = typeof duration === 'number' ? duration : duration?.seconds || 0
+    if (seconds < 30) continue
+    videos.push({
+      videoId,
+      title,
+      seconds,
+      url: `https://www.youtube.com/watch?v=${videoId}`,
+      thumbnail: node.best_thumbnail?.url || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+      author: { name: node.author?.name || '' },
+      views: Number(node.view_count?.text?.replace(/[^0-9]/g, '') || 0)
+    })
+  }
+  return { videos: dedupAndLimit(videos, limit) }
+}
+
+/** Tìm qua Innertube trước; yt-search chỉ dùng khi Innertube lỗi. */
 export async function searchYoutube(query: string, options: { limit?: number } = {}): Promise<YoutubeSearchResult> {
   const limit = Math.min(Math.max(options.limit ?? DEFAULT_LIMIT, 1), 30)
   const normalizedQuery = restoreVietnameseDiacritics(query)
+
+  try {
+    return await searchInnertube(normalizedQuery, limit)
+  } catch (error) {
+    console.warn('[innertube] search failed, falling back to yt-search:', (error as Error)?.message ?? error)
+  }
 
   try {
     const ytsResult = await yts.search(normalizedQuery)

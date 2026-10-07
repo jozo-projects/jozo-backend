@@ -14,6 +14,12 @@ export interface Song {
   duration?: number
   url?: string
   thumbnail?: string
+  play_count?: number
+  last_played_at?: Date
+  media_id?: string
+  hls_url?: string
+  media_status?: 'pending' | 'downloading' | 'encoding' | 'uploading' | 'ready' | 'failed'
+  hls_updated_at?: Date
   title_normalized?: string
   author_normalized?: string
   categories?: SongCategoryAssignment[]
@@ -29,6 +35,12 @@ export class SongSchema implements Song {
   duration?: number
   url?: string
   thumbnail?: string
+  play_count?: number
+  last_played_at?: Date
+  media_id?: string
+  hls_url?: string
+  media_status?: 'pending' | 'downloading' | 'encoding' | 'uploading' | 'ready' | 'failed'
+  hls_updated_at?: Date
   title_normalized?: string
   author_normalized?: string
   categories?: SongCategoryAssignment[]
@@ -43,6 +55,12 @@ export class SongSchema implements Song {
     this.duration = song.duration
     this.url = song.url
     this.thumbnail = song.thumbnail
+    this.play_count = song.play_count ?? 0
+    this.last_played_at = song.last_played_at
+    this.media_id = song.media_id
+    this.hls_url = song.hls_url
+    this.media_status = song.media_status
+    this.hls_updated_at = song.hls_updated_at
     this.title_normalized = song.title_normalized
     this.author_normalized = song.author_normalized
     this.categories = song.categories
