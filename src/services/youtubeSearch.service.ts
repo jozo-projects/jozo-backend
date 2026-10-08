@@ -187,6 +187,16 @@ function getInnertube() {
   return innertubePromise!
 }
 
+function parseViewCount(text?: string): number {
+  if (!text) return 0
+  const match = text.trim().match(/^([\d.,\s]+?)\s*(tỷ|triệu|tr|nghìn|ngàn|n|k|m|b)(?=\s|$)/i)
+  if (match) {
+    const multiplier = /^(tỷ|b)$/i.test(match[2]) ? 1e9 : /^(triệu|tr|m)$/i.test(match[2]) ? 1e6 : 1e3
+    return Math.round(Number(match[1].trim().replace(',', '.')) * multiplier) || 0
+  }
+  return Number(text.replace(/[^0-9]/g, '')) || 0
+}
+
 async function searchInnertube(query: string, limit: number): Promise<YoutubeSearchResult> {
   const innertube = await getInnertube()
   const result = await innertube.search(query, { type: 'video' })
@@ -215,7 +225,7 @@ async function searchInnertube(query: string, limit: number): Promise<YoutubeSea
       url: `https://www.youtube.com/watch?v=${videoId}`,
       thumbnail: node.best_thumbnail?.url || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
       author: { name: node.author?.name || '' },
-      views: Number(node.view_count?.text?.replace(/[^0-9]/g, '') || 0)
+      views: parseViewCount(node.view_count?.text)
     })
   }
   return { videos: dedupAndLimit(videos, limit) }

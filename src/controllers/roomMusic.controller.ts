@@ -4,6 +4,7 @@ import dotenv from 'dotenv'
 import { type ParamsDictionary } from 'express-serve-static-core'
 import { randomUUID } from 'crypto'
 import { searchYoutube } from '~/services/youtubeSearch.service'
+import { rankRemoteVideos } from '~/services/remoteVideoRanking'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { ErrorWithStatus } from '~/models/Error'
 import { SONG_QUEUE_MESSAGES } from '~/constants/messages'
@@ -277,12 +278,11 @@ export const playNextSong = async (req: Request, res: Response, next: NextFuncti
       )
     ])
 
-    const transitionNowPlaying =
-      (await roomMusicServices.getNowPlaying(roomId)) || {
-        ...nowPlaying,
-        currentTime: 0,
-        timestamp: Date.now()
-      }
+    const transitionNowPlaying = (await roomMusicServices.getNowPlaying(roomId)) || {
+      ...nowPlaying,
+      currentTime: 0,
+      timestamp: Date.now()
+    }
 
     // Emit các sự kiện theo thứ tự
     serverService.io.to(roomId).emit('queue_updated', queue)
@@ -699,7 +699,9 @@ export const searchSongs = async (req: Request, res: Response, next: NextFunctio
         author: song.author
       }),
       match_score: song.match_score,
-      is_phrase_match: song.is_phrase_match
+      is_phrase_match: song.is_phrase_match,
+      hls_url: song.hls_url,
+      media_status: song.media_status
     }))
 
     res.status(HTTP_STATUS_CODE.OK).json({
@@ -771,38 +773,11 @@ export const searchSongs = async (req: Request, res: Response, next: NextFunctio
 
         const savedMap = await songService.getSavedSongsByVideoIds(videos.map((video) => video.video_id))
 
-        const savedVideos: Array<VideoSchema & { is_saved: boolean; views: number }> = []
-        const otherVideos: Array<VideoSchema & { is_saved: boolean; views: number }> = []
-
-        videos.forEach((video) => {
-          const withFlag = { ...video, is_saved: Boolean(savedMap[video.video_id]) }
-          if (withFlag.is_saved) {
-            savedVideos.push(withFlag)
-          } else {
-            otherVideos.push(withFlag)
-          }
-        })
-
-        // Sắp xếp từng nhóm theo view count (giảm dần)
-        savedVideos.sort((a, b) => (b.views || 0) - (a.views || 0))
-        otherVideos.sort((a, b) => (b.views || 0) - (a.views || 0))
-
-        const prioritizedVideos = [...savedVideos, ...otherVideos]
-          .map((video) => {
-            const scored = songService.computeMatchScore(q as string, video.title, video.author)
-            return {
-              ...video,
-              source: 'yt',
-              match_score: scored.match_score,
-              is_phrase_match: scored.is_phrase_match
-            }
-          })
-          // Lọc bỏ các video có match_score quá thấp (không liên quan)
-          .filter((video) => video.match_score >= 0)
-          // Sắp xếp theo match_score giảm dần để ưu tiên kết quả liên quan nhất
-          .sort((a, b) => b.match_score - a.match_score)
-          // Giới hạn số lượng kết quả
-          .slice(0, parsedLimit)
+        const prioritizedVideos = rankRemoteVideos(
+          videos.map((video) => ({ ...video, is_saved: Boolean(savedMap[video.video_id]) })),
+          q,
+          parsedLimit
+        )
 
         console.log(`[yt-emit] count=${prioritizedVideos.length} requestId=${requestId} roomId=${roomId}`)
         safeEmit({
@@ -883,6 +858,8 @@ export const searchLocalSongs = async (req: Request, res: Response, next: NextFu
       }),
       match_score: song.match_score,
       is_phrase_match: song.is_phrase_match,
+      hls_url: song.hls_url,
+      media_status: song.media_status,
       is_saved: true,
       source: 'local'
     }))
@@ -1027,35 +1004,11 @@ export const searchRemoteSongs = async (req: Request, res: Response, next: NextF
 
       const savedMap = await songService.getSavedSongsByVideoIds(videos.map((video) => video.video_id))
 
-      const savedVideos: Array<VideoSchema & { is_saved: boolean; views: number }> = []
-      const otherVideos: Array<VideoSchema & { is_saved: boolean; views: number }> = []
-
-      videos.forEach((video) => {
-        const withFlag = { ...video, is_saved: Boolean(savedMap[video.video_id]) }
-        if (withFlag.is_saved) {
-          savedVideos.push(withFlag)
-        } else {
-          otherVideos.push(withFlag)
-        }
-      })
-
-      // Sắp xếp từng nhóm theo view count (giảm dần)
-      savedVideos.sort((a, b) => (b.views || 0) - (a.views || 0))
-      otherVideos.sort((a, b) => (b.views || 0) - (a.views || 0))
-
-      const prioritizedVideos = [...savedVideos, ...otherVideos]
-        .map((video) => {
-          const scored = songService.computeMatchScore(q as string, video.title, video.author)
-          return {
-            ...video,
-            source: 'yt',
-            match_score: scored.match_score,
-            is_phrase_match: scored.is_phrase_match
-          }
-        })
-        .filter((video) => video.match_score >= 0)
-        .sort((a, b) => b.match_score - a.match_score)
-        .slice(0, parsedLimit)
+      const prioritizedVideos = rankRemoteVideos(
+        videos.map((video) => ({ ...video, is_saved: Boolean(savedMap[video.video_id]) })),
+        q,
+        parsedLimit
+      )
 
       const searchDuration = Date.now() - startTime
       const responseData = {

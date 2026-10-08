@@ -21,19 +21,93 @@ const song = (video_id: string) => ({ video_id, title: 'Test song', author: 'Art
 describe('song popularity', () => {
   afterEach(() => jest.restoreAllMocks())
 
+  it('ranks exact song names before HLS and play count in Mongo before limiting', async () => {
+    const aggregate = jest.fn().mockReturnValue({ toArray: jest.fn().mockResolvedValue([]) })
+    jest.spyOn(databaseService, 'songs', 'get').mockReturnValue({ aggregate } as any)
+    await songService.searchSongs('Tháng Năm music', 1)
+    const pipeline = aggregate.mock.calls[0][0]
+    const sort = pipeline.find((stage: any) => stage.$sort)?.$sort
+    expect(Object.keys(sort)).toEqual(['exact_title_priority', 'hls_priority', 'play_count', 'created_at', '_id'])
+    expect(JSON.stringify(pipeline)).toContain('title_normalized')
+    expect(pipeline[0]).toEqual({ $match: { $text: { $search: '"thang nam"' } } })
+    expect(pipeline.findIndex((stage: any) => stage.$sort)).toBeLessThan(
+      pipeline.findIndex((stage: any) => stage.$limit)
+    )
+  })
+
+  it('prioritizes karaoke title matches before HLS and play count when searching karaoke', async () => {
+    const aggregate = jest.fn().mockReturnValue({ toArray: jest.fn().mockResolvedValue([]) })
+    jest.spyOn(databaseService, 'songs', 'get').mockReturnValue({ aggregate } as any)
+    await songService.searchSongs('chạm khẽ tim anh một chút thôi karaoke', 1)
+    const pipeline = aggregate.mock.calls[0][0]
+    const sort = pipeline.find((stage: any) => stage.$sort)?.$sort
+    expect(Object.keys(sort)).toEqual([
+      'karaoke_priority',
+      'exact_title_priority',
+      'hls_priority',
+      'play_count',
+      'created_at',
+      '_id'
+    ])
+    expect(JSON.stringify(pipeline)).toContain('karaoke_priority')
+    expect(pipeline.findIndex((stage: any) => stage.$sort)).toBeLessThan(
+      pipeline.findIndex((stage: any) => stage.$limit)
+    )
+  })
+
+  it('ranks ready HLS matches ahead of popular non-HLS matches before limiting text search', async () => {
+    const aggregate = jest.fn().mockReturnValue({
+      toArray: jest
+        .fn()
+        .mockResolvedValue([
+          { ...song('hls'), hls_url: 'https://media.example/master.m3u8', media_status: 'ready', play_count: 1 }
+        ])
+    })
+    jest.spyOn(databaseService, 'songs', 'get').mockReturnValue({ aggregate } as any)
+    const result = await songService.searchSongs('test song', 1)
+    expect(result.map((item) => item.video_id)).toEqual(['hls'])
+    const pipeline = aggregate.mock.calls[0][0]
+    expect(pipeline[0]).toEqual({ $match: { $text: { $search: '"test"' } } })
+    expect(pipeline.findIndex((stage: any) => stage.$sort)).toBeLessThan(
+      pipeline.findIndex((stage: any) => stage.$limit)
+    )
+    expect(pipeline.find((stage: any) => stage.$sort)).toEqual({
+      $sort: { exact_title_priority: -1, hls_priority: -1, play_count: -1, created_at: -1, _id: 1 }
+    })
+    expect(pipeline.find((stage: any) => stage.$limit)).toEqual({ $limit: 1 })
+    expect(JSON.stringify(pipeline)).toContain('media_status')
+    expect(JSON.stringify(pipeline)).toContain('hls_url')
+  })
+
+  it('uses the same HLS-first order on regex fallback', async () => {
+    const aggregate = jest
+      .fn()
+      .mockReturnValueOnce({ toArray: jest.fn().mockResolvedValue([]) })
+      .mockReturnValueOnce({
+        toArray: jest
+          .fn()
+          .mockResolvedValue([{ ...song('hls'), hls_url: 'https://media.example/master.m3u8', media_status: 'ready' }])
+      })
+    jest.spyOn(databaseService, 'songs', 'get').mockReturnValue({ aggregate } as any)
+    expect((await songService.searchSongs('test song', 1)).map((s) => s.video_id)).toEqual(['hls'])
+    const pipeline = aggregate.mock.calls[1][0]
+    expect(pipeline[0].$match).toBeDefined()
+    expect(pipeline.find((stage: any) => stage.$sort)).toEqual({
+      $sort: { exact_title_priority: -1, hls_priority: -1, play_count: -1, created_at: -1, _id: 1 }
+    })
+    expect(pipeline.find((stage: any) => stage.$limit)).toEqual({ $limit: 1 })
+  })
+
   it('preserves Mongo popularity order even when a lower-play song has a better match score', async () => {
     const songs = [
       { ...song('popular'), title: 'Test song karaoke version', play_count: 15 },
       { ...song('more-relevant'), play_count: 1 }
     ]
-    const cursor = { sort: jest.fn(), limit: jest.fn(), toArray: jest.fn().mockResolvedValue(songs) }
-    cursor.sort.mockReturnValue(cursor)
-    cursor.limit.mockReturnValue(cursor)
-    jest.spyOn(databaseService, 'songs', 'get').mockReturnValue({ find: jest.fn().mockReturnValue(cursor) } as any)
+    const aggregate = jest.fn().mockReturnValue({ toArray: jest.fn().mockResolvedValue(songs) })
+    jest.spyOn(databaseService, 'songs', 'get').mockReturnValue({ aggregate } as any)
     const result = await songService.searchSongs('test song', 2)
     expect(result.map((item) => item.video_id)).toEqual(['popular', 'more-relevant'])
-    expect(cursor.sort).toHaveBeenCalledWith({ play_count: -1, created_at: -1, _id: 1 })
-    expect(cursor.limit).toHaveBeenCalledWith(2)
+    expect(aggregate.mock.calls[0][0]).toContainEqual({ $limit: 2 })
   })
 
   it('takes popular matches first before limiting the text search result', async () => {
@@ -41,14 +115,11 @@ describe('song popularity', () => {
       { ...song('older-popular'), play_count: 5 },
       { ...song('newer'), play_count: 0 }
     ]
-    const cursor = { sort: jest.fn(), limit: jest.fn(), toArray: jest.fn().mockResolvedValue(songs.slice(0, 1)) }
-    cursor.sort.mockReturnValue(cursor)
-    cursor.limit.mockReturnValue(cursor)
-    jest.spyOn(databaseService, 'songs', 'get').mockReturnValue({ find: jest.fn().mockReturnValue(cursor) } as any)
+    const aggregate = jest.fn().mockReturnValue({ toArray: jest.fn().mockResolvedValue(songs.slice(0, 1)) })
+    jest.spyOn(databaseService, 'songs', 'get').mockReturnValue({ aggregate } as any)
     const result = await songService.searchSongs('test song', 1)
     expect(result.map((item) => item.video_id)).toEqual(['older-popular'])
-    expect(cursor.sort).toHaveBeenCalledWith({ play_count: -1, created_at: -1, _id: 1 })
-    expect(cursor.limit).toHaveBeenCalledWith(1)
+    expect(aggregate.mock.calls[0][0]).toContainEqual({ $limit: 1 })
   })
 
   it('sorts regex fallback by Mongo play count before limiting, without JS re-ranking', async () => {
@@ -56,26 +127,15 @@ describe('song popularity', () => {
       { ...song('popular'), title: 'Test song karaoke', play_count: 10 },
       { ...song('relevant'), play_count: 2 }
     ]
-    const textCursor = { sort: jest.fn(), limit: jest.fn(), toArray: jest.fn().mockResolvedValue([]) }
-    textCursor.sort.mockReturnValue(textCursor)
-    textCursor.limit.mockReturnValue(textCursor)
-    const regexCursor = {
-      collation: jest.fn(),
-      sort: jest.fn(),
-      limit: jest.fn(),
-      toArray: jest.fn().mockResolvedValue(songs)
-    }
-    regexCursor.collation.mockReturnValue(regexCursor)
-    regexCursor.sort.mockReturnValue(regexCursor)
-    regexCursor.limit.mockReturnValue(regexCursor)
-    jest.spyOn(databaseService, 'songs', 'get').mockReturnValue({
-      find: jest.fn().mockReturnValueOnce(textCursor).mockReturnValueOnce(regexCursor)
-    } as any)
+    const aggregate = jest
+      .fn()
+      .mockReturnValueOnce({ toArray: jest.fn().mockResolvedValue([]) })
+      .mockReturnValueOnce({ toArray: jest.fn().mockResolvedValue(songs) })
+    jest.spyOn(databaseService, 'songs', 'get').mockReturnValue({ aggregate } as any)
 
     const result = await songService.searchSongs('test song', 2)
     expect(result.map((item) => item.video_id)).toEqual(['popular', 'relevant'])
-    expect(regexCursor.sort).toHaveBeenCalledWith({ play_count: -1, created_at: -1, _id: 1 })
-    expect(regexCursor.limit).toHaveBeenCalledWith(2)
+    expect(aggregate.mock.calls[1][0]).toContainEqual({ $limit: 2 })
   })
 
   it('increments an existing song atomically without creating a document or changing updated_at', async () => {

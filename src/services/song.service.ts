@@ -1,9 +1,10 @@
-import { FindOneAndUpdateOptions, WithId } from 'mongodb'
+import { Document, FindOneAndUpdateOptions, WithId } from 'mongodb'
 import { Song, SongSchema } from '~/models/schemas/Song.schema'
 import databaseService from './database.service'
 import { SongPruneAbortedError } from '~/errors/SongPruneAbortedError'
 import { probeYoutubeVideoPresence } from './video.service'
 import { Logger } from '~/utils/logger'
+import { normalizedSongQuery, songTitlePattern } from './songTitleMatch'
 
 export type SongPruneProgressPayload = {
   total: number
@@ -41,7 +42,6 @@ class SongService {
     'goc',
     'chuan',
     'tone',
-    'nam',
     'nu',
     'cover',
     'nhac'
@@ -287,46 +287,93 @@ class SongService {
     const informativeTokens = tokens.filter((t) => !this.stopwords.has(t) && t.length >= 2)
     const effectiveTokens = informativeTokens.length > 0 ? informativeTokens : tokens
     const regexTokens = effectiveTokens.map((t) => new RegExp(t.replace(this.regexSpecialChars, '\\$&'), 'i'))
+    const karaokeIntent = /\bkaraoke\b/i.test(clean)
+    const exactPhrase = normalizedSongQuery(clean)
+    const rawPhrase = clean
+      .replace(/\b(?:music|karaoke|official|mv)\b/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+    const exactTitlePriority = {
+      $cond: [
+        {
+          $or: [
+            {
+              $regexMatch: {
+                input: { $ifNull: ['$title_normalized', ''] },
+                regex: songTitlePattern(exactPhrase),
+                options: 'i'
+              }
+            },
+            {
+              $regexMatch: {
+                input: { $ifNull: ['$title', ''] },
+                regex: songTitlePattern(rawPhrase),
+                options: 'i'
+              }
+            }
+          ]
+        },
+        1,
+        0
+      ]
+    }
+
+    // Rank trong MongoDB trước limit: chỉ media ready có URL HLS mới được ưu tiên.
+    const rankingStages: Document[] = [
+      {
+        $addFields: {
+          ...(karaokeIntent
+            ? {
+                karaoke_priority: {
+                  $cond: [
+                    { $regexMatch: { input: { $ifNull: ['$title', ''] }, regex: '\\bkaraoke\\b', options: 'i' } },
+                    1,
+                    0
+                  ]
+                }
+              }
+            : {}),
+          exact_title_priority: exactPhrase ? exactTitlePriority : 0,
+          hls_priority: {
+            $cond: [
+              {
+                $and: [
+                  { $eq: ['$media_status', 'ready'] },
+                  { $eq: [{ $type: '$hls_url' }, 'string'] },
+                  { $ne: ['$hls_url', ''] }
+                ]
+              },
+              1,
+              0
+            ]
+          }
+        }
+      },
+      {
+        $sort: {
+          ...(karaokeIntent ? { karaoke_priority: -1 } : {}),
+          exact_title_priority: -1,
+          hls_priority: -1,
+          play_count: -1,
+          created_at: -1,
+          _id: 1
+        }
+      },
+      { $limit: limit },
+      { $project: { exact_title_priority: 0, hls_priority: 0, karaoke_priority: 0 } }
+    ]
 
     // Ưu tiên text index nếu có, fallback regex/normalized
     try {
-      // Search dạng phrase để ưu tiên cụm chính xác
       const phrase = `"${(informativeTokens.length > 0 ? informativeTokens : tokens).join(' ')}"`
-
-      const textCursor = databaseService.songs
-        .find(
-          {
-            $text: { $search: phrase }
-          },
-          {
-            projection: {
-              score: { $meta: 'textScore' },
-              video_id: 1,
-              title: 1,
-              author: 1,
-              duration: 1,
-              url: 1,
-              thumbnail: 1,
-              play_count: 1,
-              last_played_at: 1,
-              created_at: 1,
-              updated_at: 1
-            }
-          }
-        )
-        .sort({ play_count: -1, created_at: -1, _id: 1 })
-        .limit(limit)
-
-      const textSongs = await textCursor.toArray()
+      const textSongs = await databaseService.songs
+        .aggregate<Song>([{ $match: { $text: { $search: phrase } } }, ...rankingStages])
+        .toArray()
       if (textSongs.length > 0) {
-        // Tính điểm và sắp xếp theo match_score giảm dần để ưu tiên phrase match
-        const scoredSongs = textSongs.map((song) => {
+        return textSongs.map((song) => {
           const scored = this.computeMatchScore(keyword, song.title, song.author)
-          return { ...(song as Song), match_score: scored.match_score, is_phrase_match: scored.is_phrase_match }
+          return { ...song, match_score: scored.match_score, is_phrase_match: scored.is_phrase_match }
         })
-
-        // MongoDB đã xếp theo số lượt phát trên toàn bộ kết quả khớp, trước limit.
-        return scoredSongs
       }
     } catch (error) {
       this.logger.warn?.('Text search failed, fallback to regex', error)
@@ -355,13 +402,9 @@ class SongService {
             }))
           }
 
-    const cursor = databaseService.songs
-      .find(query)
-      .collation({ locale: 'en', strength: 1 })
-      .sort({ play_count: -1, created_at: -1, _id: 1 })
-      .limit(limit)
-
-    const songs = await cursor.toArray()
+    const songs = await databaseService.songs
+      .aggregate<Song>([{ $match: query }, ...rankingStages], { collation: { locale: 'en', strength: 1 } })
+      .toArray()
 
     // Chấm điểm để giữ metadata cho API; không xếp lại sau kết quả MongoDB.
     return songs.map((song) => {
