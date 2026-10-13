@@ -11,7 +11,7 @@ jest.mock('~/services/redis.service', () => ({
 }))
 jest.mock('~/services/database.service', () => ({
   __esModule: true,
-  default: { rooms: { findOne: jest.fn() } }
+  default: { rooms: { findOne: jest.fn() }, roomSchedule: { findOne: jest.fn() } }
 }))
 jest.mock('~/services/fnbOrder.service', () => ({
   __esModule: true,
@@ -42,6 +42,13 @@ const fnbSalesMovementServiceMock = jest.requireMock('~/services/fnbSalesMovemen
 describe('RoomServices.solveOrder FNB consistency', () => {
   beforeEach(() => {
     jest.clearAllMocks()
+    const db = jest.requireMock('~/services/database.service').default
+    db.rooms.findOne.mockResolvedValue({ _id: '507f1f77bcf86cd799439013', roomId: 1 })
+    db.roomSchedule.findOne.mockResolvedValue({
+      roomId: '507f1f77bcf86cd799439013',
+      status: 'in-progress',
+      endTime: null
+    })
     redisMock.exists.mockResolvedValue(1)
     redisMock.del.mockResolvedValue(1)
     fnbOrderServiceMock.upsertFnbOrder.mockResolvedValue({ _id: 'saved-order' })
@@ -93,13 +100,15 @@ describe('RoomServices.solveOrder FNB consistency', () => {
       '507f1f77bcf86cd799439011',
       expect.objectContaining({ lines: [expect.objectContaining({ quantity: 2 })] }),
       'staff-1',
-      'add'
+      'add',
+      'notification-2'
     )
     expect(fnbSalesMovementServiceMock.logDeltas).toHaveBeenCalledWith(
       [{ itemId: '507f1f77bcf86cd799439012', delta: 2 }],
       'karaoke',
       '507f1f77bcf86cd799439011',
-      'staff-1'
+      'staff-1',
+      'notification-2'
     )
     expect(redisMock.del).toHaveBeenCalledWith('room_1_new_order_order-2')
     expect(fnbOrderServiceMock.upsertFnbOrder.mock.invocationCallOrder[0]).toBeLessThan(
@@ -135,6 +144,69 @@ describe('RoomServices.solveOrder FNB consistency', () => {
     await expect(roomServices.solveOrder('1', 'order-3', 'staff-1')).rejects.toThrow('bill write failed')
 
     expect(fnbSalesMovementServiceMock.logDeltas).not.toHaveBeenCalled()
+    expect(redisMock.del).not.toHaveBeenCalled()
+  })
+
+  const pending = () =>
+    JSON.stringify({
+      notificationId: 'stable-id',
+      orderData: {
+        roomScheduleId: '507f1f77bcf86cd799439011',
+        itemDeltas: [{ itemId: '507f1f77bcf86cd799439012', delta: 2 }],
+        cart: { lines: [{ lineId: 'line', itemId: '507f1f77bcf86cd799439012', category: 'drink', quantity: 2 }] }
+      }
+    })
+
+  it('keeps pending notification on a null canonical write', async () => {
+    redisMock.get.mockResolvedValue(pending())
+    fnbOrderServiceMock.upsertFnbOrder.mockResolvedValue(null)
+    await expect(roomServices.solveOrder('1', 'alias', 'staff')).rejects.toMatchObject({ status: 409 })
+    expect(redisMock.del).not.toHaveBeenCalled()
+    expect(fnbSalesMovementServiceMock.logDeltas).not.toHaveBeenCalled()
+  })
+
+  it('retries with the same durable reference after movement failure', async () => {
+    redisMock.get.mockResolvedValue(pending())
+    fnbSalesMovementServiceMock.logDeltas.mockRejectedValueOnce(new Error('movement failed'))
+    await expect(roomServices.solveOrder('1', 'alias', 'staff')).rejects.toThrow('movement failed')
+    expect(redisMock.del).not.toHaveBeenCalled()
+    await roomServices.solveOrder('1', 'stable-id', 'staff')
+    expect(fnbOrderServiceMock.upsertFnbOrder.mock.calls.map((call) => call[4])).toEqual(['stable-id', 'stable-id'])
+    expect(fnbSalesMovementServiceMock.logDeltas.mock.calls.map((call) => call[4])).toEqual(['stable-id', 'stable-id'])
+    expect(redisMock.del).toHaveBeenCalledTimes(1)
+  })
+
+  it('allows serving an in-use schedule past its planned endTime', async () => {
+    redisMock.get.mockResolvedValue(pending())
+    jest.requireMock('~/services/database.service').default.roomSchedule.findOne.mockResolvedValue({
+      roomId: '507f1f77bcf86cd799439013',
+      status: 'in use',
+      endTime: new Date(Date.now() - 3600000)
+    })
+    await expect(roomServices.solveOrder('1', 'alias', 'staff')).resolves.toMatchObject({ itemCount: 1 })
+    expect(fnbOrderServiceMock.upsertFnbOrder).toHaveBeenCalledTimes(1)
+  })
+
+  it('allows an unfinished booked schedule with a planned future endTime', async () => {
+    redisMock.get.mockResolvedValue(pending())
+    jest.requireMock('~/services/database.service').default.roomSchedule.findOne.mockResolvedValue({
+      roomId: '507f1f77bcf86cd799439013',
+      status: 'booked',
+      endTime: new Date(Date.now() + 3600000)
+    })
+    await expect(roomServices.solveOrder('1', 'alias', 'staff')).resolves.toMatchObject({ itemCount: 1 })
+  })
+
+  it.each([
+    null,
+    { roomId: 'other-room', status: 'in-progress' },
+    { roomId: '507f1f77bcf86cd799439013', status: 'finished' },
+    { roomId: '507f1f77bcf86cd799439013', status: 'in-progress', endTime: new Date() }
+  ])('rejects missing, moved or finished schedules without mutation: %p', async (schedule) => {
+    redisMock.get.mockResolvedValue(pending())
+    jest.requireMock('~/services/database.service').default.roomSchedule.findOne.mockResolvedValue(schedule)
+    await expect(roomServices.solveOrder('1', 'alias', 'staff')).rejects.toMatchObject({ status: 409 })
+    expect(fnbOrderServiceMock.upsertFnbOrder).not.toHaveBeenCalled()
     expect(redisMock.del).not.toHaveBeenCalled()
   })
 })

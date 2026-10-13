@@ -33,6 +33,55 @@ type FnbSalesStatsResult = {
   itemsBreakdown: Array<{ itemId: string; name: string; category: 'drink' | 'snack'; quantity: number }>
 }
 
+/** Compare every raw field (including extra fields), without BSON document key-order equality.
+ * JS reorders integer-like keys on decode; normalizing the snapshot would also lose legacy fields.
+ * $cond guards object/array operators against a concurrently changed type.
+ */
+function rawOrderSnapshotMatches(value: unknown, expression: unknown): unknown {
+  if (Array.isArray(value)) {
+    return {
+      $cond: [
+        { $isArray: expression },
+        {
+          $and: [
+            { $eq: [{ $size: expression }, value.length] },
+            ...value.map((entry, index) => rawOrderSnapshotMatches(entry, { $arrayElemAt: [expression, index] }))
+          ]
+        },
+        false
+      ]
+    }
+  }
+  if (value !== null && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) {
+    const entries = Object.entries(value)
+    return {
+      $cond: [
+        { $eq: [{ $type: expression }, 'object'] },
+        {
+          $and: [
+            // Same field set, not just matching the known menu fields.
+            {
+              $setEquals: [
+                { $map: { input: { $objectToArray: expression }, as: 'field', in: '$$field.k' } },
+                { $literal: entries.map(([key]) => key) }
+              ]
+            },
+            ...entries.map(([key, entry]) =>
+              rawOrderSnapshotMatches(entry, {
+                $getField: { field: { $literal: key }, input: expression }
+              })
+            )
+          ]
+        },
+        false
+      ]
+    }
+  }
+  return {
+    $and: [{ $ne: [{ $type: expression }, 'missing'] }, { $eq: [expression, { $literal: value }] }]
+  }
+}
+
 class FnbOrderService {
   private initialized = false
   private readonly cacheService = new CacheService()
@@ -58,18 +107,8 @@ class FnbOrderService {
     try {
       console.log('=== ENSURING UNIQUE INDEX ===')
 
-      // Bước 1: Cleanup duplicate orders trước
-      await this.cleanupDuplicateOrders()
-
-      // Bước 2: Xóa index cũ nếu có để tạo lại
-      try {
-        await databaseService.fnbOrder.dropIndex('unique_roomScheduleId')
-        console.log('Dropped existing unique index')
-      } catch (dropError) {
-        console.log('No existing index to drop:', dropError)
-      }
-
-      // Bước 3: Tạo unique index mới
+      // Never drop the uniqueness guard or delete orders during request initialization.
+      // Existing duplicates require an explicitly reviewed migration; fail closed here.
       await databaseService.fnbOrder.createIndex({ roomScheduleId: 1 }, { unique: true, name: 'unique_roomScheduleId' })
       console.log('Unique index on roomScheduleId created successfully')
 
@@ -229,7 +268,8 @@ class FnbOrderService {
 
     const result = await this.computeFnbSalesStats(period, dateStr, category, search)
 
-    const ttl = result.period.to.getTime() < Date.now() ? FNB_STATS_CLOSED_PERIOD_TTL_SEC : FNB_STATS_CURRENT_PERIOD_TTL_SEC
+    const ttl =
+      result.period.to.getTime() < Date.now() ? FNB_STATS_CLOSED_PERIOD_TTL_SEC : FNB_STATS_CURRENT_PERIOD_TTL_SEC
     await this.cacheService.setex(cacheKey, ttl, JSON.stringify(result))
 
     return result
@@ -350,7 +390,10 @@ class FnbOrderService {
 
     const [menuItems, variantItems] = await Promise.all([
       databaseService.fnbMenu.find({ _id: { $in: objectIds } }).toArray(),
-      databaseService.getCollection('fnb_menu_item').find({ _id: { $in: objectIds } }).toArray()
+      databaseService
+        .getCollection('fnb_menu_item')
+        .find({ _id: { $in: objectIds } })
+        .toArray()
     ])
 
     const menuMap = new Map(menuItems.map((item) => [item._id!.toString(), item]))
@@ -366,9 +409,7 @@ class FnbOrderService {
 
     const parentMenus =
       parentIds.length > 0
-        ? await databaseService.fnbMenu
-            .find({ _id: { $in: parentIds.map((id) => new ObjectId(id)) } })
-            .toArray()
+        ? await databaseService.fnbMenu.find({ _id: { $in: parentIds.map((id) => new ObjectId(id)) } }).toArray()
         : []
     const parentMap = new Map(parentMenus.map((item) => [item._id!.toString(), item]))
 
@@ -475,93 +516,133 @@ class FnbOrderService {
     roomScheduleId: string,
     order: Partial<FNBOrder> & { drinks?: Record<string, number>; snacks?: Record<string, number>; lines?: unknown[] },
     user?: string,
-    mode: 'add' | 'remove' | 'set' = 'add'
+    mode: 'add' | 'remove' | 'set' = 'add',
+    orderRef?: string
   ): Promise<RoomScheduleFNBOrder | null> {
+    if (orderRef && mode !== 'add') throw new Error('orderRef is only supported for append')
     await this.initialize()
 
     const filter = { roomScheduleId: new ObjectId(roomScheduleId) }
-    const existingOrder = await databaseService.fnbOrder.findOne(filter)
-    const currentNorm = existingOrder?.order ? normalizeFnbOrder(existingOrder.order) : emptyFnbOrder()
+    // CAS works across instances and retries both existing writes and first-insert races.
+    for (let attempt = 0; attempt < 32; attempt++) {
+      const existingOrder = await databaseService.fnbOrder.findOne(filter)
+      if (orderRef && existingOrder?.appliedOrderIds?.includes(orderRef)) return existingOrder
+      const currentNorm = existingOrder?.order ? normalizeFnbOrder(existingOrder.order) : emptyFnbOrder()
 
-    let merged: FNBOrder
+      let merged: FNBOrder
 
-    if (mode === 'set') {
-      merged = orderFromSetPayload(order)
-    } else if (mode === 'add') {
-      const p = order as {
-        lines?: unknown[]
-        drinks?: Record<string, number>
-        snacks?: Record<string, number>
+      if (mode === 'set') {
+        merged = orderFromSetPayload(order)
+      } else if (mode === 'add') {
+        const p = order as {
+          lines?: unknown[]
+          drinks?: Record<string, number>
+          snacks?: Record<string, number>
+        }
+        let next = currentNorm
+        if (Array.isArray(p.lines) && p.lines.length > 0) {
+          next = appendCartLines(next, normalizeFnbOrder({ lines: p.lines })).mergedOrder
+        }
+        if (p.drinks && typeof p.drinks === 'object' && Object.keys(p.drinks).length > 0) {
+          next = applyLegacyMapDelta(next, p.drinks, undefined)
+        }
+        if (p.snacks && typeof p.snacks === 'object' && Object.keys(p.snacks).length > 0) {
+          next = applyLegacyMapDelta(next, undefined, p.snacks)
+        }
+        merged = next
+      } else {
+        const p = order as { drinks?: Record<string, number>; snacks?: Record<string, number> }
+        const negDrinks =
+          p.drinks && typeof p.drinks === 'object'
+            ? Object.fromEntries(Object.entries(p.drinks).map(([k, v]) => [k, -Math.abs(Math.floor(Number(v)))]))
+            : undefined
+        const negSnacks =
+          p.snacks && typeof p.snacks === 'object'
+            ? Object.fromEntries(Object.entries(p.snacks).map(([k, v]) => [k, -Math.abs(Math.floor(Number(v)))]))
+            : undefined
+        merged = applyLegacyMapDelta(currentNorm, negDrinks, negSnacks)
       }
-      let next = currentNorm
-      if (Array.isArray(p.lines) && p.lines.length > 0) {
-        next = appendCartLines(next, normalizeFnbOrder({ lines: p.lines })).mergedOrder
-      }
-      if (p.drinks && typeof p.drinks === 'object' && Object.keys(p.drinks).length > 0) {
-        next = applyLegacyMapDelta(next, p.drinks, undefined)
-      }
-      if (p.snacks && typeof p.snacks === 'object' && Object.keys(p.snacks).length > 0) {
-        next = applyLegacyMapDelta(next, undefined, p.snacks)
-      }
-      merged = next
-    } else {
-      const p = order as { drinks?: Record<string, number>; snacks?: Record<string, number> }
-      const negDrinks =
-        p.drinks && typeof p.drinks === 'object'
-          ? Object.fromEntries(
-              Object.entries(p.drinks).map(([k, v]) => [k, -Math.abs(Math.floor(Number(v)))])
-            )
-          : undefined
-      const negSnacks =
-        p.snacks && typeof p.snacks === 'object'
-          ? Object.fromEntries(
-              Object.entries(p.snacks).map(([k, v]) => [k, -Math.abs(Math.floor(Number(v)))])
-            )
-          : undefined
-      merged = applyLegacyMapDelta(currentNorm, negDrinks, negSnacks)
-    }
 
-    await fnbMenuItemService.assertActiveMenuItemsForOrderDelta(currentNorm, merged)
-    await assertOrderLinesMatchMenuCustomizations(merged)
+      await fnbMenuItemService.assertActiveMenuItemsForOrderDelta(currentNorm, merged)
+      await assertOrderLinesMatchMenuCustomizations(merged)
 
-    if (existingOrder) {
-      const validUpdate = {
-        $set: {
-          order: merged,
-          updatedAt: new Date(),
-          updatedBy: user || 'system'
-        },
-        $push: {
-          history: {
-            timestamp: new Date(),
+      if (existingOrder) {
+        // Legacy rows store appliedOrderIds as null. $addToSet rejects that type,
+        // so replace the whole array and CAS the previous value.
+        const hasAppliedOrderIds = Object.prototype.hasOwnProperty.call(existingOrder, 'appliedOrderIds')
+        const previousOrderIds = Array.isArray(existingOrder.appliedOrderIds) ? existingOrder.appliedOrderIds : []
+        const validUpdate = {
+          $set: {
+            order: merged,
+            updatedAt: new Date(),
             updatedBy: user || 'system',
-            changes: order
+            // Migrate null/missing revisions in this same guarded write ($inc cannot increment null).
+            revision: (existingOrder.revision ?? 0) + 1,
+            ...(orderRef ? { appliedOrderIds: [...new Set([...previousOrderIds, orderRef])] } : {})
+          },
+          $push: {
+            history: {
+              timestamp: new Date(),
+              updatedBy: user || 'system',
+              changes: order
+            }
           }
         }
+
+        const updatedOrder = await databaseService.fnbOrder.findOneAndUpdate(
+          {
+            ...filter,
+            _id: existingOrder._id,
+            revision: Object.prototype.hasOwnProperty.call(existingOrder, 'revision')
+              ? { $eq: existingOrder.revision, $exists: true }
+              : { $exists: false },
+            // Guard the raw contents, not a normalized/reserialized embedded document.
+            $expr: Object.prototype.hasOwnProperty.call(existingOrder, 'order')
+              ? rawOrderSnapshotMatches(existingOrder.order, '$order')
+              : { $eq: [{ $type: '$order' }, 'missing'] },
+            ...(orderRef
+              ? {
+                  appliedOrderIds: hasAppliedOrderIds
+                    ? existingOrder.appliedOrderIds === null
+                      ? { $type: 'null' }
+                      : { $eq: existingOrder.appliedOrderIds }
+                    : { $exists: false }
+                }
+              : {})
+          },
+          validUpdate,
+          {
+            returnDocument: 'after' as const
+          }
+        )
+
+        if (!updatedOrder) continue
+
+        const result = new RoomScheduleFNBOrder(
+          updatedOrder.roomScheduleId.toString(),
+          normalizeFnbOrder(updatedOrder.order),
+          updatedOrder.createdBy,
+          updatedOrder.updatedBy,
+          updatedOrder.history || []
+        )
+        result._id = updatedOrder._id
+
+        return result
       }
 
-      const updatedOrder = await databaseService.fnbOrder.findOneAndUpdate(filter, validUpdate, {
-        returnDocument: 'after' as const
-      })
-
-      if (!updatedOrder) return null
-
-      const result = new RoomScheduleFNBOrder(
-        updatedOrder.roomScheduleId.toString(),
-        normalizeFnbOrder(updatedOrder.order),
-        updatedOrder.createdBy,
-        updatedOrder.updatedBy,
-        updatedOrder.history || []
-      )
-      result._id = updatedOrder._id
-
-      return result
+      const newOrder = new RoomScheduleFNBOrder(roomScheduleId, merged, user, user)
+      newOrder.revision = 1
+      if (orderRef) newOrder.appliedOrderIds = [orderRef]
+      try {
+        const ins = await databaseService.fnbOrder.insertOne(newOrder)
+        newOrder._id = ins.insertedId
+        return newOrder
+      } catch (error) {
+        if ((error as { code?: number }).code !== 11000) throw error
+        // The unique roomScheduleId index selected a concurrent winner; rebase on it.
+      }
     }
-
-    const newOrder = new RoomScheduleFNBOrder(roomScheduleId, merged, user, user)
-    const ins = await databaseService.fnbOrder.insertOne(newOrder)
-    newOrder._id = ins.insertedId
-    return newOrder
+    throw new Error('FNB order changed too frequently; retry the request')
   }
 }
 

@@ -161,15 +161,46 @@ export interface AppendCartLinesResult {
   appendedLineIds: string[]
 }
 
+/** Gộp các dòng cùng món, không note/option, để bill và order hiển thị một dòng với quantity cộng dồn. */
+export function collapsePlainOrderLines(lines: FNBOrderLine[]): FNBOrderLine[] {
+  const collapsed: FNBOrderLine[] = []
+  const plainIndex = new Map<string, number>()
+  for (const line of lines) {
+    if (!isPlainLine(line)) {
+      collapsed.push(line)
+      continue
+    }
+    const key = `${line.category}:${line.itemId}`
+    const index = plainIndex.get(key)
+    if (index === undefined) {
+      plainIndex.set(key, collapsed.length)
+      collapsed.push({ ...line })
+      continue
+    }
+    collapsed[index] = { ...collapsed[index], quantity: collapsed[index].quantity + line.quantity }
+  }
+  return collapsed
+}
+
 export function appendCartLines(current: FNBOrder, cart: FNBOrder): AppendCartLinesResult {
   const base = [...current.lines]
   const appendedLineIds: string[] = []
   for (const line of cart.lines) {
     const sanitized = sanitizeLine({ ...line, lineId: newFnbLineId() })
-    if (sanitized) {
-      base.push(sanitized)
-      appendedLineIds.push(sanitized.lineId)
+    if (!sanitized) continue
+    if (isPlainLine(sanitized)) {
+      const index = base.findIndex(
+        (existing) =>
+          existing.itemId === sanitized.itemId && existing.category === sanitized.category && isPlainLine(existing)
+      )
+      if (index >= 0) {
+        base[index] = { ...base[index], quantity: base[index].quantity + sanitized.quantity }
+        appendedLineIds.push(base[index].lineId)
+        continue
+      }
     }
+    base.push(sanitized)
+    appendedLineIds.push(sanitized.lineId)
   }
   return { mergedOrder: { lines: base }, appendedLineIds }
 }

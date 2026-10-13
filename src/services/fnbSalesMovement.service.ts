@@ -1,3 +1,4 @@
+import { createHash } from 'crypto'
 import { ObjectId } from 'mongodb'
 import type { FnbSalesSource, IFnbSalesMovement } from '~/models/schemas/FnbSalesMovement.schema'
 import { getFnbBusinessDateRange } from '~/utils/fnbBusinessDate'
@@ -11,12 +12,52 @@ class FnbSalesMovementService {
     createdBy?: string,
     orderRef?: string
   ): Promise<void> {
-    // Retail sale dùng orderRef = idempotencyKey để retry không ghi movement trùng.
-    if (orderRef) {
-      const existing = await databaseService.fnbSalesMovements.findOne({ source, sourceId: new ObjectId(sourceId), orderRef })
-      if (existing) return
+    // A read-before-insert check is not a concurrency guard and cannot repair partial batches.
+    // Deterministic per-item IDs use MongoDB's built-in unique _id index instead.
+    if (orderRef && source === 'karaoke') {
+      const byItem = new Map<string, number>()
+      for (const row of deltas) {
+        const itemId = new ObjectId(row.itemId).toHexString()
+        byItem.set(itemId, (byItem.get(itemId) ?? 0) + row.delta)
+      }
+      const sourceObjectId = new ObjectId(sourceId)
+      for (const [itemId, delta] of byItem) {
+        if (delta === 0) continue
+        const _id =
+          'fnb-ref:' +
+          createHash('sha256')
+            .update(JSON.stringify([source, sourceObjectId.toHexString(), orderRef, itemId]))
+            .digest('hex')
+        const doc: IFnbSalesMovement = {
+          _id,
+          itemId: new ObjectId(itemId),
+          delta,
+          source,
+          sourceId: sourceObjectId,
+          orderRef,
+          createdBy,
+          createdAt: new Date()
+        }
+        try {
+          await databaseService.fnbSalesMovements.updateOne({ _id }, { $setOnInsert: doc }, { upsert: true })
+        } catch (error) {
+          if ((error as { code?: number }).code !== 11000) throw error
+          // Concurrent upsert won; verify this row exists before treating it as success.
+          if (!(await databaseService.fnbSalesMovements.findOne({ _id }))) throw error
+        }
+      }
+      return
     }
 
+    // Keep other sources' existing behavior unchanged.
+    if (orderRef) {
+      const existing = await databaseService.fnbSalesMovements.findOne({
+        source,
+        sourceId: new ObjectId(sourceId),
+        orderRef
+      })
+      if (existing) return
+    }
     const now = new Date()
     const docs: IFnbSalesMovement[] = deltas
       .filter((row) => row.delta !== 0)
@@ -43,7 +84,6 @@ class FnbSalesMovementService {
     }
     return result
   }
-
 
   private buildFnbItemsForStatsStages() {
     return [

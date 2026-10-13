@@ -73,11 +73,7 @@ export async function assertRoomNotInMaintenance(roomId: ObjectId | string): Pro
   }
 }
 
-export const emitScheduleChanged = (
-  action: ScheduleChangeAction,
-  schedule: RoomSchedule,
-  roomIndex?: string
-) => {
+export const emitScheduleChanged = (action: ScheduleChangeAction, schedule: RoomSchedule, roomIndex?: string) => {
   roomEventEmitter.emit('schedule_changed', {
     action,
     schedule: serializeScheduleForSocket(schedule),
@@ -325,7 +321,8 @@ class RoomServices {
       }))
 
     const servedAt = new Date()
-    const roomScheduleId = notification.orderData?.roomScheduleId || notification.orderData?.customerInfo?.roomScheduleId
+    const roomScheduleId =
+      notification.orderData?.roomScheduleId || notification.orderData?.customerInfo?.roomScheduleId
     if (!roomScheduleId) {
       throw new ErrorWithStatus({
         message: 'Order room schedule not found',
@@ -333,11 +330,37 @@ class RoomServices {
       })
     }
 
+    if (!ObjectId.isValid(roomScheduleId)) {
+      throw new ErrorWithStatus({ message: 'Invalid order room schedule', status: HTTP_STATUS_CODE.BAD_REQUEST })
+    }
+    const room = await databaseService.rooms.findOne(
+      ObjectId.isValid(roomId) ? { _id: new ObjectId(roomId) } : { roomId: Number(notificationRoomId) }
+    )
+    const schedule = await databaseService.roomSchedule.findOne({ _id: new ObjectId(roomScheduleId) })
+    if (
+      !room ||
+      !schedule ||
+      schedule.roomId.toString() !== room._id!.toString() ||
+      schedule.status === 'finished' ||
+      schedule.status === 'cancelled' ||
+      (schedule.status !== 'in use' && schedule.endTime != null && schedule.endTime.getTime() <= Date.now())
+    ) {
+      throw new ErrorWithStatus({
+        message: 'Order schedule no longer belongs to this room or has already ended',
+        status: HTTP_STATUS_CODE.CONFLICT
+      })
+    }
+
+    // Use the persisted notification identity, never the caller's potentially different alias.
+    const orderRef = notification.orderData?.orderId || notification.notificationId || notificationKey
     if (notification.orderData?.cart) {
       const cart = normalizeFnbOrder(notification.orderData.cart)
-      await fnbOrderService.upsertFnbOrder(roomScheduleId, cart, actorId, 'add')
+      const saved = await fnbOrderService.upsertFnbOrder(roomScheduleId, cart, actorId, 'add', orderRef)
+      if (!saved) {
+        throw new ErrorWithStatus({ message: 'Order was not persisted', status: HTTP_STATUS_CODE.CONFLICT })
+      }
       if (deltas.length > 0) {
-        await fnbSalesMovementService.logDeltas(deltas, 'karaoke', roomScheduleId, actorId)
+        await fnbSalesMovementService.logDeltas(deltas, 'karaoke', roomScheduleId, actorId, orderRef)
       }
     }
 

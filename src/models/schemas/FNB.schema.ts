@@ -34,6 +34,10 @@ export class RoomScheduleFNBOrder {
   createdBy?: string
   updatedBy?: string
   history: FNBOrderHistory[] // Thêm mảng history
+  /** Persisted CAS revision; absent on legacy documents. */
+  revision?: number
+  /** Notification IDs committed in the same write as their cart. */
+  appliedOrderIds?: string[]
 
   constructor(
     roomScheduleId: string,

@@ -13,7 +13,7 @@ import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { ErrorWithStatus } from '~/models/Error'
 import { IBill } from '~/models/schemas/Bill.schema'
 import { IBillPaymentMethodLog } from '~/models/schemas/BillPaymentMethodLog.schema'
-import { aggregateLinesToLegacyMaps, normalizeFnbOrder } from '~/utils/fnbOrderLines'
+import { aggregateLinesToLegacyMaps, collapsePlainOrderLines, normalizeFnbOrder } from '~/utils/fnbOrderLines'
 import {
   buildUserPhoneLookupFilter,
   isValidMemberEmail,
@@ -257,6 +257,15 @@ function pickBillTimeParam(v: unknown): string | undefined {
   if (typeof raw !== 'string') return undefined
   const t = raw.trim()
   return t === '' ? undefined : t
+}
+
+// Additive checkout input/output: retain the selected promotion identity, never
+// trust the client-supplied promotion percentage or financial snapshot.
+type CheckoutBillData = IBill & { promotionId?: string | ObjectId }
+
+function checkoutTimeParam(value: unknown): string | undefined {
+  if (value instanceof Date) return dayjs(value).isValid() ? value.toISOString() : 'Invalid Date'
+  return pickBillTimeParam(value)
 }
 
 export class BillService {
@@ -673,7 +682,7 @@ export class BillService {
     promotionId?: string,
     actualStartTime?: string | string[],
     customerPhone?: string
-  ): Promise<IBill> {
+  ): Promise<CheckoutBillData> {
     // Validate ObjectId format for scheduleId
     if (!ObjectId.isValid(scheduleId)) {
       throw new ErrorWithStatus({
@@ -1067,7 +1076,7 @@ export class BillService {
     // Thêm các mục F&B từ order vào items nếu có (từng dòng — có thể trùng món khác note/option)
     if (order && order.order) {
       const fnbNorm = normalizeFnbOrder(order.order)
-      for (const line of fnbNorm.lines) {
+      for (const line of collapsePlainOrderLines(fnbNorm.lines)) {
         const menuItem = await this.findMenuItemById(line.itemId, menu)
 
         if (menuItem) {
@@ -1238,7 +1247,7 @@ export class BillService {
       0
     )
 
-    const bill: IBill = {
+    const bill: CheckoutBillData = {
       scheduleId: schedule._id,
       roomId: schedule.roomId,
       roomType: effectiveRoomType,
@@ -1276,12 +1285,14 @@ export class BillService {
             appliesTo: activePromotion.appliesTo
           }
         : undefined,
+      promotionId: activePromotion ? effectivePromotionId : undefined,
       gift: scheduleGift
         ? {
             giftId: scheduleGift.giftId,
             name: scheduleGift.name,
             type: scheduleGift.type,
             discountPercentage: scheduleGift.discountPercentage,
+            discountAmount: scheduleGift.discountAmount,
             items: scheduleGift.items
           }
         : undefined,
@@ -1303,9 +1314,10 @@ export class BillService {
       fnbOrder: order
         ? (() => {
             const fnbNorm = normalizeFnbOrder(order.order)
-            const maps = aggregateLinesToLegacyMaps(fnbNorm)
+            const lines = collapsePlainOrderLines(fnbNorm.lines)
+            const maps = aggregateLinesToLegacyMaps({ lines })
             return {
-              lines: fnbNorm.lines,
+              lines,
               drinks: maps.drinks,
               snacks: maps.snacks,
               completedAt: (order as any).completedAt,
@@ -2220,7 +2232,7 @@ export class BillService {
    * @param billData Bill data cần lưu
    * @returns Bill đã lưu và kết quả tích điểm
    */
-  async saveBillWithMembership(billData: IBill): Promise<{
+  async saveBillWithMembership(billData: CheckoutBillData): Promise<{
     bill: IBill
     membership: {
       success: boolean
@@ -2266,12 +2278,6 @@ export class BillService {
       const schedule = await databaseService.roomSchedule.findOne({
         _id: new ObjectId(billData.scheduleId)
       })
-
-      const room = await databaseService.rooms.findOne({
-        _id: new ObjectId(billData.roomId)
-      })
-
-      const resolvedRoomType = billData.roomType ?? schedule?.roomType ?? room?.roomType
 
       // 4. Lấy phone_number từ bill hoặc schedule
       let customerPhone = billData.customerPhone
@@ -2320,68 +2326,41 @@ export class BillService {
         customerPhone = normalizeVietnamPhone(customerPhone) || customerPhone.trim()
       }
 
-      // Resolve membership again at the persistence boundary. The client may already
-      // send a discounted total, but the bill must retain the membership snapshot so
-      // GET /bill and revenue statistics can explain why the total was discounted.
-      let persistedMembership: IBill['membership'] | undefined
-      let persistedMembershipDiscountAmount: number | undefined
-      if (customerPhone) {
-        const resolvedMembership = await membershipService.resolveMembershipByPhone(customerPhone)
-        if (resolvedMembership.found && resolvedMembership.user) {
-          const tierDiscount = resolvedMembership.tierDiscount
-          const discountAmount = tierDiscount?.discountPercentage
-            ? undefined
-            : tierDiscount?.discountAmount && tierDiscount.discountAmount > 0
-              ? tierDiscount.discountAmount
-              : undefined
-          const billSubtotal = (billData.items || []).reduce((sum, item) => {
-            if (item.price <= 0 || item.isStreakGift) return sum
-            return sum + item.price * item.quantity
-          }, 0)
-          const discountPercentage =
-            tierDiscount?.discountPercentage && tierDiscount.discountPercentage > 0
-              ? tierDiscount.discountPercentage
-              : undefined
-          persistedMembershipDiscountAmount = discountPercentage
-            ? (billSubtotal * discountPercentage) / 100
-            : discountAmount
-          persistedMembership = {
-            found: true,
-            phone: resolvedMembership.phone,
-            userId: resolvedMembership.user.userId,
-            name: resolvedMembership.user.name,
-            tier: resolvedMembership.user.tier,
-            discountPercentage,
-            discountAmount,
-            note: tierDiscount?.note,
-            reason: tierDiscount ? undefined : 'Hạng chưa có quyền lợi discount trong config'
-          }
-        } else {
-          persistedMembership = {
-            found: false,
-            phone: resolvedMembership.phone,
-            reason: resolvedMembership.reason
-          }
-        }
+      // Recalculate at checkout, using only selection inputs from the request.
+      // Financial items, totals, benefits and FNB metadata come from getBill and
+      // persisted schedule/catalog/member state, never from the preview snapshot.
+      // Legacy clients may send startTime/endTime instead of actual*Time.
+      const now = new Date()
+      const canonicalBill = await this.getBill(
+        billData.scheduleId.toString(),
+        checkoutTimeParam(billData.actualEndTime) || checkoutTimeParam(billData.endTime) || now.toISOString(),
+        billData.paymentMethod,
+        billData.promotionId?.toString(),
+        checkoutTimeParam(billData.actualStartTime) ||
+          checkoutTimeParam(billData.startTime) ||
+          checkoutTimeParam(schedule?.startTime) ||
+          now.toISOString(),
+        customerPhone
+      )
+
+      // A notification may have arrived while pricing/member lookups were running.
+      if (await hasPendingFnbOrderForSchedule(billData.scheduleId)) {
+        throw new ErrorWithStatus({
+          message: 'Vẫn còn order FNB đang chờ xác nhận phục vụ. Vui lòng xử lý order trước khi chốt bill.',
+          status: HTTP_STATUS_CODE.CONFLICT
+        })
       }
 
-      // 5. Chuẩn bị bill để lưu
-      const now = new Date()
+      // Preserve invoice/payment/audit compatibility, without spreading any
+      // untrusted financial snapshot back over the canonical calculation.
       const billToSave = enrichBillItemsForRevenue({
-        ...billData,
+        ...canonicalBill,
         _id: billData._id ? new ObjectId(billData._id) : new ObjectId(),
-        scheduleId: new ObjectId(billData.scheduleId),
-        roomId: new ObjectId(billData.roomId),
-        roomType: resolvedRoomType,
+        invoiceCode: billData.invoiceCode,
         createdAt: billData.createdAt ? new Date(billData.createdAt) : now,
-        createdBy: billData.createdBy || schedule?.createdBy,
-        completedBy: billData.completedBy || billData.fnbOrder?.completedBy,
-        startTime: billData.startTime ? new Date(billData.startTime) : now,
-        endTime: billData.endTime ? new Date(billData.endTime) : now,
-        customerPhone: customerPhone || undefined,
-        paymentMethod: normalizePaymentMethod(billData.paymentMethod),
-        membership: persistedMembership || billData.membership,
-        membershipDiscountAmount: persistedMembershipDiscountAmount || billData.membershipDiscountAmount
+        createdBy: billData.createdBy || canonicalBill.createdBy,
+        completedBy: billData.completedBy || canonicalBill.fnbOrder?.completedBy,
+        note: billData.note ?? canonicalBill.note
       })
 
       // 6. Lưu bill và đóng sổ doanh thu (phòng / F&B) trong một transaction.
