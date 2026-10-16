@@ -18,7 +18,8 @@ import { IUser } from '~/models/schemas/User.schema'
 import { uploadImageToCloudinary } from '~/services/cloudinary.service'
 import CloudinaryResponse from '~/models/CloudinaryResponse'
 import membershipService from '~/services/membership.service'
-import { getClientUrl } from '~/utils/common'
+import { getClientUrl, isValidMemberEmail } from '~/utils/common'
+import { ErrorWithStatus } from '~/models/Error'
 /**
  * Register a new user
  * @description Register a new user using the native MongoDB driver
@@ -36,6 +37,12 @@ export const registerController = async (
     const { name, username, email, password, confirm_password, date_of_birth, role, phone_number } = req.body
 
     const normalizedEmail = email?.trim() || undefined
+    if (normalizedEmail && !isValidMemberEmail(normalizedEmail)) {
+      throw new ErrorWithStatus({
+        message: 'Email không đúng định dạng',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
+    }
 
     // Basic check: Ensure passwords match
     if (password !== confirm_password) {

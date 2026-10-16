@@ -9,6 +9,9 @@ import databaseService from './database.service'
 import { sendResetPasswordEmail, sendWelcomeEmail } from './email.service'
 import { upsertAccountFromUser, syncAccountFields } from './account-projection.service'
 import { ObjectId } from 'mongodb'
+import { ErrorWithStatus } from '~/models/Error'
+import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
+import { isValidMemberEmail } from '~/utils/common'
 
 class UsersServices {
   private signAccessToken(userId: string) {
@@ -31,6 +34,12 @@ class UsersServices {
 
   async register(payload: RegisterRequestBody) {
     const normalizedEmail = payload.email?.trim() || undefined
+    if (normalizedEmail && !isValidMemberEmail(normalizedEmail)) {
+      throw new ErrorWithStatus({
+        message: 'Email không đúng định dạng',
+        status: HTTP_STATUS_CODE.BAD_REQUEST
+      })
+    }
     const result = await databaseService.users.insertOne(
       new User({
         ...payload,
