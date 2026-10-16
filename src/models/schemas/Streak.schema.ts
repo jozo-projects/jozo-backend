@@ -7,8 +7,10 @@ export interface IStreak {
   /** Chu kỳ hiện tại. Chạm mốc streak cao nhất thì lần dùng dịch vụ sau mở chu kỳ mới và count về 1. */
   cycle?: number
   lastVisitAt: Date
+  /** Hạn reset = lastVisitAt + resetAfterDays (config). Quá hạn → count về 0. */
   expiredAt: Date
-  windowDays: number
+  /** Số ngày không đi trước khi reset (snapshot từ config.resetAfterDays). */
+  resetAfterDays: number
   createdAt?: Date
   updatedAt?: Date
 }
@@ -20,7 +22,7 @@ export class Streak {
   cycle: number
   lastVisitAt: Date
   expiredAt: Date
-  windowDays: number
+  resetAfterDays: number
   createdAt: Date
   updatedAt: Date
 
@@ -32,9 +34,8 @@ export class Streak {
     this.cycle = streak.cycle ?? 1
     this.lastVisitAt = streak.lastVisitAt ?? now
     this.expiredAt = streak.expiredAt ?? now
-    this.windowDays = streak.windowDays ?? 14
+    this.resetAfterDays = streak.resetAfterDays ?? 30
     this.createdAt = streak.createdAt ?? now
     this.updatedAt = streak.updatedAt ?? now
   }
 }
-

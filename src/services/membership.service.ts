@@ -99,10 +99,18 @@ class MembershipService {
       ...config,
       tierBenefits: this.normalizeTierBenefits(config?.tierBenefits),
       streak: config.streak
-        ? {
-            ...config.streak,
-            rewards: this.normalizeStreakRewards(config.streak.rewards as IStreakReward[])
-          }
+        ? (() => {
+            const { windowDays: _removedWindowDays, ...streakRest } = config.streak as {
+              windowDays?: number
+              resetAfterDays?: number
+              rewards?: IStreakReward[]
+            }
+            return {
+              ...streakRest,
+              resetAfterDays: this.resolveResetAfterDays(config.streak),
+              rewards: this.normalizeStreakRewards(config.streak.rewards as IStreakReward[])
+            }
+          })()
         : config.streak
     }
 
@@ -128,8 +136,21 @@ class MembershipService {
     const sanitizedPayload: Partial<IMembershipConfig> = { ...payload }
 
     if (payload.streak) {
+      const resetAfterDays =
+        payload.streak.resetAfterDays !== undefined
+          ? Number(payload.streak.resetAfterDays)
+          : this.resolveResetAfterDays(payload.streak)
+      if (!Number.isFinite(resetAfterDays) || resetAfterDays <= 0) {
+        throw new ErrorWithStatus({ message: 'resetAfterDays phải > 0', status: 400 })
+      }
+      const { windowDays: _removedWindowDays, ...streakWithoutWindowDays } = payload.streak as {
+        windowDays?: number
+        resetAfterDays?: number
+        rewards?: IStreakReward[]
+      }
       sanitizedPayload.streak = {
-        ...payload.streak,
+        ...streakWithoutWindowDays,
+        resetAfterDays,
         rewards: payload.streak.rewards
           ? this.normalizeStreakRewards(payload.streak.rewards as IStreakReward[], { strict: true })
           : payload.streak.rewards
@@ -420,9 +441,25 @@ class MembershipService {
     return streakRewards.reduce((max, reward) => Math.max(max, Number(reward.count) || 0), 0)
   }
 
+  /** Số ngày không đi thì streak reset về 0. Độc lập với mốc rewards. */
+  private resolveResetAfterDays(streakConfig?: { resetAfterDays?: number } | null): number {
+    const fromReset = Number(streakConfig?.resetAfterDays)
+    if (Number.isFinite(fromReset) && fromReset > 0) return fromReset
+    return 30
+  }
+
+  private streakExpiredAt(lastVisitAt: Date, resetAfterDays: number): Date {
+    return dayjs(lastVisitAt).add(resetAfterDays, 'day').toDate()
+  }
+
+  private isStreakWithinResetWindow(lastVisitAt: Date, resetAfterDays: number, now: Date): boolean {
+    return dayjs(now).valueOf() <= dayjs(this.streakExpiredAt(lastVisitAt, resetAfterDays)).valueOf()
+  }
+
   /**
-   * Trong cửa sổ: cộng 1. Đã chạm trần config thì lần sau về 1 và sang chu kỳ mới.
-   * Hết cửa sổ: về 1, giữ chu kỳ (trừ khi lần trước đã chạm trần — khi đó cũng sang chu kỳ mới).
+   * Trong hạn reset: cộng 1. Đã chạm trần config thì lần sau về 1 và sang chu kỳ mới.
+   * Quá hạn (đã về 0 hoặc lần đi đầu sau khi hết hạn): về 1, giữ chu kỳ
+   * (trừ khi lần trước đã chạm trần — khi đó cũng sang chu kỳ mới).
    */
   private nextStreakState(
     current: { count?: number; cycle?: number } | null,
@@ -498,16 +535,18 @@ class MembershipService {
     return latestUser
   }
 
-  private async updateStreak(userId: ObjectId, visitAt: Date, windowDays: number, streakRewards: IStreakReward[]) {
+  private async updateStreak(userId: ObjectId, visitAt: Date, resetAfterDays: number, streakRewards: IStreakReward[]) {
     const rewards = this.normalizeStreakRewards(streakRewards)
     const maxCount = this.maxStreakCount(rewards)
     const now = visitAt
     const current = (await databaseService.streaks.findOne({ userId })) as unknown as Streak | null
-    const withinWindow = current ? dayjs(now).valueOf() <= dayjs(current.expiredAt).valueOf() : false
+    const withinWindow = current
+      ? this.isStreakWithinResetWindow(current.lastVisitAt, resetAfterDays, now)
+      : false
     const next = this.nextStreakState(current, withinWindow, maxCount)
     const nextCount = next.count
     const cycle = next.cycle
-    const expiredAt = dayjs(now).add(windowDays, 'day').toDate()
+    const expiredAt = this.streakExpiredAt(now, resetAfterDays)
 
     if (current) {
       await databaseService.streaks.updateOne(
@@ -518,9 +557,10 @@ class MembershipService {
             cycle,
             lastVisitAt: now,
             expiredAt,
-            windowDays,
+            resetAfterDays,
             updatedAt: new Date()
-          }
+          },
+          $unset: { windowDays: '' }
         }
       )
     } else {
@@ -530,7 +570,7 @@ class MembershipService {
         cycle: 1,
         lastVisitAt: now,
         expiredAt,
-        windowDays
+        resetAfterDays
       })
       await databaseService.streaks.insertOne(newStreak)
     }
@@ -692,9 +732,9 @@ class MembershipService {
     await this.addRewardHistory(options.userId, Math.max(points, 0), options.source || RewardSource.Point, options.meta)
 
     if (user) {
-      const windowDays = config.streak?.windowDays ?? 14
+      const resetAfterDays = this.resolveResetAfterDays(config.streak)
       const streakRewards = config.streak?.rewards ?? []
-      await this.updateStreak(options.userId, options.visitAt ?? new Date(), windowDays, streakRewards)
+      await this.updateStreak(options.userId, options.visitAt ?? new Date(), resetAfterDays, streakRewards)
     }
 
     return user
@@ -849,22 +889,50 @@ class MembershipService {
     const tierThresholds = config.tierThresholds || {}
     const nextTier = this.getNextTierInfo(user.lifetimePoint || 0, tierThresholds)
 
+    const resetAfterDays = this.resolveResetAfterDays(config.streak)
     const streak = (await databaseService.streaks.findOne({ userId: userObjectId })) as Streak | null
-    const streakInfo = streak
-      ? {
-          count: streak.count ?? 0,
-          cycle: streak.cycle ?? 1,
-          lastVisitAt: streak.lastVisitAt,
-          expiredAt: streak.expiredAt,
-          windowDays: streak.windowDays,
-          isActive: dayjs().valueOf() <= dayjs(streak.expiredAt).valueOf()
-        }
-      : {
-          count: 0,
-          cycle: 1,
-          windowDays: config.streak?.windowDays ?? 14,
-          isActive: false
-        }
+    let streakInfo: {
+      count: number
+      cycle: number
+      lastVisitAt?: Date
+      expiredAt?: Date
+      resetAfterDays: number
+      isActive: boolean
+      isExpired?: boolean
+    }
+
+    if (streak) {
+      const expiredAt = this.streakExpiredAt(streak.lastVisitAt, resetAfterDays)
+      const isActive = this.isStreakWithinResetWindow(streak.lastVisitAt, resetAfterDays, new Date())
+      let count = streak.count ?? 0
+      if (!isActive && count > 0) {
+        count = 0
+        await databaseService.streaks.updateOne(
+          { _id: streak._id },
+          {
+            $set: { count: 0, expiredAt, resetAfterDays, updatedAt: new Date() },
+            $unset: { windowDays: '' }
+          }
+        )
+      }
+      streakInfo = {
+        count,
+        cycle: streak.cycle ?? 1,
+        lastVisitAt: streak.lastVisitAt,
+        expiredAt,
+        resetAfterDays,
+        isActive,
+        isExpired: !isActive
+      }
+    } else {
+      streakInfo = {
+        count: 0,
+        cycle: 1,
+        resetAfterDays,
+        isActive: false,
+        isExpired: true
+      }
+    }
 
     // Query tất cả streak rewards
     const allRewardsFromHistory = await databaseService.rewardHistories
@@ -1133,7 +1201,9 @@ class MembershipService {
 
   async getStreak(userId: string) {
     const userObjectId = new ObjectId(userId)
-    const streak = (await databaseService.streaks.findOne({ userId: userObjectId })) as unknown as Streak | null
+    const config = await this.loadConfig()
+    const resetAfterDays = this.resolveResetAfterDays(config.streak)
+    let streak = (await databaseService.streaks.findOne({ userId: userObjectId })) as unknown as Streak | null
 
     // Query tất cả streak rewards đã claimed
     const claimedRewardsFromHistory = await databaseService.rewardHistories
@@ -1208,13 +1278,28 @@ class MembershipService {
     }
 
     const now = new Date()
-    const isExpired = dayjs(now).valueOf() > dayjs(streak.expiredAt).valueOf()
+    const expiredAt = this.streakExpiredAt(streak.lastVisitAt, resetAfterDays)
+    const isActive = this.isStreakWithinResetWindow(streak.lastVisitAt, resetAfterDays, now)
+    const isExpired = !isActive
+
+    if (isExpired && (streak.count ?? 0) > 0) {
+      await databaseService.streaks.updateOne(
+        { _id: streak._id },
+        {
+          $set: { count: 0, expiredAt, resetAfterDays, updatedAt: new Date() },
+          $unset: { windowDays: '' }
+        }
+      )
+      streak = { ...streak, count: 0, expiredAt, resetAfterDays }
+    }
 
     return {
       streak: {
         ...streak,
+        expiredAt,
+        resetAfterDays,
         isExpired,
-        isActive: !isExpired
+        isActive
       },
       claimedRewards
     }
@@ -1234,7 +1319,7 @@ class MembershipService {
     }
 
     const config = await this.loadConfig()
-    const defaultWindowDays = config.streak?.windowDays ?? 14
+    const resetAfterDays = this.resolveResetAfterDays(config.streak)
 
     if (payload.reset) {
       await databaseService.streaks.deleteOne({ userId: userObjectId })
@@ -1255,14 +1340,14 @@ class MembershipService {
 
     if (!current) {
       const newCount = payload.count !== undefined ? Math.max(0, payload.count) : 0
-      const newExpiredAt = dayjs(now).add(defaultWindowDays, 'day').toDate()
+      const newExpiredAt = this.streakExpiredAt(now, resetAfterDays)
 
       const newStreak = new Streak({
         userId: userObjectId,
         count: newCount,
         lastVisitAt: now,
         expiredAt: newExpiredAt,
-        windowDays: defaultWindowDays
+        resetAfterDays
       })
 
       await databaseService.streaks.insertOne(newStreak)
@@ -1512,8 +1597,28 @@ class MembershipService {
 
     const userObjectId = user._id
     const config = await this.loadConfig()
+    const resetAfterDays = this.resolveResetAfterDays(config.streak)
     const streak = (await databaseService.streaks.findOne({ userId: userObjectId })) as unknown as Streak | null
-    const currentCount = streak?.count || 0
+    const now = new Date()
+    const streakIsActive = streak
+      ? this.isStreakWithinResetWindow(streak.lastVisitAt, resetAfterDays, now)
+      : false
+    let currentCount = streak?.count || 0
+    if (streak && !streakIsActive && currentCount > 0) {
+      currentCount = 0
+      await databaseService.streaks.updateOne(
+        { _id: streak._id },
+        {
+          $set: {
+            count: 0,
+            expiredAt: this.streakExpiredAt(streak.lastVisitAt, resetAfterDays),
+            resetAfterDays,
+            updatedAt: new Date()
+          },
+          $unset: { windowDays: '' }
+        }
+      )
+    }
 
     const claimedGiftRecords = await databaseService.rewardHistories
       .find({
@@ -1576,7 +1681,8 @@ class MembershipService {
       lifetimePoint: user.lifetimePoint || 0,
       totalPoint: user.totalPoint || 0,
       streakCount: currentCount,
-      streakIsActive: streak ? dayjs().valueOf() <= dayjs(streak.expiredAt).valueOf() : false,
+      streakIsActive,
+      resetAfterDays,
       progress
     }
 

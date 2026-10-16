@@ -19,7 +19,11 @@ export interface IStreakReward {
 }
 
 export interface IStreakConfig {
-  windowDays: number
+  /**
+   * Số ngày không đi thì streak reset về 0 (tính từ lastVisitAt).
+   * Độc lập với các mốc rewards.
+   */
+  resetAfterDays: number
   rewards: IStreakReward[]
 }
 
@@ -80,7 +84,7 @@ export class MembershipConfig {
     this.streak =
       config?.streak ??
       ({
-        windowDays: 14,
+        resetAfterDays: 30,
         rewards: [
           { count: 5, bonusPoints: 10, itemCount: 1 },
           { count: 10, bonusPoints: 20, itemCount: 2 }
