@@ -39,7 +39,8 @@ jest.mock('./membership.service', () => ({
     resolveMembershipByPhone: jest.fn(),
     getConfig: jest.fn(),
     computePointsForAmount: jest.fn(),
-    earnPointsByPhone: jest.fn()
+    earnPointsByPhone: jest.fn(),
+    linkStreakGiftsToBill: jest.fn()
   }
 }))
 jest.mock('./holiday.service', () => ({ holidayService: { isHoliday: jest.fn(async () => false) } }))

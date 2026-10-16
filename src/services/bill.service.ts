@@ -2391,7 +2391,7 @@ export class BillService {
       } else if (existingRewardHistory) {
         membershipResult.skipped = true
         membershipResult.reason = 'Invoice đã được tích điểm rồi'
-      } else if (pointsEarned <= 0) {
+      } else if (pointsEarned <= 0 && !billToSave.userId) {
         membershipResult.skipped = true
         membershipResult.pointsEarned = 0
         membershipResult.reason = `Bill ${billToSave.totalAmount.toLocaleString('vi-VN')}đ chưa đủ ${config.currencyUnit.toLocaleString('vi-VN')}đ để tích điểm`
@@ -2415,6 +2415,15 @@ export class BillService {
           console.error('Lỗi khi tích điểm tự động:', error)
           throw error
         }
+      }
+
+      if (billToSave.userId && billToSave._id && billToSave.scheduleId) {
+        await membershipService.linkStreakGiftsToBill({
+          userId: String(billToSave.userId),
+          scheduleId: String(billToSave.scheduleId),
+          billId: billToSave._id.toString(),
+          invoiceCode: billToSave.invoiceCode
+        })
       }
 
       return {

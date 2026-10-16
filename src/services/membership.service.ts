@@ -55,6 +55,8 @@ type EarnMeta = {
   method?: 'auto' | 'self-claim' | 'admin' | 'staff-served'
   reason?: string
   streakCount?: number
+  cycle?: number
+  billId?: string
   itemCount?: number
   items?: Array<{
     itemId: ObjectId | string
@@ -413,11 +415,55 @@ class MembershipService {
     return { user: updatedUser, tierChanged, previousTier, newTier }
   }
 
-  /** Cộng bonusPoints cho các mốc streak đã đạt nhưng chưa được thưởng điểm. */
+  /** Mốc cao nhất trong config. 0 = chưa cấu hình trần. */
+  private maxStreakCount(streakRewards: IStreakReward[]): number {
+    return streakRewards.reduce((max, reward) => Math.max(max, Number(reward.count) || 0), 0)
+  }
+
+  /**
+   * Trong cửa sổ: cộng 1. Đã chạm trần config thì lần sau về 1 và sang chu kỳ mới.
+   * Hết cửa sổ: về 1, giữ chu kỳ (trừ khi lần trước đã chạm trần — khi đó cũng sang chu kỳ mới).
+   */
+  private nextStreakState(
+    current: { count?: number; cycle?: number } | null,
+    withinWindow: boolean,
+    maxCount: number
+  ): { count: number; cycle: number } {
+    const cycle = current?.cycle && current.cycle > 0 ? current.cycle : 1
+    const count = current?.count || 0
+    const finishedCycle = maxCount > 0 && count >= maxCount
+
+    if (!current || !withinWindow) {
+      return { count: 1, cycle: current && finishedCycle ? cycle + 1 : cycle }
+    }
+
+    if (finishedCycle) {
+      return { count: 1, cycle: cycle + 1 }
+    }
+
+    return { count: count + 1, cycle }
+  }
+
+  private historyMatchesCycle(recordCycle: unknown, cycle: number): boolean {
+    const value = Number(recordCycle)
+    if (!Number.isFinite(value) || value <= 0) return cycle <= 1
+    return value === cycle
+  }
+
+  /** Điểm streak đã cộng trong đúng chu kỳ này (bản ghi cũ không có cycle tính là chu kỳ 1). */
+  private streakCycleFilter(cycle: number) {
+    if (cycle <= 1) {
+      return { $or: [{ 'meta.cycle': 1 }, { 'meta.cycle': { $exists: false } }] }
+    }
+    return { 'meta.cycle': cycle }
+  }
+
+  /** Cộng bonusPoints cho các mốc streak đã đạt nhưng chưa được thưởng điểm trong chu kỳ hiện tại. */
   private async awardStreakBonusPointsUpTo(
     userId: ObjectId,
     upToCount: number,
-    streakRewards: IStreakReward[]
+    streakRewards: IStreakReward[],
+    cycle = 1
   ): Promise<User | null> {
     const rewards = this.normalizeStreakRewards(streakRewards)
     let latestUser: User | null = null
@@ -429,7 +475,8 @@ class MembershipService {
         userId,
         source: RewardSource.Streak,
         'meta.streakCount': reward.count,
-        points: { $gt: 0 }
+        points: { $gt: 0 },
+        ...this.streakCycleFilter(cycle)
       })
 
       if (alreadyClaimedPoints) continue
@@ -439,7 +486,8 @@ class MembershipService {
 
       await this.addRewardHistory(userId, reward.bonusPoints, RewardSource.Streak, {
         method: 'auto',
-        streakCount: reward.count
+        streakCount: reward.count,
+        cycle
       })
     }
 
@@ -452,22 +500,22 @@ class MembershipService {
 
   private async updateStreak(userId: ObjectId, visitAt: Date, windowDays: number, streakRewards: IStreakReward[]) {
     const rewards = this.normalizeStreakRewards(streakRewards)
+    const maxCount = this.maxStreakCount(rewards)
     const now = visitAt
     const current = (await databaseService.streaks.findOne({ userId })) as unknown as Streak | null
-    let nextCount = 1
-    let expiredAt = dayjs(now).add(windowDays, 'day').toDate()
+    const withinWindow = current ? dayjs(now).valueOf() <= dayjs(current.expiredAt).valueOf() : false
+    const next = this.nextStreakState(current, withinWindow, maxCount)
+    const nextCount = next.count
+    const cycle = next.cycle
+    const expiredAt = dayjs(now).add(windowDays, 'day').toDate()
 
     if (current) {
-      const withinWindow = dayjs(now).valueOf() <= dayjs(current.expiredAt).valueOf()
-      if (withinWindow) {
-        nextCount = (current.count || 0) + 1
-      }
-      expiredAt = dayjs(now).add(windowDays, 'day').toDate()
       await databaseService.streaks.updateOne(
         { _id: current._id },
         {
           $set: {
             count: nextCount,
+            cycle,
             lastVisitAt: now,
             expiredAt,
             windowDays,
@@ -479,6 +527,7 @@ class MembershipService {
       const newStreak = new Streak({
         userId,
         count: 1,
+        cycle: 1,
         lastVisitAt: now,
         expiredAt,
         windowDays
@@ -486,7 +535,7 @@ class MembershipService {
       await databaseService.streaks.insertOne(newStreak)
     }
 
-    await this.awardStreakBonusPointsUpTo(userId, nextCount, rewards)
+    await this.awardStreakBonusPointsUpTo(userId, nextCount, rewards, cycle)
 
     // ❌ KHÔNG TỰ ĐỘNG PHÁT QUÀ — staff chọn item qua claimStreakGift()
     for (const reward of rewards) {
@@ -630,17 +679,17 @@ class MembershipService {
     const config = await this.loadConfig()
     const points = this.computeBasePoints(options.totalAmount, config)
 
-    if (points <= 0) {
-      return (await databaseService.users.findOne({ _id: options.userId })) as unknown as User | null
-    }
-
     const member = (await databaseService.users.findOne({ _id: options.userId })) as unknown as User | null
     this.assertValidMemberContact(member)
 
-    // Chỉ cộng điểm + cập nhật tier. Không auto phát discount:
-    // staff phải chủ động áp/phát khi checkout (đọc từ config / tierDiscount).
-    const { user } = await this.updateUserPoints(options.userId, points, config.tierThresholds)
-    await this.addRewardHistory(options.userId, points, options.source || RewardSource.Point, options.meta)
+    // Bill gán member luôn có một dòng history (kể cả 0 điểm) để member giữ được hóa đơn đó.
+    // Chỉ cộng điểm + cập nhật tier khi đủ ngưỡng. Không auto phát discount.
+    let user = member
+    if (points > 0) {
+      const updated = await this.updateUserPoints(options.userId, points, config.tierThresholds)
+      user = updated.user
+    }
+    await this.addRewardHistory(options.userId, Math.max(points, 0), options.source || RewardSource.Point, options.meta)
 
     if (user) {
       const windowDays = config.streak?.windowDays ?? 14
@@ -683,6 +732,38 @@ class MembershipService {
       },
       visitAt: options.visitAt
     })
+  }
+
+  /**
+   * Bill A gán member B: mọi quà streak của schedule đó nằm trong history của B và trỏ về đúng bill.
+   * History không bị xóa khi streak sang chu kỳ mới.
+   */
+  async linkStreakGiftsToBill(options: {
+    userId: string
+    scheduleId: string
+    billId: string
+    invoiceCode?: string
+  }) {
+    if (!ObjectId.isValid(options.userId) || !ObjectId.isValid(options.scheduleId) || !ObjectId.isValid(options.billId)) {
+      return
+    }
+
+    const userId = new ObjectId(options.userId)
+    const scheduleId = new ObjectId(options.scheduleId)
+    await databaseService.rewardHistories.updateMany(
+      {
+        scheduleId,
+        source: RewardSource.Streak,
+        rewardType: 'gift'
+      },
+      {
+        $set: {
+          userId,
+          'meta.billId': options.billId,
+          ...(options.invoiceCode ? { 'meta.invoiceCode': options.invoiceCode } : {})
+        }
+      }
+    )
   }
 
   async claimInvoiceByPhone(invoiceCode: string, phone: string) {
@@ -772,6 +853,7 @@ class MembershipService {
     const streakInfo = streak
       ? {
           count: streak.count ?? 0,
+          cycle: streak.cycle ?? 1,
           lastVisitAt: streak.lastVisitAt,
           expiredAt: streak.expiredAt,
           windowDays: streak.windowDays,
@@ -779,6 +861,7 @@ class MembershipService {
         }
       : {
           count: 0,
+          cycle: 1,
           windowDays: config.streak?.windowDays ?? 14,
           isActive: false
         }
@@ -804,6 +887,10 @@ class MembershipService {
         const streakCount = record.meta?.streakCount
         const result: {
           streakCount: number
+          cycle?: number
+          billId?: string
+          invoiceCode?: string
+          scheduleId?: string
           points?: number
           items?: Array<{
             itemId: string
@@ -822,6 +909,10 @@ class MembershipService {
           claimedAt: Date
         } = {
           streakCount,
+          cycle: record.meta?.cycle,
+          billId: record.meta?.billId,
+          invoiceCode: record.meta?.invoiceCode,
+          scheduleId: record.scheduleId?.toString?.(),
           claimedAt: record.giftClaimedAt || record.createdAt || record.usedAt
         }
 
@@ -850,11 +941,14 @@ class MembershipService {
       })
 
     // Separate available streak gifts (đủ mốc, chưa phục vụ)
+    const currentCycle = streak?.cycle ?? 1
     const claimedGiftStreakCounts = new Set(
       allRewardsFromHistory
         .filter(
           (record) =>
-            record.rewardType === 'gift' && (record.giftStatus === 'claimed' || record.giftStatus === undefined)
+            record.rewardType === 'gift' &&
+            (record.giftStatus === 'claimed' || record.giftStatus === undefined) &&
+            this.historyMatchesCycle(record.meta?.cycle, currentCycle)
         )
         .map((record) => Number(record.meta?.streakCount))
         .filter((count) => !Number.isNaN(count))
@@ -1054,6 +1148,10 @@ class MembershipService {
       const streakCount = record.meta?.streakCount
       const result: {
         streakCount: number
+        cycle?: number
+        billId?: string
+        invoiceCode?: string
+        scheduleId?: string
         points?: number
         items?: Array<{
           itemId: string
@@ -1071,6 +1169,10 @@ class MembershipService {
         claimedAt: Date
       } = {
         streakCount,
+        cycle: record.meta?.cycle,
+        billId: record.meta?.billId,
+        invoiceCode: record.meta?.invoiceCode,
+        scheduleId: record.scheduleId?.toString?.(),
         claimedAt: record.createdAt || record.usedAt
       }
 
@@ -1167,7 +1269,7 @@ class MembershipService {
 
       if (newCount > 0) {
         const streakRewards = config.streak?.rewards ?? []
-        await this.awardStreakBonusPointsUpTo(userObjectId, newCount, streakRewards)
+        await this.awardStreakBonusPointsUpTo(userObjectId, newCount, streakRewards, 1)
       }
 
       return {
@@ -1192,7 +1294,7 @@ class MembershipService {
 
     if (newCount > 0) {
       const streakRewards = config.streak?.rewards ?? []
-      await this.awardStreakBonusPointsUpTo(userObjectId, newCount, streakRewards)
+      await this.awardStreakBonusPointsUpTo(userObjectId, newCount, streakRewards, current.cycle ?? 1)
     }
 
     return {
@@ -1422,8 +1524,12 @@ class MembershipService {
       })
       .toArray()
 
+    const currentCycle = streak?.cycle ?? 1
     const claimedStreakCounts = new Set(
-      claimedGiftRecords.map((record) => Number(record.meta?.streakCount)).filter((count) => !Number.isNaN(count))
+      claimedGiftRecords
+        .filter((record) => this.historyMatchesCycle(record.meta?.cycle, currentCycle))
+        .map((record) => Number(record.meta?.streakCount))
+        .filter((count) => !Number.isNaN(count))
     )
 
     const streakRewards = []
@@ -1568,11 +1674,13 @@ class MembershipService {
       })
     }
 
+    const cycle = streak?.cycle ?? 1
     const existingReward = await databaseService.rewardHistories.findOne({
       userId: userObjectId,
       source: RewardSource.Streak,
       'meta.streakCount': streakCount,
-      rewardType: 'gift'
+      rewardType: 'gift',
+      ...this.streakCycleFilter(cycle)
     })
 
     const isAlreadyClaimed =
@@ -1675,6 +1783,7 @@ class MembershipService {
               ...(existingReward.meta || {}),
               method: 'staff-served',
               streakCount,
+              cycle,
               itemCount,
               items: itemsMeta
             }
@@ -1694,6 +1803,7 @@ class MembershipService {
         meta: {
           method: 'staff-served',
           streakCount,
+          cycle,
           itemCount,
           items: itemsMeta
         },
