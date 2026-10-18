@@ -727,7 +727,7 @@ class MembershipService {
     let user = member
     if (points > 0) {
       const updated = await this.updateUserPoints(options.userId, points, config.tierThresholds)
-      user = updated.user
+      if (updated.user) user = updated.user
     }
     await this.addRewardHistory(options.userId, Math.max(points, 0), options.source || RewardSource.Point, options.meta)
 
