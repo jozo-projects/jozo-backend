@@ -441,6 +441,31 @@ class MembershipService {
     return streakRewards.reduce((max, reward) => Math.max(max, Number(reward.count) || 0), 0)
   }
 
+  /** Có điểm = đã từng tích lũy. Streak lưu trong DB không được nằm ở 0. */
+  private userHasEarnedPoints(user: {
+    lifetimePoint?: number
+    totalPoint?: number
+    availablePoint?: number
+  } | null): boolean {
+    if (!user) return false
+    return (user.lifetimePoint || 0) > 0 || (user.totalPoint || 0) > 0 || (user.availablePoint || 0) > 0
+  }
+
+  /**
+   * Sửa bản ghi đã bị đọc-rồi-ghi về 0. Không đụng lastVisitAt của streak đang có số.
+   * Quá hạn không còn bị ghi count = 0 lúc GET; lần đi kế tiếp mới tính lại theo cửa sổ reset.
+   */
+  private async ensureStreakAtLeastOne(
+    streak: Streak | null,
+    hasPoints: boolean
+  ): Promise<Streak | null> {
+    if (!hasPoints || !streak || (streak.count ?? 0) > 0) return streak
+
+    const now = new Date()
+    await databaseService.streaks.updateOne({ _id: streak._id }, { $set: { count: 1, updatedAt: now } })
+    return { ...streak, count: 1 }
+  }
+
   /** Số ngày không đi thì streak reset về 0. Độc lập với mốc rewards. */
   private resolveResetAfterDays(streakConfig?: { resetAfterDays?: number } | null): number {
     const fromReset = Number(streakConfig?.resetAfterDays)
@@ -457,21 +482,19 @@ class MembershipService {
   }
 
   /**
-   * Trong hạn reset: cộng 1. Đã chạm trần config thì lần sau về 1 và sang chu kỳ mới.
-   * Quá hạn (đã về 0 hoặc lần đi đầu sau khi hết hạn): về 1, giữ chu kỳ
-   * (trừ khi lần trước đã chạm trần — khi đó cũng sang chu kỳ mới).
+   * Mỗi lần đi cộng 1. Streak không tự về 0 khi quá hạn.
+   * Đã chạm trần config thì lần sau về 1 và sang chu kỳ mới.
    */
   private nextStreakState(
     current: { count?: number; cycle?: number } | null,
-    withinWindow: boolean,
     maxCount: number
   ): { count: number; cycle: number } {
     const cycle = current?.cycle && current.cycle > 0 ? current.cycle : 1
     const count = current?.count || 0
     const finishedCycle = maxCount > 0 && count >= maxCount
 
-    if (!current || !withinWindow) {
-      return { count: 1, cycle: current && finishedCycle ? cycle + 1 : cycle }
+    if (!current) {
+      return { count: 1, cycle }
     }
 
     if (finishedCycle) {
@@ -540,10 +563,7 @@ class MembershipService {
     const maxCount = this.maxStreakCount(rewards)
     const now = visitAt
     const current = (await databaseService.streaks.findOne({ userId })) as unknown as Streak | null
-    const withinWindow = current
-      ? this.isStreakWithinResetWindow(current.lastVisitAt, resetAfterDays, now)
-      : false
-    const next = this.nextStreakState(current, withinWindow, maxCount)
+    const next = this.nextStreakState(current, maxCount)
     const nextCount = next.count
     const cycle = next.cycle
     const expiredAt = this.streakExpiredAt(now, resetAfterDays)
@@ -890,7 +910,8 @@ class MembershipService {
     const nextTier = this.getNextTierInfo(user.lifetimePoint || 0, tierThresholds)
 
     const resetAfterDays = this.resolveResetAfterDays(config.streak)
-    const streak = (await databaseService.streaks.findOne({ userId: userObjectId })) as Streak | null
+    const storedStreak = (await databaseService.streaks.findOne({ userId: userObjectId })) as Streak | null
+    const streak = await this.ensureStreakAtLeastOne(storedStreak, this.userHasEarnedPoints(user))
     let streakInfo: {
       count: number
       cycle: number
@@ -904,19 +925,8 @@ class MembershipService {
     if (streak) {
       const expiredAt = this.streakExpiredAt(streak.lastVisitAt, resetAfterDays)
       const isActive = this.isStreakWithinResetWindow(streak.lastVisitAt, resetAfterDays, new Date())
-      let count = streak.count ?? 0
-      if (!isActive && count > 0) {
-        count = 0
-        await databaseService.streaks.updateOne(
-          { _id: streak._id },
-          {
-            $set: { count: 0, expiredAt, resetAfterDays, updatedAt: new Date() },
-            $unset: { windowDays: '' }
-          }
-        )
-      }
       streakInfo = {
-        count,
+        count: streak.count ?? 0,
         cycle: streak.cycle ?? 1,
         lastVisitAt: streak.lastVisitAt,
         expiredAt,
@@ -1203,7 +1213,14 @@ class MembershipService {
     const userObjectId = new ObjectId(userId)
     const config = await this.loadConfig()
     const resetAfterDays = this.resolveResetAfterDays(config.streak)
-    let streak = (await databaseService.streaks.findOne({ userId: userObjectId })) as unknown as Streak | null
+    const member = (await databaseService.users.findOne(
+      { _id: userObjectId },
+      { projection: { lifetimePoint: 1, totalPoint: 1, availablePoint: 1 } }
+    )) as { lifetimePoint?: number; totalPoint?: number; availablePoint?: number } | null
+    let streak = await this.ensureStreakAtLeastOne(
+      (await databaseService.streaks.findOne({ userId: userObjectId })) as unknown as Streak | null,
+      this.userHasEarnedPoints(member)
+    )
 
     // Query tất cả streak rewards đã claimed
     const claimedRewardsFromHistory = await databaseService.rewardHistories
@@ -1282,17 +1299,6 @@ class MembershipService {
     const isActive = this.isStreakWithinResetWindow(streak.lastVisitAt, resetAfterDays, now)
     const isExpired = !isActive
 
-    if (isExpired && (streak.count ?? 0) > 0) {
-      await databaseService.streaks.updateOne(
-        { _id: streak._id },
-        {
-          $set: { count: 0, expiredAt, resetAfterDays, updatedAt: new Date() },
-          $unset: { windowDays: '' }
-        }
-      )
-      streak = { ...streak, count: 0, expiredAt, resetAfterDays }
-    }
-
     return {
       streak: {
         ...streak,
@@ -1337,9 +1343,11 @@ class MembershipService {
 
     const current = (await databaseService.streaks.findOne({ userId: userObjectId })) as unknown as Streak | null
     const now = new Date()
+    const hasPoints = this.userHasEarnedPoints(user as User)
 
     if (!current) {
-      const newCount = payload.count !== undefined ? Math.max(0, payload.count) : 0
+      let newCount = payload.count !== undefined ? Math.max(0, payload.count) : 0
+      if (hasPoints && newCount < 1) newCount = 1
       const newExpiredAt = this.streakExpiredAt(now, resetAfterDays)
 
       const newStreak = new Streak({
@@ -1367,10 +1375,15 @@ class MembershipService {
       throw new ErrorWithStatus({ message: 'Thiếu count', status: 400 })
     }
 
-    const newCount = Math.max(0, payload.count)
+    let newCount = Math.max(0, payload.count)
+    if (hasPoints && newCount < 1) newCount = 1
     const updateDoc: Partial<Streak> = {
       count: newCount,
-      updatedAt: new Date()
+      cycle: current.cycle && current.cycle > 0 ? current.cycle : 1,
+      lastVisitAt: now,
+      expiredAt: this.streakExpiredAt(now, resetAfterDays),
+      resetAfterDays,
+      updatedAt: now
     }
 
     await databaseService.streaks.updateOne({ _id: current._id }, { $set: updateDoc })
@@ -1598,27 +1611,15 @@ class MembershipService {
     const userObjectId = user._id
     const config = await this.loadConfig()
     const resetAfterDays = this.resolveResetAfterDays(config.streak)
-    const streak = (await databaseService.streaks.findOne({ userId: userObjectId })) as unknown as Streak | null
+    const streak = await this.ensureStreakAtLeastOne(
+      (await databaseService.streaks.findOne({ userId: userObjectId })) as unknown as Streak | null,
+      this.userHasEarnedPoints(user)
+    )
     const now = new Date()
     const streakIsActive = streak
       ? this.isStreakWithinResetWindow(streak.lastVisitAt, resetAfterDays, now)
       : false
-    let currentCount = streak?.count || 0
-    if (streak && !streakIsActive && currentCount > 0) {
-      currentCount = 0
-      await databaseService.streaks.updateOne(
-        { _id: streak._id },
-        {
-          $set: {
-            count: 0,
-            expiredAt: this.streakExpiredAt(streak.lastVisitAt, resetAfterDays),
-            resetAfterDays,
-            updatedAt: new Date()
-          },
-          $unset: { windowDays: '' }
-        }
-      )
-    }
+    const currentCount = streak?.count || 0
 
     const claimedGiftRecords = await databaseService.rewardHistories
       .find({

@@ -7,7 +7,7 @@ export interface IStreak {
   /** Chu kỳ hiện tại. Chạm mốc streak cao nhất thì lần dùng dịch vụ sau mở chu kỳ mới và count về 1. */
   cycle?: number
   lastVisitAt: Date
-  /** Hạn reset = lastVisitAt + resetAfterDays (config). Quá hạn → count về 0. */
+  /** Hạn hiển thị = lastVisitAt + resetAfterDays (config). Quá hạn không xóa count. */
   expiredAt: Date
   /** Số ngày không đi trước khi reset (snapshot từ config.resetAfterDays). */
   resetAfterDays: number
