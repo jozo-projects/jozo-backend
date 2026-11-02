@@ -68,6 +68,12 @@ export const getSchedulesByRoom = async (
 }
 
 // Tạo mới một event lịch phòng (POST /api/schedules)
+export const getScheduleById = async (req: Request, res: Response) => {
+  const schedule = await roomScheduleService.getScheduleById(req.params.id)
+  if (!schedule) return res.status(404).json({ message: 'Schedule not found' })
+  return res.json({ message: 'Get schedule success', result: schedule })
+}
+
 export const createSchedule = async (
   req: Request<ParamsDictionary, any, IRoomScheduleRequestBody>,
   res: Response,

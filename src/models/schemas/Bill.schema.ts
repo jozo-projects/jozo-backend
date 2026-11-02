@@ -24,10 +24,28 @@ export interface IBillItem {
   netAmount?: number
   /** Line quà streak (0đ) — in bill nhóm theo mốc, không lặp prefix. */
   isStreakGift?: boolean
+  isBirthdayGift?: boolean
   streakCount?: number
 }
 
 export interface IBill {
+  checkoutFollowUp?: {
+    status: 'pending' | 'complete'
+    points: 'pending' | 'complete'
+    streak: 'pending' | 'complete'
+    updatedAt: Date
+  }
+  birthday?: {
+    usageKey: string
+    userId: string
+    year: number
+    appliedAt: Date
+    confirmedBy: string
+    discountPercentage: number
+    discountAmount: number
+    itemCount: number
+    items: Array<{ itemId: string; name: string; quantity: number; inventoryTracked: boolean }>
+  }
   _id?: ObjectId
   /** Nguồn doanh thu; bill phòng cũ không có field này nên mặc định là karaoke. */
   source?: 'karaoke' | 'retail' | string

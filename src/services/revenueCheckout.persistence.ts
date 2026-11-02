@@ -8,6 +8,8 @@ import databaseService from './database.service'
 import fnbMenuItemService from './fnbMenuItem.service'
 import revenueTransactionService from './revenueTransaction.service'
 import type { RoomBillRevenuePersistence } from './roomBillRevenue.service'
+import { BirthdayBenefitService } from './birthdayBenefit.service'
+import { ErrorWithStatus } from '~/models/Error'
 
 /** Existing catalog rows may predate classification; default keeps room vs F&B split working. */
 export function withDefaultFnbClassification(product: FnBMenuItem): FnBMenuItem {
@@ -52,12 +54,33 @@ export async function loadClassifiedMenuItems(productIds: string[]): Promise<FnB
   return products
 }
 
-export function createRoomBillRevenuePersistence(): RoomBillRevenuePersistence {
+export function createRoomBillRevenuePersistence(birthdayAtomic = false, db = databaseService): RoomBillRevenuePersistence {
   return {
     loadProducts: loadClassifiedMenuItems,
-    withTransaction: (work) => databaseService.withTransaction(work),
+    withTransaction: async (work) => {
+      if (birthdayAtomic) {
+        // Fail closed on missing/conflicting index; never silently accept annual duplicates.
+        await db.bills.createIndex({ 'birthday.usageKey': 1 }, {
+          name: 'birthday_member_year_unique', unique: true,
+          partialFilterExpression: { 'birthday.usageKey': { $type: 'string' } }
+        })
+      }
+      return db.withTransaction(async (session) => {
+        if (birthdayAtomic && !session?.inTransaction()) throw new ErrorWithStatus({ message: 'Ưu đãi sinh nhật yêu cầu Mongo replica set transaction.', status: 503 })
+        await work(session)
+      })
+    },
     insertBill: async (bill: IBill, session: unknown) => {
-      await databaseService.bills.insertOne(bill, session ? { session: session as ClientSession } : undefined)
+      if (bill.birthday && (!birthdayAtomic || !(session as ClientSession | undefined)?.inTransaction())) throw new ErrorWithStatus({ message: 'Ưu đãi sinh nhật yêu cầu transaction.', status: 503 })
+      try {
+        await db.bills.insertOne(bill, session ? { session: session as ClientSession } : undefined)
+      } catch (error) {
+        if (bill.birthday && (error as { code?: number; keyPattern?: Record<string, number> }).code === 11000 && (error as { keyPattern?: Record<string, number> }).keyPattern?.['birthday.usageKey']) {
+          throw new ErrorWithStatus({ message: 'Member đã sử dụng ưu đãi sinh nhật năm nay.', status: 409 })
+        }
+        throw error
+      }
+      if (bill.birthday) await new BirthdayBenefitService(db).recordStock(bill, session as ClientSession)
     },
     closeRevenue: (input: CloseRevenueTransactionInput, session: unknown) =>
       revenueTransactionService.closeRevenueTransaction(input, session as ClientSession | undefined)

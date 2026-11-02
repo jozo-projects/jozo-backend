@@ -9,6 +9,7 @@ export interface IRoomScheduleRequestQuery {
 }
 
 export interface IRoomScheduleRequestBody {
+  birthdayDraft?: { userId: string; selection: import('~/utils/birthdayBenefit').BirthdaySelection } | null
   roomId: string
   startTime: string
   endTime?: string

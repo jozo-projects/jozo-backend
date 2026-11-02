@@ -274,11 +274,7 @@ export const RoomSocket = (io: Server) => {
 
         const currentNowPlaying = await roomMusicServices.getNowPlaying(roomId)
         // song_ended của nhạc chờ / video cũ không được xóa bài vừa play_song.
-        if (
-          videoId &&
-          currentNowPlaying?.video_id &&
-          videoId !== currentNowPlaying.video_id
-        ) {
+        if (videoId && currentNowPlaying?.video_id && videoId !== currentNowPlaying.video_id) {
           return
         }
 
@@ -457,7 +453,7 @@ export const RoomSocket = (io: Server) => {
 
         // Trả về thông tin bài hát đang phát cho client (chỉ client đã gửi request)
         socket.emit('now_playing_status', {
-          isPlaying: !!nowPlaying,
+          isPlaying: nowPlaying?.isPlaying ?? !!nowPlaying,
           data: nowPlaying || null
         })
 

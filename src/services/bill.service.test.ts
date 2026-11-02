@@ -1,17 +1,21 @@
 import { ObjectId } from 'mongodb'
 import { PaymentMethod, RevenueCategory, RoomType } from '~/constants/enum'
 import type { IBill } from '~/models/schemas/Bill.schema'
+import type { BirthdaySelection } from '~/utils/birthdayBenefit'
 import billService from './bill.service'
 import databaseService from './database.service'
 import fnbOrderService from './fnbOrder.service'
 import membershipService from './membership.service'
 import { hasPendingFnbOrderForSchedule } from './fnbPendingOrder.service'
 import { buildRoomBillRevenue, persistRoomBillWithRevenue } from './roomBillRevenue.service'
+import birthdayBenefitService from './birthdayBenefit.service'
+
+jest.mock('./birthdayBenefit.service', () => ({ __esModule: true, default: { apply: jest.fn() } }))
 
 jest.mock('./database.service', () => ({
   __esModule: true,
   default: {
-    bills: { findOne: jest.fn(), insertOne: jest.fn() },
+    bills: { findOne: jest.fn(), insertOne: jest.fn(), updateOne: jest.fn() },
     rewardHistories: { findOne: jest.fn() },
     roomSchedule: { findOne: jest.fn() },
     rooms: { findOne: jest.fn() },
@@ -62,7 +66,7 @@ const schedule = { _id: scheduleId, roomId, roomType: RoomType.Medium, startTime
 const servedOrder = { roomScheduleId: scheduleId, order: { drinks: { [drinkId.toHexString()]: 2 }, snacks: {} } }
 const product = { _id: drinkId, revenueCategory: RevenueCategory.FNB_RETAIL, inventoryTracked: true } as never
 
-function payload(overrides: Partial<IBill> & { promotionId?: string } = {}): IBill & { promotionId?: string } {
+function payload(overrides: Partial<IBill> & { promotionId?: string; birthdaySelection?: BirthdaySelection } = {}): IBill & { promotionId?: string; birthdaySelection?: BirthdaySelection } {
   return {
     scheduleId,
     roomId,
@@ -107,6 +111,36 @@ beforeEach(() => {
 })
 
 describe('canonical checkout snapshot', () => {
+  afterEach(() => jest.restoreAllMocks())
+  const birthday = { usageKey: 'member:2026', userId: 'member', year: 2026, appliedAt: end, confirmedBy: 'cashier', discountPercentage: 10, discountAmount: 10000, itemCount: 1, items: [] }
+  it('returns a saved birthday bill even when the post-commit points step fails', async () => {
+    jest.spyOn(billService, 'getBill').mockResolvedValueOnce({ ...payload(), birthday })
+    jest.mocked(membershipService.computePointsForAmount).mockRejectedValueOnce(new Error('fixture: points unavailable'))
+    const result = await billService.saveBillWithMembership(payload({ customerPhone: '0901234567', birthdaySelection: { items: [{ itemId: drinkId.toHexString(), quantity: 1 }] } }))
+    expect(persistRoomBillWithRevenue).toHaveBeenCalledTimes(1)
+    expect(result.bill.birthday).toEqual(birthday)
+    expect(result.membership).toMatchObject({ success: false, error: expect.stringContaining('đã lưu') })
+    expect((result.bill as any).checkoutFollowUp).toMatchObject({ status: 'pending', points: 'pending' })
+  })
+  it('replays a committed birthday checkout rather than repricing or deducting stock twice', async () => {
+    const existing = { ...payload(), _id: new ObjectId(), birthday }
+    jest.mocked(databaseService.bills.findOne).mockResolvedValueOnce(existing as never)
+    const preview = jest.spyOn(billService, 'getBill')
+    const result = await billService.saveBillWithMembership(payload({ birthdaySelection: { items: [{ itemId: drinkId.toHexString(), quantity: 1 }] } }))
+    expect(result.bill).toEqual(existing)
+    expect((result as any).alreadySaved).toBe(true)
+    expect(preview).not.toHaveBeenCalled()
+    expect(persistRoomBillWithRevenue).not.toHaveBeenCalled()
+  })
+  it('applies only staff birthday selection to canonical preview and forwards it at finalization', async () => {
+    jest.mocked(membershipService.getConfig).mockResolvedValue({ birthday: { enabled: true } } as never)
+    jest.mocked(birthdayBenefitService.apply).mockImplementation(async (bill) => ({ ...bill, totalAmount: 117000 }))
+    const selection = { items: [{ itemId: drinkId.toHexString(), quantity: 1 }] }
+    const input = { ...payload({ customerPhone: '0901234567' }), birthdaySelection: selection }
+    const result = await billService.saveBillWithMembership(input)
+    expect(birthdayBenefitService.apply).toHaveBeenCalledWith(expect.objectContaining({ totalAmount: 130000 }), selection, { enabled: true }, 'cashier')
+    expect(result.bill.totalAmount).toBe(117000)
+  })
   it('rebuilds stale FNB items and total from the current served order before closing revenue', async () => {
     const result = await billService.saveBillWithMembership(payload())
     expect(result.bill.totalAmount).toBe(130000)

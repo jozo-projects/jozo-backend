@@ -1,5 +1,6 @@
 import { ObjectId } from 'mongodb'
 import { MembershipTier } from '~/constants/enum'
+import type { BirthdayPolicy } from '~/utils/birthdayBenefit'
 
 export interface IBonusRules {
   bookingEarlyBonus?: number // +points khi đặt trước
@@ -42,6 +43,7 @@ export interface ITierDiscountBenefit {
 }
 
 export interface IMembershipConfig {
+  birthday?: BirthdayPolicy
   _id?: ObjectId
   currencyUnit: number
   pointPerCurrency: number
@@ -55,6 +57,7 @@ export interface IMembershipConfig {
 }
 
 export class MembershipConfig {
+  birthday?: BirthdayPolicy
   _id?: ObjectId
   currencyUnit: number
   pointPerCurrency: number
@@ -69,6 +72,7 @@ export class MembershipConfig {
   constructor(config?: Partial<IMembershipConfig>) {
     const now = new Date()
     this._id = config?._id
+    this.birthday = config?.birthday
     this.currencyUnit = config?.currencyUnit ?? 10000 // 10k VND
     this.pointPerCurrency = config?.pointPerCurrency ?? 1 // 1 điểm / 10k
     this.tierThresholds =

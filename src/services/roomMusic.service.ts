@@ -183,16 +183,52 @@ class RoomMusicServices {
 
     const parsedNowPlaying = JSON.parse(nowPlaying)
 
-    // Tính toán current_time dựa trên timestamp
-    const currentTime = Math.min(
-      Math.floor((Date.now() - parsedNowPlaying.timestamp) / 1000), // Tính thời gian đã phát (giây)
-      parsedNowPlaying.duration || 0 // Không vượt quá duration
-    )
+    // timestamp identifies the queue entry; position_timestamp samples currentTime.
+    // Clients must not add elapsed time from the original queue timestamp again.
+    const [rawPosition, playback] = await Promise.all([
+      redis.get(`room_${roomId}_current_time`),
+      redis.get(`room_${roomId}_playback`)
+    ])
+    const positionTimestamp = Date.now()
+    let observed: unknown
+    try {
+      observed = rawPosition === null ? null : JSON.parse(rawPosition)
+    } catch {
+      /* Ignore malformed legacy state. */
+    }
+    let isPlaying = playback !== 'pause'
+    let position = Number.isFinite(parsedNowPlaying.timestamp)
+      ? Math.max(0, (positionTimestamp - parsedNowPlaying.timestamp) / 1000)
+      : 0
+    if (typeof observed === 'number' && Number.isFinite(observed) && observed >= 0) {
+      // Legacy play/pause endpoints persist a scalar, including explicit zero.
+      position = observed
+    } else if (observed && typeof observed === 'object') {
+      const sample = observed as { videoId?: string; currentTime?: number; timestamp?: number; isPlaying?: boolean }
+      if (
+        sample.videoId === parsedNowPlaying.video_id &&
+        Number.isFinite(sample.currentTime) &&
+        sample.currentTime! >= 0 &&
+        Number.isFinite(sample.timestamp) &&
+        sample.timestamp! >= parsedNowPlaying.timestamp &&
+        sample.timestamp! <= positionTimestamp
+      ) {
+        isPlaying = playback === 'pause' ? false : typeof sample.isPlaying === 'boolean' ? sample.isPlaying : isPlaying
+        const age = positionTimestamp - sample.timestamp!
+        // Video reports at most every 5s. Missing reports cannot prove playback
+        // through a long outage/stall; keep its last position instead of fake EOF.
+        position = sample.currentTime! + (isPlaying && age <= 5000 ? age / 1000 : 0)
+      }
+    }
+    const duration = parsedNowPlaying.duration
+    const currentTime = Math.max(0, Math.min(position, Number.isFinite(duration) && duration > 0 ? duration : Infinity))
 
     const enriched = await this.attachMediaMetadata([parsedNowPlaying])
     return {
       ...enriched[0],
-      currentTime
+      currentTime,
+      position_timestamp: positionTimestamp,
+      isPlaying
     }
   }
 
@@ -739,7 +775,7 @@ class RoomMusicServices {
   }
 
   private normalizeSongForQueue(song: AddSongRequestBody & Record<string, unknown>): AddSongRequestBody {
-    const { timestamp, currentTime, isPlaying, position, ...rest } = song
+    const { timestamp, position_timestamp, currentTime, isPlaying, position, ...rest } = song
     return rest as AddSongRequestBody
   }
 

@@ -15,6 +15,9 @@ export interface AddSongRequestBody {
   media_status?: 'pending' | 'downloading' | 'encoding' | 'uploading' | 'ready' | 'failed'
   timestamp?: number
   currentTime?: number
+  // Sampling clock for currentTime; timestamp remains the queue-entry identity.
+  position_timestamp?: number
+  isPlaying?: boolean
 }
 
 export interface MoveQueueRequestBody {

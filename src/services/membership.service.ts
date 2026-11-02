@@ -1,5 +1,7 @@
 import dayjs from 'dayjs'
 import { Filter, ModifyResult, ObjectId } from 'mongodb'
+import { validateBirthdayPolicy } from '~/utils/birthdayBenefit'
+import birthdayBenefitService from './birthdayBenefit.service'
 import { FnBCategory, MembershipTier, RewardSource, UserRole } from '~/constants/enum'
 import {
   MembershipConfig,
@@ -135,6 +137,15 @@ class MembershipService {
 
     const sanitizedPayload: Partial<IMembershipConfig> = { ...payload }
 
+    if (payload.birthday !== undefined) {
+      const birthday = validateBirthdayPolicy(payload.birthday)
+      if (birthday.enabled) {
+        const products = await birthdayBenefitService.configuredProducts(birthday.itemIds)
+        if (products.length !== birthday.itemIds.length) throw new ErrorWithStatus({ message: 'Món sinh nhật phải là nước đang phục vụ, không phải nhóm biến thể.', status: 400 })
+      }
+      sanitizedPayload.birthday = birthday
+    }
+
     if (payload.streak) {
       const resetAfterDays =
         payload.streak.resetAfterDays !== undefined
@@ -177,6 +188,7 @@ class MembershipService {
           tierBenefits: next.tierBenefits ?? {},
           bonusRules: next.bonusRules,
           streak: next.streak,
+          birthday: next.birthday,
           dailySelfClaimLimitPerPhone: next.dailySelfClaimLimitPerPhone,
           updatedAt: next.updatedAt
         }
