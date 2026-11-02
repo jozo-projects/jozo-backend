@@ -9,6 +9,8 @@ import { BookingSource, RoomSchedule } from '~/models/schemas/RoomSchdedule.sche
 import { generateUniqueBookingCode, parseDate, buildBookingCodeDuplicateFilter, getDateOfUseFromDate } from '~/utils/common'
 import { pickCurrentRoomScheduleForClientFnb } from '~/utils/currentRoomSchedule'
 import databaseService from './database.service'
+import birthdayBenefitService from './birthdayBenefit.service'
+import membershipService from './membership.service'
 import fnbOrderService from './fnbOrder.service'
 import { deleteImageFromCloudinary, uploadImageToCloudinary } from './cloudinary.service'
 import redis from './redis.service'
@@ -292,6 +294,10 @@ class RoomScheduleService {
       scheduleData.roomType = (room?.roomType as RoomType | undefined) ?? undefined
     }
 
+    if (schedule.birthdayDraft !== undefined) {
+      const config = await membershipService.getConfig()
+      scheduleData.birthdayDraft = await birthdayBenefitService.prepareDraft(schedule.customerPhone, schedule.birthdayDraft, config.birthday, schedule.status === RoomScheduleStatus.Booked ? startTime : new Date())
+    }
     const result = await databaseService.roomSchedule.insertOne(scheduleData)
     scheduleData._id = result.insertedId
 
@@ -466,7 +472,23 @@ class RoomScheduleService {
       }
     }
 
-    const result = await databaseService.roomSchedule.updateOne({ _id: new ObjectId(id) }, updateOperations)
+    if (schedule.birthdayDraft !== undefined) {
+      if ([RoomScheduleStatus.Finished, RoomScheduleStatus.Cancelled].includes(currentSchedule.status)) {
+        throw new ErrorWithStatus({ message: 'Lịch đã kết thúc, không thể sửa bản nháp sinh nhật.', status: 409 })
+      }
+      const config = await membershipService.getConfig()
+      updateData.birthdayDraft = await birthdayBenefitService.prepareDraft(
+        schedule.customerPhone !== undefined ? schedule.customerPhone : currentSchedule.customerPhone,
+        schedule.birthdayDraft, config.birthday,
+        (schedule.status ?? currentSchedule.status) === RoomScheduleStatus.Booked ? targetStartTime : updatedAt
+      )
+    } else if (schedule.customerPhone !== undefined && (schedule.customerPhone ?? '').trim() !== (currentSchedule.customerPhone ?? '').trim()) {
+      updateData.birthdayDraft = null
+    }
+    // Do not let a stale draft save race a member change or a completed checkout.
+    const draftGuard = schedule.birthdayDraft !== undefined ? { customerPhone: currentSchedule.customerPhone !== undefined ? currentSchedule.customerPhone : { $exists: false }, status: currentSchedule.status } : {}
+    const result = await databaseService.roomSchedule.updateOne({ _id: new ObjectId(id), ...draftGuard }, updateOperations)
+    if (schedule.birthdayDraft !== undefined && result.matchedCount === 0) throw new ErrorWithStatus({ message: 'Lịch đã thay đổi. Vui lòng tải lại.', status: 409 })
 
     // Emit sự kiện khi giftEnabled thay đổi để FE ẩn/hiện nút mở quà
     const newGiftEnabled = schedule.giftEnabled !== undefined ? !!schedule.giftEnabled : previousGiftEnabled

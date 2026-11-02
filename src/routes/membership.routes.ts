@@ -17,11 +17,14 @@ import {
   updateStreakGiftItem,
   removeStreakGiftItem
 } from '~/controllers/membership.controller'
+import { getBirthdayEligibility, getBirthdayHistory } from '~/controllers/membership.controller'
 import { protect } from '~/middlewares/auth.middleware'
 import { UserRole } from '~/constants/enum'
 import { wrapRequestHandler } from '~/utils/handlers'
 
 const membershipRouter = Router()
+membershipRouter.get('/members/:id/birthday', protect([UserRole.Admin, UserRole.Staff]), wrapRequestHandler(getBirthdayEligibility))
+membershipRouter.get('/members/:id/birthday/history', protect([UserRole.Admin, UserRole.Staff]), wrapRequestHandler(getBirthdayHistory))
 
 membershipRouter.get('/me', protect([]), wrapRequestHandler(getMembershipMe))
 membershipRouter.get('/lookup', protect([UserRole.Admin, UserRole.Staff]), wrapRequestHandler(lookupMembershipByPhone))

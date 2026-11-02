@@ -28,6 +28,8 @@ import fnbOrderService from './fnbOrder.service'
 import { hasPendingFnbOrderForSchedule } from './fnbPendingOrder.service'
 import { holidayService } from './holiday.service'
 import { createRoomBillRevenuePersistence } from './revenueCheckout.persistence'
+import birthdayBenefitService from './birthdayBenefit.service'
+import type { BirthdaySelection } from '~/utils/birthdayBenefit'
 import { persistRoomBillWithRevenue } from './roomBillRevenue.service'
 import {
   addRevenueCategoryTotals,
@@ -261,7 +263,7 @@ function pickBillTimeParam(v: unknown): string | undefined {
 
 // Additive checkout input/output: retain the selected promotion identity, never
 // trust the client-supplied promotion percentage or financial snapshot.
-type CheckoutBillData = IBill & { promotionId?: string | ObjectId }
+type CheckoutBillData = IBill & { promotionId?: string | ObjectId; birthdaySelection?: BirthdaySelection }
 
 function checkoutTimeParam(value: unknown): string | undefined {
   if (value instanceof Date) return dayjs(value).isValid() ? value.toISOString() : 'Invalid Date'
@@ -681,7 +683,9 @@ export class BillService {
     paymentMethod?: string,
     promotionId?: string,
     actualStartTime?: string | string[],
-    customerPhone?: string
+    customerPhone?: string,
+    birthdaySelection?: BirthdaySelection,
+    birthdayActor?: string
   ): Promise<CheckoutBillData> {
     // Validate ObjectId format for scheduleId
     if (!ObjectId.isValid(scheduleId)) {
@@ -1247,7 +1251,7 @@ export class BillService {
       0
     )
 
-    const bill: CheckoutBillData = {
+    let bill: CheckoutBillData = {
       scheduleId: schedule._id,
       roomId: schedule.roomId,
       roomType: effectiveRoomType,
@@ -1325,6 +1329,20 @@ export class BillService {
             }
           })()
         : undefined
+    }
+
+    if (birthdaySelection !== undefined) {
+      const config = await membershipService.getConfig()
+      bill = {
+        ...(await birthdayBenefitService.apply(
+          { ...bill, totalAmount: Math.max(0, subtotal - discountAmount - giftDiscountAmount - membershipDiscountAmount) },
+          birthdaySelection,
+          config.birthday,
+          birthdayActor || ''
+        )),
+        promotionId: bill.promotionId,
+        birthdaySelection
+      }
     }
 
     // Tự động lưu order vào history nếu có order và chưa có trong history
@@ -1503,7 +1521,7 @@ export class BillService {
     startDate?: string
     endDate?: string
     kind?: 'all' | 'fnb' | 'discount'
-    source?: 'all' | 'membership' | 'gift' | 'streak'
+    source?: 'all' | 'membership' | 'gift' | 'streak' | 'birthday'
     search?: string
   }) {
     const page = Math.max(1, params.page)
@@ -1515,7 +1533,8 @@ export class BillService {
             { 'gift.type': { $exists: true } },
             { giftDiscountAmount: { $gt: 0 } },
             { membershipDiscountAmount: { $gt: 0 } },
-            { 'streakGifts.0': { $exists: true } }
+            { 'streakGifts.0': { $exists: true } },
+            { 'birthday.usageKey': { $exists: true } }
           ]
         }
       ]
@@ -1552,12 +1571,19 @@ export class BillService {
       bill: any
     ): {
       kind: 'fnb' | 'discount'
-      source: 'membership' | 'gift' | 'streak'
+      source: 'membership' | 'gift' | 'streak' | 'birthday'
       label: string
       reason: string
       value?: number
     } | null => {
       const type = bill.gift?.type
+      if (bill.birthday) return {
+        kind: bill.birthday.discountAmount > 0 ? 'discount' : 'fnb',
+        source: 'birthday',
+        label: `Sinh nhật: giảm ${bill.birthday.discountPercentage}% + ${bill.birthday.itemCount} phần nước`,
+        value: bill.birthday.discountAmount,
+        reason: bill.birthday.items.map((item: { name: string; quantity: number }) => `${item.name} ×${item.quantity}`).join(', ')
+      }
       if (bill.streakGifts?.length) {
         const milestones = bill.streakGifts.map((gift: any) => `${gift.streakCount} lần`).join(', ')
         return {
@@ -1624,9 +1650,9 @@ export class BillService {
     const enriched = allBills
       .map((bill: any) => ({ bill, classification: classify(bill) }))
       .filter(
-        ({ classification }) =>
+        ({ bill, classification }) =>
           classification &&
-          (params.kind === undefined || params.kind === 'all' || classification.kind === params.kind) &&
+          (params.kind === undefined || params.kind === 'all' || classification.kind === params.kind || (bill.birthday && ((params.kind === 'fnb' && bill.birthday.itemCount > 0) || (params.kind === 'discount' && bill.birthday.discountAmount > 0)))) &&
           (params.source === undefined || params.source === 'all' || classification.source === params.source)
       )
     const totalCount = enriched.length
@@ -1652,6 +1678,7 @@ export class BillService {
         giftValue: classification!.value,
         appliedReason: classification!.reason,
         streakGifts: bill.streakGifts || [],
+        birthday: bill.birthday,
         giftDiscountAmount: bill.giftDiscountAmount || 0,
         membershipDiscountAmount: bill.membershipDiscountAmount || 0,
         totalAmount: bill.totalAmount,
@@ -1665,6 +1692,8 @@ export class BillService {
         membershipBills: enriched.filter(({ classification }) => classification?.source === 'membership').length,
         giftBills: enriched.filter(({ classification }) => classification?.source === 'gift').length,
         streakBills: enriched.filter(({ classification }) => classification?.source === 'streak').length,
+        birthdayBills: enriched.filter(({ bill }) => !!bill.birthday).length,
+        totalBirthdayDiscountAmount: enriched.reduce((sum, { bill }) => sum + (bill.birthday?.discountAmount || 0), 0),
         totalGiftDiscountAmount: enriched.reduce((sum, { bill }) => sum + (bill.giftDiscountAmount || 0), 0),
         totalMembershipDiscountAmount: enriched.reduce((sum, { bill }) => sum + (bill.membershipDiscountAmount || 0), 0)
       },
@@ -1763,7 +1792,8 @@ export class BillService {
       // Xóa các hóa đơn trùng lặp
       if (duplicateBillIds.length > 0) {
         const result = await databaseService.bills.deleteMany({
-          _id: { $in: duplicateBillIds }
+          _id: { $in: duplicateBillIds },
+          birthday: { $exists: false }
         })
 
         const afterCount = beforeCount - result.deletedCount
@@ -1826,7 +1856,8 @@ export class BillService {
 
       // Xóa các hóa đơn thuộc về lịch chưa hoàn thành
       const result = await databaseService.bills.deleteMany({
-        _id: { $in: billIdsToRemove }
+        _id: { $in: billIdsToRemove },
+        birthday: { $exists: false }
       })
 
       const afterCount = beforeCount - result.deletedCount
@@ -2045,6 +2076,15 @@ export class BillService {
       ])
     }
 
+    if (bill.birthday) {
+      printer.tableCustom([
+        { text: `Sinh nhat ${bill.birthday.discountPercentage}%`, width: 0.45, align: 'left' },
+        { text: '', width: 0.15, align: 'center' },
+        { text: '', width: 0.2, align: 'right' },
+        { text: `-${bill.birthday.discountAmount.toLocaleString('vi-VN')}`, width: 0.2, align: 'right' }
+      ])
+    }
+
     // Hiển thị discount membership tier
     if (bill.membershipDiscountAmount && bill.membershipDiscountAmount > 0) {
       const tierLabel = bill.membership?.tier
@@ -2234,6 +2274,7 @@ export class BillService {
    */
   async saveBillWithMembership(billData: CheckoutBillData): Promise<{
     bill: IBill
+    alreadySaved?: boolean
     membership: {
       success: boolean
       user?: any
@@ -2253,6 +2294,22 @@ export class BillService {
           message: 'Missing required fields: scheduleId, roomId',
           status: HTTP_STATUS_CODE.BAD_REQUEST
         })
+      }
+
+      // A lost response/retry must recover the committed bill, not spend the annual turn twice.
+      if (billData.birthdaySelection !== undefined) {
+        const savedBirthday = await databaseService.bills.findOne({
+          scheduleId: new ObjectId(billData.scheduleId), 'birthday.usageKey': { $exists: true }
+        })
+        if (savedBirthday) {
+          return {
+            bill: savedBirthday, alreadySaved: true,
+            membership: {
+              success: false, skipped: true, reason: 'Bill sinh nhật đã lưu trước đó.',
+              error: savedBirthday.checkoutFollowUp?.status === 'pending' ? 'Bill đã lưu; membership cần đối soát.' : undefined
+            }
+          }
+        }
       }
 
       // Không lưu bill snapshot khi vẫn còn order FNB chưa được admin xác nhận phục vụ.
@@ -2340,7 +2397,9 @@ export class BillService {
           checkoutTimeParam(billData.startTime) ||
           checkoutTimeParam(schedule?.startTime) ||
           now.toISOString(),
-        customerPhone
+        customerPhone,
+        billData.birthdaySelection,
+        billData.completedBy
       )
 
       // A notification may have arrived while pricing/member lookups were running.
@@ -2363,9 +2422,16 @@ export class BillService {
         note: billData.note ?? canonicalBill.note
       })
 
+      if (billToSave.birthday) {
+        billToSave.checkoutFollowUp = { status: 'pending', points: 'pending', streak: 'pending', updatedAt: new Date() }
+      }
+
       // 6. Lưu bill và đóng sổ doanh thu (phòng / F&B) trong một transaction.
       if ((billToSave.items ?? []).some(isPositiveRevenueBillItem)) {
-        await persistRoomBillWithRevenue(billToSave, createRoomBillRevenuePersistence())
+        await persistRoomBillWithRevenue(billToSave, createRoomBillRevenuePersistence(Boolean(billToSave.birthday)))
+      } else if (billToSave.birthday) {
+        const persistence = createRoomBillRevenuePersistence(true)
+        await persistence.withTransaction((session) => persistence.insertBill(billToSave, session).then(() => undefined))
       } else {
         await databaseService.bills.insertOne(billToSave)
       }
@@ -2382,48 +2448,72 @@ export class BillService {
         success: false
       }
 
-      const config = await membershipService.getConfig()
-      const pointsEarned = await membershipService.computePointsForAmount(billToSave.totalAmount)
+      try {
+        const config = await membershipService.getConfig()
+        const pointsEarned = await membershipService.computePointsForAmount(billToSave.totalAmount)
 
-      if (!customerPhone) {
-        membershipResult.skipped = true
-        membershipResult.reason = 'Không có phone_number trong bill hoặc schedule'
-      } else if (existingRewardHistory) {
-        membershipResult.skipped = true
-        membershipResult.reason = 'Invoice đã được tích điểm rồi'
-      } else if (pointsEarned <= 0 && !billToSave.userId) {
-        membershipResult.skipped = true
-        membershipResult.pointsEarned = 0
-        membershipResult.reason = `Bill ${billToSave.totalAmount.toLocaleString('vi-VN')}đ chưa đủ ${config.currencyUnit.toLocaleString('vi-VN')}đ để tích điểm`
-      } else {
-        try {
-          const updatedUser = await membershipService.earnPointsByPhone({
-            phone_number: customerPhone,
-            totalAmount: billToSave.totalAmount,
-            source: require('~/constants/enum').RewardSource.Point,
-            meta: {
-              invoiceCode: billToSave.invoiceCode,
-              method: 'auto'
-            },
-            visitAt: billToSave.endTime || new Date()
-          })
+        if (!customerPhone) {
+          membershipResult.skipped = true
+          membershipResult.reason = 'Không có phone_number trong bill hoặc schedule'
+        } else if (existingRewardHistory) {
+          membershipResult.skipped = true
+          membershipResult.reason = 'Invoice đã được tích điểm rồi'
+        } else if (pointsEarned <= 0 && !billToSave.userId) {
+          membershipResult.skipped = true
+          membershipResult.pointsEarned = 0
+          membershipResult.reason = `Bill ${billToSave.totalAmount.toLocaleString('vi-VN')}đ chưa đủ ${config.currencyUnit.toLocaleString('vi-VN')}đ để tích điểm`
+        } else {
+          try {
+            const updatedUser = await membershipService.earnPointsByPhone({
+              phone_number: customerPhone,
+              totalAmount: billToSave.totalAmount,
+              source: require('~/constants/enum').RewardSource.Point,
+              meta: {
+                invoiceCode: billToSave.invoiceCode,
+                method: 'auto'
+              },
+              visitAt: billToSave.endTime || new Date()
+            })
 
-          membershipResult.success = !!updatedUser
-          membershipResult.user = updatedUser
-          membershipResult.pointsEarned = pointsEarned
-        } catch (error: any) {
-          console.error('Lỗi khi tích điểm tự động:', error)
-          throw error
+            membershipResult.success = !!updatedUser
+            membershipResult.user = updatedUser
+            membershipResult.pointsEarned = pointsEarned
+          } catch (error: any) {
+            console.error('Lỗi khi tích điểm tự động:', error)
+            throw error
+          }
         }
+        if (billToSave.checkoutFollowUp) billToSave.checkoutFollowUp.points = 'complete'
+      } catch (error) {
+        if (!billToSave.birthday) throw error
+        membershipResult.error = 'Bill đã lưu; tích điểm membership đang chờ đối soát. Không tạo lại bill.'
       }
 
-      if (billToSave.userId && billToSave._id && billToSave.scheduleId) {
-        await membershipService.linkStreakGiftsToBill({
-          userId: String(billToSave.userId),
-          scheduleId: String(billToSave.scheduleId),
-          billId: billToSave._id.toString(),
-          invoiceCode: billToSave.invoiceCode
-        })
+      try {
+        if (billToSave.userId && billToSave._id && billToSave.scheduleId) {
+          await membershipService.linkStreakGiftsToBill({
+            userId: String(billToSave.userId),
+            scheduleId: String(billToSave.scheduleId),
+            billId: billToSave._id.toString(),
+            invoiceCode: billToSave.invoiceCode
+          })
+        }
+        if (billToSave.checkoutFollowUp) billToSave.checkoutFollowUp.streak = 'complete'
+      } catch (error) {
+        if (!billToSave.birthday) throw error
+        membershipResult.error = 'Bill đã lưu; liên kết quà membership đang chờ đối soát. Không tạo lại bill.'
+      }
+
+      if (billToSave.checkoutFollowUp) {
+        billToSave.checkoutFollowUp.status = billToSave.checkoutFollowUp.points === 'complete' && billToSave.checkoutFollowUp.streak === 'complete' ? 'complete' : 'pending'
+        billToSave.checkoutFollowUp.updatedAt = new Date()
+        try {
+          await databaseService.bills.updateOne({ _id: billToSave._id }, { $set: { checkoutFollowUp: billToSave.checkoutFollowUp } })
+        } catch {
+          // The initial pending state is durable. A follow-up status write cannot undo a committed bill.
+          billToSave.checkoutFollowUp.status = 'pending'
+          membershipResult.error = 'Bill đã lưu; trạng thái membership cần đối soát. Không tạo lại bill.'
+        }
       }
 
       return {

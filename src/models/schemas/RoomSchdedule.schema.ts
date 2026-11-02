@@ -58,6 +58,7 @@ type RoomChangeLog = {
 }
 
 export class RoomSchedule {
+  birthdayDraft?: { userId: string; selection: import('~/utils/birthdayBenefit').BirthdaySelection } | null
   _id?: ObjectId
   roomId: ObjectId
   startTime: Date

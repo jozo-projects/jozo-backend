@@ -4,6 +4,24 @@ import membershipService from '~/services/membership.service'
 import fnBMenuItemService from '~/services/fnbMenuItem.service'
 import { ErrorWithStatus } from '~/models/Error'
 import { FnBCategory } from '~/constants/enum'
+import birthdayBenefitService from '~/services/birthdayBenefit.service'
+
+export const getBirthdayEligibility = async (req: Request, res: Response) => {
+  const config = await membershipService.getConfig()
+  const at = req.query.at
+  if (at !== undefined && (typeof at !== 'string' || !/^\d{4}-\d{2}-\d{2}T/.test(at) || !Number.isFinite(new Date(at).getTime()))) {
+    throw new ErrorWithStatus({ message: 'Ngày dự kiến không hợp lệ.', status: 400 })
+  }
+  const result = at === undefined
+    ? await birthdayBenefitService.eligibility(req.params.id, config.birthday)
+    : await birthdayBenefitService.eligibility(req.params.id, config.birthday, new Date(at as string))
+  return res.json({ message: 'Điều kiện ưu đãi sinh nhật', result })
+}
+
+export const getBirthdayHistory = async (req: Request, res: Response) => {
+  const result = await birthdayBenefitService.history(req.params.id, Number(req.query.page ?? 1), Number(req.query.limit ?? 20))
+  return res.json({ message: 'Lịch sử ưu đãi sinh nhật', result })
+}
 
 export const getMembershipConfig = async (req: Request, res: Response, next: NextFunction) => {
   try {

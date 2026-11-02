@@ -8,6 +8,8 @@ import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import billService, { resolveBillRoomType } from '~/services/bill.service'
 import databaseService from '~/services/database.service'
 import { normalizePaymentMethod } from '~/utils/paymentMethod'
+import { ErrorWithStatus } from '~/models/Error'
+import type { BirthdaySelection } from '~/utils/birthdayBenefit'
 
 dayjs.extend(utc)
 dayjs.extend(timezone)
@@ -42,6 +44,15 @@ const getRevenueViewerUserId = async (req: Request): Promise<string | undefined 
 export const getBill = async (req: Request, res: Response) => {
   const { scheduleId } = req.params
   const { actualEndTime, actualStartTime, promotionId, phone, customerPhone } = req.query
+  let birthdaySelection: BirthdaySelection | undefined
+  if (req.query.birthdaySelection !== undefined) {
+    try {
+      if (typeof req.query.birthdaySelection !== 'string' || req.query.birthdaySelection.length > 10000) throw new Error('Invalid selection')
+      birthdaySelection = JSON.parse(req.query.birthdaySelection)
+    } catch {
+      throw new ErrorWithStatus({ message: 'birthdaySelection phải là JSON hợp lệ.', status: 400 })
+    }
+  }
 
   // Validate ObjectId format for scheduleId
   if (!ObjectId.isValid(scheduleId)) {
@@ -56,7 +67,9 @@ export const getBill = async (req: Request, res: Response) => {
     undefined,
     promotionId as string,
     actualStartTime as string,
-    (phone as string) || (customerPhone as string)
+    (phone as string) || (customerPhone as string),
+    birthdaySelection,
+    req.decoded_authorization?.user_id
   )
 
   return res.status(HTTP_STATUS_CODE.OK).json({
@@ -82,7 +95,9 @@ export const printBill = async (req: Request, res: Response) => {
     paymentMethod,
     promotionId as string,
     actualStartTime as string,
-    phone || customerPhone
+    phone || customerPhone,
+    req.body.birthdaySelection,
+    req.decoded_authorization?.user_id
   )
   billData.completedBy = billData.completedBy || req.decoded_authorization?.user_id
 
@@ -170,7 +185,7 @@ export const getGiftAppliedBills = async (req: Request, res: Response) => {
     const page = Number(req.query.page || 1)
     const limit = Number(req.query.limit || 20)
     const kind = pickQueryString(req.query.kind) as 'all' | 'fnb' | 'discount' | undefined
-    const source = pickQueryString(req.query.source) as 'all' | 'membership' | 'gift' | 'streak' | undefined
+    const source = pickQueryString(req.query.source) as 'all' | 'membership' | 'gift' | 'streak' | 'birthday' | undefined
     const result = await billService.getGiftAppliedBills({
       page: Number.isFinite(page) ? page : 1,
       limit: Number.isFinite(limit) ? limit : 20,
@@ -746,9 +761,8 @@ export const saveBill = async (req: Request, res: Response) => {
   }
 
   try {
-    if (!bill.completedBy && userId) {
-      bill.completedBy = userId
-    }
+    // Confirmation identity is the authenticated cashier, never a client field.
+    bill.completedBy = userId
 
     // Sử dụng service method mới để lưu bill và tích điểm
     const result = await billService.saveBillWithMembership(bill)
@@ -767,6 +781,7 @@ export const saveBill = async (req: Request, res: Response) => {
       message,
       result: {
         bill: result.bill,
+        ...(result.alreadySaved ? { alreadySaved: true } : {}),
         membership: result.membership
       }
     })
