@@ -3,6 +3,7 @@ import timezone from 'dayjs/plugin/timezone'
 import utc from 'dayjs/plugin/utc'
 import { Request, Response } from 'express'
 import { ObjectId } from 'mongodb'
+import memberUsageService from '~/services/memberUsage.service'
 import { UserRole } from '~/constants/enum'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import billService, { resolveBillRoomType } from '~/services/bill.service'
@@ -129,11 +130,15 @@ export const printBill = async (req: Request, res: Response) => {
 // }
 
 /**
- * Doanh thu theo khoảng [startDate, endDate] (ISO, trọn ngày VN). Một ngày: gửi cùng giá trị cho cả hai.
+ * Mặc định trọn ngày VN (cho phép cùng ngày); rangeMode=exact dùng ISO UTC/offset [start, end).
  */
 export const getRevenueByRange = async (req: Request, res: Response) => {
   const startDate = pickQueryString(req.query.startDate)
   const endDate = pickQueryString(req.query.endDate)
+  const rangeMode = req.query.rangeMode
+  if (rangeMode !== undefined && rangeMode !== 'exact') {
+    return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({ message: 'rangeMode không hợp lệ.' })
+  }
 
   if (!startDate || !endDate) {
     return res.status(HTTP_STATUS_CODE.BAD_REQUEST).json({
@@ -153,7 +158,7 @@ export const getRevenueByRange = async (req: Request, res: Response) => {
       return res.status(HTTP_STATUS_CODE.UNAUTHORIZED).json({ message: 'Unauthorized' })
     }
 
-    const revenueData = await billService.getRevenueByDateRange(startDate, endDate, viewerUserId)
+    const revenueData = await billService.getRevenueByDateRange(startDate, endDate, viewerUserId, rangeMode)
     const startDateFormatted = dayjs(revenueData.startDate).format('DD/MM/YYYY')
     const endDateFormatted = dayjs(revenueData.endDate).format('DD/MM/YYYY')
 
@@ -408,16 +413,26 @@ export const getBillById = async (req: Request, res: Response) => {
       _id: bill.scheduleId instanceof ObjectId ? bill.scheduleId : new ObjectId(bill.scheduleId)
     })
 
+    const [billWithMember] = await memberUsageService.attachMembers([bill])
+
+    const earnedPoints = billWithMember.membership?.userId
+      ? await memberUsageService.pointsForBills(billWithMember.membership.userId, [bill])
+      : new Map<string, number>()
+
+    const usageStart = bill.actualStartTime || bill.startTime
+    const usageEnd = bill.actualEndTime || bill.endTime
+
     // Format dates for better readability
     const formattedBill = {
-      ...bill,
+      pointsEarned: bill.invoiceCode ? (earnedPoints.get(bill.invoiceCode) ?? null) : null,
+      ...billWithMember,
       roomName: room?.roomName || 'Unknown Room',
       roomType: resolveBillRoomType(bill, schedule ?? undefined, room ?? undefined),
       customerName: schedule?.note || '',
-      formattedStartTime: dayjs(bill.startTime).tz('Asia/Ho_Chi_Minh').format('DD/MM/YYYY HH:mm'),
-      formattedEndTime: dayjs(bill.endTime).tz('Asia/Ho_Chi_Minh').format('DD/MM/YYYY HH:mm'),
+      formattedStartTime: dayjs(usageStart).tz('Asia/Ho_Chi_Minh').format('DD/MM/YYYY HH:mm'),
+      formattedEndTime: dayjs(usageEnd).tz('Asia/Ho_Chi_Minh').format('DD/MM/YYYY HH:mm'),
       formattedCreatedAt: dayjs(bill.createdAt).tz('Asia/Ho_Chi_Minh').format('DD/MM/YYYY HH:mm'),
-      usageDuration: billService.calculateHours(bill.startTime, bill.endTime).toFixed(2),
+      usageDuration: billService.calculateHours(usageStart, usageEnd).toFixed(2),
       invoiceCode: bill.invoiceCode || 'N/A'
     }
 

@@ -2,6 +2,7 @@ import { Router } from 'express'
 import {
   claimInvoice,
   getMembershipMe,
+  getMemberUsageHistory,
   lookupMembershipByPhone,
   getMembershipConfig,
   upsertMembershipConfig,
@@ -27,6 +28,8 @@ membershipRouter.get('/members/:id/birthday', protect([UserRole.Admin, UserRole.
 membershipRouter.get('/members/:id/birthday/history', protect([UserRole.Admin, UserRole.Staff]), wrapRequestHandler(getBirthdayHistory))
 
 membershipRouter.get('/me', protect([]), wrapRequestHandler(getMembershipMe))
+membershipRouter.get('/me/history', protect([]), wrapRequestHandler(getMemberUsageHistory))
+membershipRouter.get('/members/:id/history', protect([UserRole.Admin, UserRole.Staff]), wrapRequestHandler(getMemberUsageHistory))
 membershipRouter.get('/lookup', protect([UserRole.Admin, UserRole.Staff]), wrapRequestHandler(lookupMembershipByPhone))
 membershipRouter.post('/claim-invoice', wrapRequestHandler(claimInvoice))
 membershipRouter.get('/config', protect([UserRole.Admin]), wrapRequestHandler(getMembershipConfig))

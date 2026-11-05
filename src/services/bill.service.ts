@@ -30,6 +30,7 @@ import { holidayService } from './holiday.service'
 import { createRoomBillRevenuePersistence } from './revenueCheckout.persistence'
 import birthdayBenefitService from './birthdayBenefit.service'
 import type { BirthdaySelection } from '~/utils/birthdayBenefit'
+import memberUsageService from './memberUsage.service'
 import { persistRoomBillWithRevenue } from './roomBillRevenue.service'
 import {
   addRevenueCategoryTotals,
@@ -349,7 +350,7 @@ export class BillService {
   private async prepareRevenueBills<T extends IBill>(bills: T[], viewerUserId?: string): Promise<T[]> {
     const billsWithAuditInfo = await this.attachRevenueAuditInfo(bills)
     const filteredBills = this.filterRevenueBillsForUser(billsWithAuditInfo, viewerUserId)
-    return this.attachRevenueUserNames(filteredBills)
+    return this.attachRevenueUserNames(await memberUsageService.attachMembers(filteredBills))
   }
 
   private revenueBillBenefitScore(bill: IBill): number {
@@ -407,14 +408,14 @@ export class BillService {
   }
 
   /**
-   * Doanh thu theo startTime của bill nằm trong [startDateObj, endDateObj] (inclusive).
+   * Inclusive by default; exact ranges opt into an exclusive end for both sources.
    * Các API tuần/tháng/khoảng tùy chỉnh dùng chung pipeline này để tránh trùng logic.
    */
   private async aggregateRevenueInStartTimeRange(
     startDateObj: Date,
     endDateObj: Date,
     viewerUserId?: string,
-    options: { floorBillAmountsToThousand?: boolean } = {}
+    options: { floorBillAmountsToThousand?: boolean; exclusiveEnd?: boolean } = {}
   ): Promise<{
     totalRevenue: number
     serviceRoomRevenue: number
@@ -424,23 +425,18 @@ export class BillService {
     startDate: Date
     endDate: Date
   }> {
-    const { floorBillAmountsToThousand = true } = options
+    const { floorBillAmountsToThousand = true, exclusiveEnd = false } = options
+    const timeBounds = { $gte: startDateObj, ...(exclusiveEnd ? { $lt: endDateObj } : { $lte: endDateObj }) }
     const [bills, retailSales] = await Promise.all([
       databaseService.bills
         .find({
-          startTime: {
-            $gte: startDateObj,
-            $lte: endDateObj
-          }
+          startTime: timeBounds
         })
         .sort({ startTime: -1 })
         .toArray(),
       databaseService.retailSales
         .find({
-          createdAt: {
-            $gte: startDateObj,
-            $lte: endDateObj
-          }
+          createdAt: timeBounds
         })
         .sort({ createdAt: -1 })
         .toArray()
@@ -534,6 +530,34 @@ export class BillService {
       })
     }
     return { start: start.toDate(), end: end.toDate() }
+  }
+
+  /** Exact timestamps require UTC/offset; reject rollover and local-only strings. */
+  private parseExactRevenueRange(startDate: string, endDate: string): { start: Date; end: Date } {
+    const parse = (value: string): Date => {
+      const iso = /^(\d{4}-\d{2}-\d{2})T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,3})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/
+      const match = iso.exec(value)
+      const date = new Date(value)
+      const calendar = match ? new Date(`${match[1]}T00:00:00Z`) : new Date(NaN)
+      if (
+        !match ||
+        !Number.isFinite(date.getTime()) ||
+        !Number.isFinite(calendar.getTime()) ||
+        calendar.toISOString().slice(0, 10) !== match[1]
+      ) {
+        throw new ErrorWithStatus({
+          message: 'Exact range yêu cầu ngày giờ ISO hợp lệ có UTC hoặc offset.',
+          status: HTTP_STATUS_CODE.BAD_REQUEST
+        })
+      }
+      return date
+    }
+    const start = parse(startDate)
+    const end = parse(endDate)
+    if (end.getTime() <= start.getTime()) {
+      throw new ErrorWithStatus({ message: 'Kết thúc phải sau bắt đầu.', status: HTTP_STATUS_CODE.BAD_REQUEST })
+    }
+    return { start, end }
   }
 
   constructor() {
@@ -1490,12 +1514,13 @@ export class BillService {
   }
 
   /**
-   * Doanh thu theo khoảng ngày (VN): startDate / endDate là chuỗi ISO; lọc theo startTime của bill, trọn cả ngày đầu và cuối.
+   * Mặc định trọn ngày VN; rangeMode=exact giữ nguyên hai instant ISO theo [start, end).
    */
   async getRevenueByDateRange(
     startDate: string,
     endDate: string,
-    viewerUserId?: string
+    viewerUserId?: string,
+    rangeMode?: string
   ): Promise<{
     totalRevenue: number
     serviceRoomRevenue: number
@@ -1506,8 +1531,14 @@ export class BillService {
     endDate: Date
   }> {
     try {
-      const { start, end } = this.parseInclusiveVnDayRange(startDate, endDate)
-      return await this.aggregateRevenueInStartTimeRange(start, end, viewerUserId)
+      if (rangeMode !== undefined && rangeMode !== 'exact') {
+        throw new ErrorWithStatus({ message: 'rangeMode không hợp lệ.', status: HTTP_STATUS_CODE.BAD_REQUEST })
+      }
+      const { start, end } =
+        rangeMode === 'exact'
+          ? this.parseExactRevenueRange(startDate, endDate)
+          : this.parseInclusiveVnDayRange(startDate, endDate)
+      return await this.aggregateRevenueInStartTimeRange(start, end, viewerUserId, { exclusiveEnd: rangeMode === 'exact' })
     } catch (error) {
       console.error('[DOANH THU] Lỗi khi tính doanh thu:', error)
       throw error

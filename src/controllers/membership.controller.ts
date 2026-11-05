@@ -1,6 +1,7 @@
 import { NextFunction, Request, Response } from 'express'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import membershipService from '~/services/membership.service'
+import memberUsageService from '~/services/memberUsage.service'
 import fnBMenuItemService from '~/services/fnbMenuItem.service'
 import { ErrorWithStatus } from '~/models/Error'
 import { FnBCategory } from '~/constants/enum'
@@ -59,6 +60,22 @@ export const upsertMembershipConfig = async (req: Request, res: Response, next: 
           })
     )
   }
+}
+
+export const getMemberUsageHistory = async (req: Request, res: Response) => {
+  const userId = req.params.id || req.decoded_authorization?.user_id
+  if (!userId) return res.status(401).json({ message: 'Unauthorized' })
+  for (const key of ['startDate', 'endDate', 'search'] as const) {
+    if (req.query[key] !== undefined && typeof req.query[key] !== 'string') {
+      return res.status(400).json({ message: 'Bộ lọc lịch sử không hợp lệ' })
+    }
+  }
+  const result = await memberUsageService.history(userId, Number(req.query.page ?? 1), Number(req.query.limit ?? 20), {
+    startDate: req.query.startDate as string | undefined,
+    endDate: req.query.endDate as string | undefined,
+    search: req.query.search as string | undefined
+  })
+  return res.json({ message: 'Lịch sử sử dụng', result })
 }
 
 export const getMembershipMe = async (req: Request, res: Response, next: NextFunction) => {
