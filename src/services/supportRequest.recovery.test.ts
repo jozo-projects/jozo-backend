@@ -2,11 +2,20 @@ import { SupportRequestStatus } from '~/models/schemas/SupportRequest.schema'
 import {
   expirePendingSupportRequests,
   getActiveSupportRequests,
+  getAllActiveSupportRequests,
   getSupportRequestHistory
 } from '~/services/supportRequest.service'
 
 describe('support request recovery and expiry', () => {
   const now = new Date('2026-09-21T10:01:00.000Z')
+
+  it('loads active requests across all rooms in one query', async () => {
+    const toArray = jest.fn().mockResolvedValue([{ requestId: 'req-1', roomId: '101' }])
+    const sort = jest.fn().mockReturnValue({ toArray })
+    const find = jest.fn().mockReturnValue({ sort })
+    expect(await getAllActiveSupportRequests({ collection: { find } as never })).toEqual([{ requestId: 'req-1', roomId: '101' }])
+    expect(find).toHaveBeenCalledWith({ status: { $in: [SupportRequestStatus.Pending, SupportRequestStatus.NotSupported, SupportRequestStatus.Acknowledged] } })
+  })
 
   it('logs a timeout for pending requests without hiding them', async () => {
     const pending = {

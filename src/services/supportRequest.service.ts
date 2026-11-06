@@ -82,6 +82,16 @@ export async function getActiveSupportRequests(
     .toArray()
 }
 
+export async function getAllActiveSupportRequests(
+  deps?: SupportRequestServiceDependencies
+): Promise<ISupportRequest[]> {
+  const { collection } = getDependencies(deps)
+  return collection
+    .find({ status: { $in: [SupportRequestStatus.Pending, SupportRequestStatus.NotSupported, SupportRequestStatus.Acknowledged] } })
+    .sort({ createdAt: -1 })
+    .toArray()
+}
+
 export async function getAllSupportRequestHistory(
   deps?: SupportRequestServiceDependencies
 ): Promise<ISupportRequest[]> {

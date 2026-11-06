@@ -22,7 +22,7 @@ dayjs.extend(utc)
 dayjs.extend(timezone)
 
 /** v3: period=day dùng ngày kinh doanh FNB (cắt 03:00), đồng bộ với systemSold kiểm kê. */
-const FNB_STATS_CACHE_PREFIX = 'fnb:sales-stats:v3'
+const FNB_STATS_CACHE_PREFIX = 'fnb:sales-stats:v4'
 const FNB_STATS_CLOSED_PERIOD_TTL_SEC = 24 * 60 * 60
 const FNB_STATS_CURRENT_PERIOD_TTL_SEC = 5 * 60
 
@@ -345,13 +345,33 @@ class FnbOrderService {
     const fromUtc = fromDate.toDate()
     const toUtc = toDate.toDate()
 
-    const karaokeStats = await fnbSalesMovementService.aggregateKaraokeStatsByRange(fromUtc, toUtc)
-    const ordersCount = karaokeStats.ordersCount
+    const [karaokeStats, retailResult] = await Promise.all([
+      fnbSalesMovementService.aggregateKaraokeStatsByRange(fromUtc, toUtc),
+      databaseService.retailSales.aggregate<{
+        items: Array<{ itemId: string; quantity: number }>
+        ordersCount: Array<{ count: number }>
+      }>([
+        { $match: { createdAt: { $gte: fromUtc, $lte: toUtc } } },
+        { $facet: {
+          ordersCount: [{ $count: 'count' }],
+          items: [
+            { $unwind: '$items' },
+            { $group: { _id: '$items.itemId', quantity: { $sum: '$items.quantity' } } },
+            { $project: { _id: 0, itemId: '$_id', quantity: 1 } }
+          ]
+        } }
+      ]).toArray()
+    ])
+    const retail = retailResult[0]
+    const ordersCount = karaokeStats.ordersCount + (retail?.ordersCount[0]?.count ?? 0)
+    const itemsByKey = new Map<string, { itemId: string; category?: 'drink' | 'snack'; quantity: number }>()
+    for (const item of [...karaokeStats.items, ...(retail?.items ?? [])]) {
+      const existing = itemsByKey.get(item.itemId)
+      if (existing) existing.quantity += item.quantity
+      else itemsByKey.set(item.itemId, { ...item })
+    }
 
-    let totalItemsSold = karaokeStats.totalItemsSold
-    const itemsByKey = karaokeStats.items
-
-    const itemsBreakdown = await this.resolveFnbItemDisplayNames(itemsByKey)
+    const itemsBreakdown = await this.resolveFnbItemDisplayNames(Array.from(itemsByKey.values()))
 
     // Filter theo category (drink | snack)
     let filteredBreakdown = itemsBreakdown
@@ -382,7 +402,7 @@ class FnbOrderService {
 
   /** Batch resolve tên món từ fnb_menu / fnb_menu_item (tránh N+1 query). */
   private async resolveFnbItemDisplayNames(
-    rows: Array<{ itemId: string; category: 'drink' | 'snack'; quantity: number }>
+    rows: Array<{ itemId: string; category?: 'drink' | 'snack'; quantity: number }>
   ): Promise<Array<{ itemId: string; name: string; category: 'drink' | 'snack'; quantity: number }>> {
     if (rows.length === 0) return []
 
@@ -428,7 +448,8 @@ class FnbOrderService {
           }
         }
       }
-      return { itemId: row.itemId, name, category: row.category, quantity: row.quantity }
+      const category = row.category ?? ((menu?.category ?? (variantMap.get(row.itemId) as any)?.category) === 'drink' ? 'drink' : 'snack')
+      return { itemId: row.itemId, name, category, quantity: row.quantity }
     })
   }
 

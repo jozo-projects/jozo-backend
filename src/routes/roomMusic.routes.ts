@@ -38,6 +38,7 @@ import {
   closeUnsupportedSupportRequestController,
   createSupportRequestController,
   getActiveSupportRequestsController,
+  getAllActiveSupportRequestsController,
   getAllSupportRequestHistoryController,
   getSupportRequestHistoryController,
   resolveSupportRequestController
@@ -68,6 +69,12 @@ roomMusicRouter.post('/:roomId/support-requests', wrapRequestHandler(createSuppo
  * @method GET
  */
 roomMusicRouter.get('/:roomId/support-requests/active', wrapRequestHandler(getActiveSupportRequestsController))
+
+roomMusicRouter.get(
+  '/support-requests/active',
+  protect([UserRole.Admin, UserRole.Staff]),
+  wrapRequestHandler(getAllActiveSupportRequestsController)
+)
 
 roomMusicRouter.get(
   '/support-requests/history',

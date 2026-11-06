@@ -9,6 +9,7 @@ import {
   closeUnsupportedSupportRequestById,
   createSupportRequestRecord,
   getActiveSupportRequests,
+  getAllActiveSupportRequests,
   getAllSupportRequestHistory,
   getSupportRequestHistory,
   resolveSupportRequestById
@@ -74,6 +75,14 @@ export const getActiveSupportRequestsController = async (req: Request, res: Resp
 
     const requests = await getActiveSupportRequests(roomId)
     return res.status(HTTP_STATUS_CODE.OK).json({ result: requests })
+  } catch (error) {
+    return next(error)
+  }
+}
+
+export const getAllActiveSupportRequestsController = async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    return res.status(HTTP_STATUS_CODE.OK).json({ result: await getAllActiveSupportRequests() })
   } catch (error) {
     return next(error)
   }
