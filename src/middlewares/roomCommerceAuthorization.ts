@@ -2,14 +2,15 @@ import { Request, RequestHandler } from 'express'
 import { ObjectId } from 'mongodb'
 import databaseService from '~/services/database.service'
 import { RoomDeviceAuthorizationFoundation } from '~/services/roomDeviceAuthorization.foundation'
+import { getDeviceAuthorizationEnabled } from '~/services/roomDeviceAuthorization.config'
 import { authorizeRoomControl } from '~/middlewares/roomHttpAuthorization'
 
 // Resolve from the same authoritative fields used by the downstream services.
 export function roomCommerceAuthorization(target: 'roomId' | 'roomIndex' | 'schedule'): RequestHandler {
   return async (req: Request, res, next) => {
-    if (process.env.HTTP_ROOM_DEVICE_AUTH !== 'true') return next()
     const deny = () => res.status(401).json({ error: 'UNAUTHORIZED' })
     try {
+      if (!await getDeviceAuthorizationEnabled(databaseService.roomDeviceAuthorizationStore)) return next()
       let room
       if (target === 'schedule') {
         const id = req.body?.scheduleId

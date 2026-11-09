@@ -2,6 +2,7 @@ import { Request, RequestParamHandler } from 'express'
 import { Db } from 'mongodb'
 import { TokenType, UserRole } from '~/constants/enum'
 import { RoomDeviceAuthorizationFoundation } from '~/services/roomDeviceAuthorization.foundation'
+import { getDeviceAuthorizationEnabled } from '~/services/roomDeviceAuthorization.config'
 import { usersServices } from '~/services/users.services'
 import { verifyToken } from '~/utils/jwt'
 
@@ -22,13 +23,12 @@ export async function authorizeRoomControl(req: Request, roomId: string, foundat
   return !!proof && await foundation.verify(roomId, 'control', proof)
 }
 
-// Disabled by default until every room client sends an approved device proof.
 export function createRoomHttpAuthorization(db: Pick<Db, 'collection'>): RequestParamHandler {
   const foundation = new RoomDeviceAuthorizationFoundation(db)
   return async (req, res, next, roomId) => {
-    if (process.env.HTTP_ROOM_DEVICE_AUTH !== 'true') return next()
     const deny = () => res.status(401).json({ error: 'UNAUTHORIZED' })
     try {
+      if (!await getDeviceAuthorizationEnabled(db)) return next()
       const authorization = req.get('Authorization')
       if (authorization !== undefined) {
         return await authorizeStaff(req) ? next() : deny()

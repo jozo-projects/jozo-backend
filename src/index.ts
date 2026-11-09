@@ -56,10 +56,6 @@ dayjs.extend(timezone)
 dayjs.tz.setDefault('Asia/Ho_Chi_Minh')
 console.log('Dayjs timezone:', dayjs().tz().format())
 
-// Kết nối DB, start services
-databaseService.connect()
-serverService.start()
-
 export const app = express()
 const port = 4000
 
@@ -207,12 +203,13 @@ app.use(defaultErrorHandler)
 
 // Scheduler jobs
 // startBookingScheduler()
-finishSchedulerInADay()
-// startShiftScheduler() — không dùng nữa
-startSongPruneScheduler()
-startSupportRequestScheduler()
-
-app.listen(port, () => {
-  console.log(`Server is running at http://localhost:${port}`)
-  // startScheduledJobs()
+void databaseService.connect().then(() => {
+  serverService.start()
+  finishSchedulerInADay()
+  startSongPruneScheduler()
+  startSupportRequestScheduler()
+  app.listen(port, () => console.log(`Server is running at http://localhost:${port}`))
+}).catch((error) => {
+  console.error('Startup failed:', error)
+  process.exit(1)
 })

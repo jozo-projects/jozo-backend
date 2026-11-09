@@ -7,7 +7,7 @@ import { roomEventEmitter } from '~/services/room.service'
 import { roomDevicePresenceService } from '~/services/roomDevicePresence.service'
 import { songService } from '~/services/song.service'
 import { canJoinRoom, managementAuthEnabled, managementRole, managementUserId } from '~/sockets/managementAuth'
-import { deviceAuthEnabled } from '~/sockets/deviceAuth'
+
 
 interface CommandPayload {
   action: string
@@ -146,9 +146,9 @@ export const RoomSocket = (io: Server) => {
 
     // Get roomId from query
     const requestedRoomId = socket.handshake.query.roomId as string
-    const roomId = deviceAuthEnabled() && !socket.data.managementActor
+    const roomId = socket.data.deviceAuthEnabled && !socket.data.managementActor
       ? socket.data.deviceActor?.room || ''
-      : !managementAuthEnabled() || canJoinRoom(socket, requestedRoomId) ? requestedRoomId : ''
+      : !managementAuthEnabled(socket) || canJoinRoom(socket, requestedRoomId) ? requestedRoomId : ''
     console.log('roomId:', roomId)
     if (roomId) {
       socket.join(roomId) // Gán socket vào room
@@ -157,7 +157,7 @@ export const RoomSocket = (io: Server) => {
 
     // The old server had no join_room handler. Only enable the documented
     // personal-room request in authenticated mode, never arbitrary joins.
-    if (managementAuthEnabled()) {
+    if (managementAuthEnabled(socket)) {
       socket.on('join_room', (room: unknown) => {
         if (room === `user:${managementUserId(socket)}` && canJoinRoom(socket, room)) socket.join(room)
       })
@@ -166,7 +166,7 @@ export const RoomSocket = (io: Server) => {
     // Track control/video device presence (skip admin/staff)
     if (!isManagementClient && roomId) {
       const deviceId = socket.handshake.query.deviceId as string
-      const clientType = deviceAuthEnabled() ? socket.data.deviceActor?.type : socket.handshake.query.clientType as string
+      const clientType = socket.data.deviceAuthEnabled ? socket.data.deviceActor?.type : socket.handshake.query.clientType as string
       const origin = (socket.handshake.headers.origin as string) || ''
       const registered = roomDevicePresenceService.register({
         deviceId,

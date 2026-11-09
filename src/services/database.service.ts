@@ -40,6 +40,7 @@ import { MusicCategory } from '~/models/schemas/MusicCategory.schema'
 import { RevenueAuditLog } from '~/models/schemas/RevenueAuditLog.schema'
 import { RevenueTransaction } from '~/models/schemas/Revenue.schema'
 import { SupportRequest } from '~/models/schemas/SupportRequest.schema'
+import { initializeDeviceAuthorizationConfig } from '~/services/roomDeviceAuthorization.config'
 dotenv.config()
 dotenv.config({ path: '.env.local', override: true })
 
@@ -178,6 +179,7 @@ export class DatabaseService {
     // Finalized revenue cannot safely run without its exact integrity indexes.
     // This is deliberately outside the legacy best-effort setup above.
     await ensureRevenueLedgerIndexes(this.#db.collection<RevenueTransaction>('revenue_transactions'))
+    await initializeDeviceAuthorizationConfig(this.roomDeviceAuthorizationStore)
   }
 
   /**
@@ -209,7 +211,7 @@ export class DatabaseService {
   }
 
   get roomDeviceAuthorizationStore(): Pick<Db, 'collection'> {
-    const allowed = new Set(['rooms', 'room_device_authorization_foundation', 'room_device_authorization_foundation_requests'])
+    const allowed = new Set(['rooms', 'room_device_authorization_foundation', 'room_device_authorization_foundation_requests', 'room_device_authorization_config'])
     const collection = ((name: string) => {
       if (!allowed.has(name)) throw new Error('PROTECTED_COLLECTION')
       return this.#db.collection(name)

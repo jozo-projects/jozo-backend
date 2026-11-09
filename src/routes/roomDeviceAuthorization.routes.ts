@@ -6,8 +6,9 @@ import { protect } from '~/middlewares/auth.middleware'
 import databaseService from '~/services/database.service'
 import { RoomDeviceAuthorizationFoundation } from '~/services/roomDeviceAuthorization.foundation'
 import { verifyToken } from '~/utils/jwt'
-import { mutateDeviceSlot } from '~/sockets/deviceAuth'
+import { invalidateLegacyDeviceSockets, mutateDeviceSlot } from '~/sockets/deviceAuth'
 import { deviceAuthorizationChanged } from '~/services/roomDeviceAuthorization.events'
+import { getDeviceAuthorizationEnabled, setDeviceAuthorizationEnabled } from '~/services/roomDeviceAuthorization.config'
 
 const requireManagementAccessToken: RequestHandler = async (req, res, next) => {
   const match = /^Bearer ([^\s]+)$/.exec(req.get('Authorization') || '')
@@ -19,6 +20,16 @@ const requireManagementAccessToken: RequestHandler = async (req, res, next) => {
   } catch {
     return res.status(401).json({ error: 'UNAUTHORIZED' })
   }
+}
+
+const requireAdminAccessToken: RequestHandler = async (req, res, next) => {
+  const match = /^Bearer ([^\s]+)$/.exec(req.get('Authorization') || '')
+  if (!match) return res.status(401).json({ error: 'UNAUTHORIZED' })
+  try {
+    const token = await verifyToken(match[1])
+    if (token.token_type !== TokenType.AccessToken) return res.status(401).json({ error: 'UNAUTHORIZED' })
+    return protect([UserRole.Admin])(req, res, next)
+  } catch { return res.status(401).json({ error: 'UNAUTHORIZED' }) }
 }
 
 type DeviceType = 'video' | 'control'
@@ -74,6 +85,19 @@ export function createRoomDeviceAuthorizationRouter(
   router.use((_req, res, next) => {
     res.set('Cache-Control', 'no-store')
     next()
+  })
+  router.get('/config', async (_req, res) => {
+    try { return res.json({ enabled: await getDeviceAuthorizationEnabled(db) }) }
+    catch { return res.status(503).json({ error: 'CONFIG_UNAVAILABLE' }) }
+  })
+  router.put('/admin/config', requireAdminAccessToken, async (req, res) => {
+    if (!req.body || typeof req.body.enabled !== 'boolean' || Object.keys(req.body).length !== 1 || Object.keys(req.query).length)
+      return res.status(400).json({ error: 'INVALID_INPUT' })
+    try {
+      await setDeviceAuthorizationEnabled(db, req.body.enabled)
+      if (req.body.enabled) invalidateLegacyDeviceSockets()
+      return res.json({ enabled: req.body.enabled })
+    } catch { return res.status(503).json({ error: 'CONFIG_UNAVAILABLE' }) }
   })
   const handle =
     (fn: (body: any) => Promise<{ status?: number; data: unknown }>): RequestHandler =>
