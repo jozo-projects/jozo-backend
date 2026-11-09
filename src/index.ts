@@ -38,6 +38,7 @@ import gameRouter from '~/routes/game.routes'
 import recruitmentRouter from '~/routes/recruitment.routes'
 import roomRouter from '~/routes/room.routes'
 import roomMusicRouter from '~/routes/roomMusic.routes'
+import roomDeviceAuthorizationRouter from '~/routes/roomDeviceAuthorization.routes'
 import roomScheduleRouter from '~/routes/roomSchedule.routes'
 import roomTypeRouter from '~/routes/roomType.routes'
 import usersRouter from '~/routes/users.routes'
@@ -84,6 +85,7 @@ const corsOptions = {
   allowedHeaders: [
     'Content-Type',
     'Authorization',
+    'X-Jozo-Device-Proof',
     'X-Requested-With',
     'Accept',
     'Origin',
@@ -130,7 +132,7 @@ app.use((req, res, next) => {
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH')
   res.header(
     'Access-Control-Allow-Headers',
-    'Origin, X-Requested-With, Content-Type, Accept, Authorization, Cache-Control, Pragma, Expires'
+    'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Jozo-Device-Proof, Cache-Control, Pragma, Expires'
   )
 
   // Xử lý preflight request
@@ -158,6 +160,7 @@ app.use('/users', usersRouter)
 app.use('/room-types', roomTypeRouter)
 app.use('/rooms', roomRouter)
 app.use('/room-music', roomMusicRouter)
+app.use('/room-device-authorization', roomDeviceAuthorizationRouter)
 app.use('/price', priceRouter)
 app.use('/file', fileRouter)
 app.use('/room-schedule', roomScheduleRouter)

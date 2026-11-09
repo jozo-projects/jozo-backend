@@ -6,6 +6,8 @@ import { songPruneJobEventEmitter } from '~/services/songPruneJob.service'
 import { roomEventEmitter } from '~/services/room.service'
 import { roomDevicePresenceService } from '~/services/roomDevicePresence.service'
 import { songService } from '~/services/song.service'
+import { canJoinRoom, managementAuthEnabled, managementRole, managementUserId } from '~/sockets/managementAuth'
+import { deviceAuthEnabled } from '~/sockets/deviceAuth'
 
 interface CommandPayload {
   action: string
@@ -129,10 +131,11 @@ export const RoomSocket = (io: Server) => {
   })
 
   io.on('connection', (socket: Socket) => {
+    if (!socket.connected) return
     console.log('Client connected:', socket.id)
 
     // Get role from query params (admin or staff)
-    const role = socket.handshake.query.role as string
+    const role = managementRole(socket)
     const isManagementClient = role === 'admin' || role === 'staff'
 
     // If client is admin or staff, join management room
@@ -142,17 +145,28 @@ export const RoomSocket = (io: Server) => {
     }
 
     // Get roomId from query
-    const roomId = socket.handshake.query.roomId as string
+    const requestedRoomId = socket.handshake.query.roomId as string
+    const roomId = deviceAuthEnabled() && !socket.data.managementActor
+      ? socket.data.deviceActor?.room || ''
+      : !managementAuthEnabled() || canJoinRoom(socket, requestedRoomId) ? requestedRoomId : ''
     console.log('roomId:', roomId)
     if (roomId) {
       socket.join(roomId) // Gán socket vào room
       console.log(`Socket ${socket.id} joined room ${roomId}`)
     }
 
+    // The old server had no join_room handler. Only enable the documented
+    // personal-room request in authenticated mode, never arbitrary joins.
+    if (managementAuthEnabled()) {
+      socket.on('join_room', (room: unknown) => {
+        if (room === `user:${managementUserId(socket)}` && canJoinRoom(socket, room)) socket.join(room)
+      })
+    }
+
     // Track control/video device presence (skip admin/staff)
     if (!isManagementClient && roomId) {
       const deviceId = socket.handshake.query.deviceId as string
-      const clientType = socket.handshake.query.clientType as string
+      const clientType = deviceAuthEnabled() ? socket.data.deviceActor?.type : socket.handshake.query.clientType as string
       const origin = (socket.handshake.headers.origin as string) || ''
       const registered = roomDevicePresenceService.register({
         deviceId,

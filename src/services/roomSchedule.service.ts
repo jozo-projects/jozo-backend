@@ -37,6 +37,22 @@ type ClientBooking = {
  * Cung cấp các hàm xử lý nghiệp vụ cho event lịch phòng.
  */
 class RoomScheduleService {
+  async getCancellations(start: Date, end: Date, page: number, limit: number) {
+    const range = { status: RoomScheduleStatus.Cancelled, cancelledAt: { $gte: start, $lt: end } }
+    const [report, unknownTimestampCount] = await Promise.all([
+      databaseService.roomSchedule.aggregate([
+        { $match: range },
+        { $facet: {
+          items: [{ $sort: { cancelledAt: -1, _id: -1 } }, { $skip: (page - 1) * limit }, { $limit: limit }],
+          totals: [{ $count: 'count' }],
+          bySource: [{ $group: { _id: { $ifNull: ['$cancellationSource', 'unknown'] }, count: { $sum: 1 } } }, { $project: { _id: 0, source: '$_id', count: 1 } }, { $sort: { source: 1 } }]
+        } }
+      ]).toArray(),
+      databaseService.roomSchedule.countDocuments({ status: RoomScheduleStatus.Cancelled, cancelledAt: { $not: { $type: 'date' } } })
+    ])
+    const data = report[0]
+    return { items: data.items, total: data.totals[0]?.count || 0, page, limit, bySource: data.bySource, unknownTimestampCount }
+  }
   /**
    * Lấy danh sách lịch phòng theo filter
    * @param filter - Đối tượng filter {IRoomScheduleRequestQuery}
@@ -439,6 +455,18 @@ class RoomScheduleService {
     if (schedule.status) {
       updateData.status = schedule.status
     }
+    const cancelling = schedule.status === RoomScheduleStatus.Cancelled && currentSchedule.status !== RoomScheduleStatus.Cancelled
+    if (cancelling) {
+      updateData.cancelledAt = updatedAt
+      if (schedule.updatedBy) updateData.cancelledBy = schedule.updatedBy
+      if (schedule.updatedBy) updateData.cancellationSource = 'staff'
+      if (typeof schedule.cancellationReason === 'string' && schedule.cancellationReason.trim()) updateData.cancellationReason = schedule.cancellationReason.trim()
+      updateOperations.$unset = {
+        ...(!schedule.updatedBy ? { cancelledBy: '', cancellationSource: '' } : {}),
+        ...(!updateData.cancellationReason ? { cancellationReason: '' } : {})
+      }
+      if (!Object.keys(updateOperations.$unset).length) delete updateOperations.$unset
+    }
     // Có thể cập nhật thêm thông tin audit như updatedBy nếu cần
     updateData.updatedAt = updatedAt
     if (schedule.updatedBy) {
@@ -487,8 +515,9 @@ class RoomScheduleService {
     }
     // Do not let a stale draft save race a member change or a completed checkout.
     const draftGuard = schedule.birthdayDraft !== undefined ? { customerPhone: currentSchedule.customerPhone !== undefined ? currentSchedule.customerPhone : { $exists: false }, status: currentSchedule.status } : {}
-    const result = await databaseService.roomSchedule.updateOne({ _id: new ObjectId(id), ...draftGuard }, updateOperations)
+    const result = await databaseService.roomSchedule.updateOne({ _id: new ObjectId(id), ...draftGuard, ...(cancelling ? { status: currentSchedule.status } : {}) }, updateOperations)
     if (schedule.birthdayDraft !== undefined && result.matchedCount === 0) throw new ErrorWithStatus({ message: 'Lịch đã thay đổi. Vui lòng tải lại.', status: 409 })
+    if (cancelling && result.matchedCount === 0) throw new ErrorWithStatus({ message: 'Schedule changed; please try again', status: 409 })
 
     // Emit sự kiện khi giftEnabled thay đổi để FE ẩn/hiện nút mở quà
     const newGiftEnabled = schedule.giftEnabled !== undefined ? !!schedule.giftEnabled : previousGiftEnabled
@@ -541,7 +570,7 @@ class RoomScheduleService {
    * @param id - RoomSchedule id
    * @returns Số lượng bản ghi được cập nhật
    */
-  async cancelSchedule(id: string, updatedBy?: string) {
+  async cancelSchedule(id: string, updatedBy?: string, reason?: string) {
     // Lấy event hiện tại theo id
     const currentEvent = await databaseService.roomSchedule.findOne({ _id: new ObjectId(id) })
     if (!currentEvent) {
@@ -557,12 +586,17 @@ class RoomScheduleService {
         status: HTTP_STATUS_CODE.BAD_REQUEST
       })
     }
+    const now = new Date()
     const updateData = {
       status: RoomScheduleStatus.Cancelled,
-      updatedAt: new Date(),
-      updatedBy: updatedBy || 'system'
+      updatedAt: now,
+      updatedBy: updatedBy || 'system',
+      cancelledAt: now,
+      ...(updatedBy ? { cancelledBy: updatedBy, cancellationSource: 'staff' as const } : {}),
+      ...(typeof reason === 'string' && reason.trim() ? { cancellationReason: reason.trim() } : {})
     }
-    const result = await databaseService.roomSchedule.updateOne({ _id: new ObjectId(id) }, { $set: updateData })
+    const unset: Record<string, ''> = { ...(!updatedBy ? { cancelledBy: '', cancellationSource: '' } : {}), ...(!updateData.cancellationReason ? { cancellationReason: '' } : {}) }
+    const result = await databaseService.roomSchedule.updateOne({ _id: new ObjectId(id), status: RoomScheduleStatus.Booked }, { $set: updateData, ...(Object.keys(unset).length ? { $unset: unset } : {}) })
     if (result.modifiedCount > 0) {
       await this.notifyScheduleChanged('cancelled', { ...currentEvent, ...updateData })
     }
@@ -587,17 +621,21 @@ class RoomScheduleService {
         })
         .toArray()
 
-      const updatedAt = new Date()
       for (const booking of lateBookings) {
-        await databaseService.roomSchedule.updateOne(
-          { _id: booking._id },
-          { $set: { status: RoomScheduleStatus.Cancelled, updatedAt } }
+        const updatedAt = new Date()
+        const result = await databaseService.roomSchedule.updateOne(
+          { _id: booking._id, status: RoomScheduleStatus.Booked, startTime: { $lte: fifteenMinutesAgo } },
+          { $set: { status: RoomScheduleStatus.Cancelled, updatedAt, cancelledAt: updatedAt, cancellationSource: 'system', cancellationReason: 'Late booking automatically cancelled' }, $unset: { cancelledBy: '' } }
         )
+        if (!result.modifiedCount) continue
         console.log(`Booking ${booking._id} cancelled automatically.`)
         await this.notifyScheduleChanged('cancelled', {
           ...booking,
           status: RoomScheduleStatus.Cancelled,
-          updatedAt
+          updatedAt,
+          cancelledAt: updatedAt,
+          cancellationSource: 'system' as const,
+          cancellationReason: 'Late booking automatically cancelled'
         })
       }
     } catch (error) {

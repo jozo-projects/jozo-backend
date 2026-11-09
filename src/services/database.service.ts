@@ -208,6 +208,15 @@ export class DatabaseService {
     }
   }
 
+  get roomDeviceAuthorizationStore(): Pick<Db, 'collection'> {
+    const allowed = new Set(['rooms', 'room_device_authorization_foundation', 'room_device_authorization_foundation_requests'])
+    const collection = ((name: string) => {
+      if (!allowed.has(name)) throw new Error('PROTECTED_COLLECTION')
+      return this.#db.collection(name)
+    }) as Db['collection']
+    return { collection }
+  }
+
   get users(): Collection<User> {
     return this.#db.collection('users')
   }

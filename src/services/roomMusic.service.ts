@@ -774,10 +774,6 @@ class RoomMusicServices {
     }
   }
 
-  private normalizeSongForQueue(song: AddSongRequestBody & Record<string, unknown>): AddSongRequestBody {
-    const { timestamp, position_timestamp, currentTime, isPlaying, position, ...rest } = song
-    return rest as AddSongRequestBody
-  }
 
   async moveQueueBetweenRooms(
     sourceRoomId: string,
@@ -819,31 +815,31 @@ class RoomMusicServices {
     const sourceQueueKey = `room_${sourceRoomId}_queue`
     const targetQueueKey = `room_${targetRoomId}_queue`
 
-    const queueRaw = await redis.lrange(sourceQueueKey, 0, -1)
-    const sourceQueue = queueRaw.map((item: string) => JSON.parse(item))
-    const songsToMove = sourceQueue.map((song) => this.normalizeSongForQueue(song))
+    // One Redis operation prevents a newly added source song being deleted between read and delete.
+    // Decode everything and check target type before any write; Redis scripts do not roll back errors.
+    const [movedCount, targetRaw] = (await redis.eval(`
+      local source = redis.call('LRANGE', KEYS[1], 0, -1)
+      local target = redis.call('LRANGE', KEYS[2], 0, -1)
+      local songs = {}
+      for i, raw in ipairs(source) do
+        local song = cjson.decode(raw)
+        song.timestamp = nil; song.position_timestamp = nil; song.currentTime = nil
+        song.isPlaying = nil; song.position = nil
+        songs[i] = cjson.encode(song)
+      end
+      for _, song in ipairs(songs) do redis.call('RPUSH', KEYS[2], song) end
+      if #songs > 0 then redis.call('DEL', KEYS[1]) end
+      return {#songs, redis.call('LRANGE', KEYS[2], 0, -1)}
+    `, 2, sourceQueueKey, targetQueueKey)) as [number, string[]]
+    const targetQueue = targetRaw.map((item) => JSON.parse(item))
 
-    if (songsToMove.length === 0) {
-      const targetQueue = (await redis.lrange(targetQueueKey, 0, -1)).map((item: string) => JSON.parse(item))
-      return {
-        movedCount: 0,
-        sourceRoomId,
-        targetRoomId,
-        targetQueue
-      }
-    }
-
-    await redis.rpush(targetQueueKey, ...songsToMove.map((song) => JSON.stringify(song)))
-
-    await redis.del(sourceQueueKey)
-
-    const targetQueue = (await redis.lrange(targetQueueKey, 0, -1)).map((item: string) => JSON.parse(item))
+    if (movedCount === 0) return { movedCount, sourceRoomId, targetRoomId, targetQueue }
 
     roomEventEmitter.emit('queue_updated', { roomId: sourceRoomId, queue: [] })
     roomEventEmitter.emit('queue_updated', { roomId: targetRoomId, queue: targetQueue })
 
     return {
-      movedCount: songsToMove.length,
+      movedCount,
       sourceRoomId,
       targetRoomId,
       targetQueue

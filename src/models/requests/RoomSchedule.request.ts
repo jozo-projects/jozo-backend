@@ -18,6 +18,7 @@ export interface IRoomScheduleRequestBody {
   roomType?: RoomType
   createdBy?: string
   updatedBy?: string
+  cancellationReason?: string
   note?: string
   source?: BookingSource
   paymentMethod?: string

@@ -14,6 +14,7 @@ import {
 import { claimGiftValidator, claimSpecificGiftValidator, getRoomGiftValidator } from '~/middlewares/gift.middleware'
 import { protect } from '~/middlewares/auth.middleware'
 import { wrapRequestHandler } from '~/utils/handlers'
+import { roomCommerceAuthorization } from '~/middlewares/roomCommerceAuthorization'
 
 const giftRouter = Router()
 const upload = multer({ storage: multer.memoryStorage() })
@@ -21,7 +22,7 @@ const upload = multer({ storage: multer.memoryStorage() })
 giftRouter.get('/', protect([UserRole.Admin]), wrapRequestHandler(listGifts))
 // Endpoint public để app khác chỉ xem danh sách quà
 giftRouter.get('/public', wrapRequestHandler(listGifts))
-giftRouter.get('/room/:roomIndex', getRoomGiftValidator, wrapRequestHandler(getGiftForRoom))
+giftRouter.get('/room/:roomIndex', roomCommerceAuthorization('roomIndex'), getRoomGiftValidator, wrapRequestHandler(getGiftForRoom))
 giftRouter.get('/:id', protect([UserRole.Admin, UserRole.Staff]), wrapRequestHandler(getGiftById))
 giftRouter.post(
   '/',
@@ -43,8 +44,8 @@ giftRouter.patch(
 )
 giftRouter.delete('/:id', protect([UserRole.Admin]), wrapRequestHandler(deleteGift))
 
-// Endpoint cho box mở quà (không yêu cầu auth nếu cần cho thiết bị; có thể thêm auth nếu có cơ chế riêng)
-giftRouter.post('/claim/by-id', claimSpecificGiftValidator, wrapRequestHandler(claimSpecificGiftForSchedule))
-giftRouter.post('/claim', claimGiftValidator, wrapRequestHandler(claimGiftForSchedule))
+// Device claims use the schedule's room when optional room authorization is enabled.
+giftRouter.post('/claim/by-id', roomCommerceAuthorization('schedule'), claimSpecificGiftValidator, wrapRequestHandler(claimSpecificGiftForSchedule))
+giftRouter.post('/claim', roomCommerceAuthorization('schedule'), claimGiftValidator, wrapRequestHandler(claimGiftForSchedule))
 
 export default giftRouter

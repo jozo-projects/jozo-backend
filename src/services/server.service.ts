@@ -8,6 +8,10 @@ import { NotificationSocket } from '~/sockets/notification.socket'
 import { OrderSocket } from '~/sockets/order.socket'
 import { PrintSocket } from '~/sockets/print.socket'
 import { RoomSocket } from '~/sockets/room.socket'
+import { installManagementAuth } from '~/sockets/managementAuth'
+import { installDeviceAuth } from '~/sockets/deviceAuth'
+import { installDeviceAuthorizationSocket } from '~/sockets/deviceAuthorization.socket'
+import databaseService from '~/services/database.service'
 
 // Cấu hình CORS cho cả Express và Socket.IO
 const corsOptions = {
@@ -126,6 +130,9 @@ class Server {
 
   // Khởi tạo WebSocket logic
   private initializeWebSocket() {
+    installManagementAuth(this.io)
+    installDeviceAuth(this.io, databaseService.roomDeviceAuthorizationStore)
+    installDeviceAuthorizationSocket(this.io, databaseService.roomDeviceAuthorizationStore)
     // Debug kết nối socket
     this.io.on('connection', (socket) => {
       console.log(`[Socket] New connection: ${socket.id} from ${socket.handshake.headers.origin}`)

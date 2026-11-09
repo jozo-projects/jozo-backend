@@ -268,27 +268,35 @@ export const cancelBooking = async (req: Request, res: Response, next: NextFunct
     }
 
     // Cancel the booking
-    await databaseService.bookings.updateOne(
-      { _id: new ObjectId(bookingId) },
+    const cancelledAt = new Date()
+    const cancellation = await databaseService.bookings.updateOne(
+      { _id: new ObjectId(bookingId), status: 'pending' },
       {
         $set: {
           status: 'cancelled',
-          cancelled_at: new Date().toISOString(),
+          cancelled_at: cancelledAt.toISOString(),
           cancelled_by: 'customer'
         }
       }
     )
 
+    if (!cancellation.modifiedCount) return next(new ErrorWithStatus({ message: 'Booking changed; please try again', status: HTTP_STATUS_CODE.BAD_REQUEST }))
+
     // Cancel related room schedules if they exist
     if (booking.room_schedules && booking.room_schedules.length > 0) {
+      const scheduleCancelledAt = new Date()
       await databaseService.roomSchedule.updateMany(
-        { _id: { $in: booking.room_schedules.map((id) => new ObjectId(id)) } },
+        { _id: { $in: booking.room_schedules.map((id) => new ObjectId(id)) }, status: { $ne: RoomScheduleStatus.Cancelled } },
         {
           $set: {
             status: RoomScheduleStatus.Cancelled,
-            updatedAt: new Date(),
-            updatedBy: 'customer'
-          }
+            updatedAt: scheduleCancelledAt,
+            updatedBy: 'customer',
+            cancelledAt: scheduleCancelledAt,
+            cancelledBy: 'customer',
+            cancellationSource: 'customer'
+          },
+          $unset: { cancellationReason: '' }
         }
       )
     }

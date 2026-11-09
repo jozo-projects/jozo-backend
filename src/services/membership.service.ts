@@ -1095,7 +1095,7 @@ class MembershipService {
     }
   }
 
-  async listMembers(options: { page?: number; limit?: number; search?: string }) {
+  async listMembers(options: { page?: number; limit?: number; search?: string; tier?: string }) {
     const page = Math.max(1, Number(options.page) || 1)
     const limit = Math.min(1000, Math.max(1, Number(options.limit) || 20))
     // Membership data must never include admin/staff accounts. Keep the
@@ -1112,6 +1112,10 @@ class MembershipService {
         { phone_number: { $regex: keyword, $options: 'i' } },
         { username: { $regex: keyword, $options: 'i' } }
       ]
+    }
+
+    if (options.tier?.trim()) {
+      filter.tier = options.tier.trim() as MembershipTier
     }
 
     const projection = {

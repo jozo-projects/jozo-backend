@@ -1,5 +1,6 @@
 import { Server, Socket } from 'socket.io'
 import databaseService from '~/services/database.service'
+import { managementRole } from '~/sockets/managementAuth'
 import {
   coffeeOrderRealtimeEmitter,
   OrderBatchStatusChangedPayload,
@@ -32,7 +33,7 @@ export const OrderSocket = (io: Server) => {
   })
 
   io.on('connection', async (socket: Socket) => {
-    const role = (socket.handshake.query.role as string) || ''
+    const role = managementRole(socket)
     const tableCode = normalizeTableCode(socket.handshake.query.tableCode as string)
 
     if (role === 'admin' || role === 'staff') {

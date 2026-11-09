@@ -13,6 +13,31 @@ import { roomScheduleService } from '~/services/roomSchedule.service'
 dayjs.extend(utc)
 dayjs.extend(timezone)
 
+export const getCancellations = async (req: Request, res: Response, next: NextFunction) => {
+  const { start, end, page = '1', limit = '50' } = req.query
+  const iso = /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,3})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/
+  const validCalendar = (value: string) => {
+    const [year, month, day] = value.slice(0, 10).split('-').map(Number)
+    const date = new Date(0)
+    date.setUTCFullYear(year, month - 1, day)
+    return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+  }
+  const integer = /^[1-9]\d*$/
+  if (typeof start !== 'string' || typeof end !== 'string' || !iso.test(start) || !iso.test(end) || !validCalendar(start) || !validCalendar(end) ||
+      typeof page !== 'string' || typeof limit !== 'string' || !integer.test(page) || !integer.test(limit)) {
+    return res.status(400).json({ message: 'Invalid range or pagination' })
+  }
+  const startDate = new Date(start), endDate = new Date(end), pageNumber = Number(page), limitNumber = Number(limit)
+  if (!Number.isFinite(startDate.getTime()) || !Number.isFinite(endDate.getTime()) || startDate >= endDate ||
+      !Number.isSafeInteger(pageNumber) || !Number.isSafeInteger(limitNumber) || limitNumber > 100 || !Number.isSafeInteger((pageNumber - 1) * limitNumber)) {
+    return res.status(400).json({ message: 'Invalid range or pagination' })
+  }
+  try {
+    const result = await roomScheduleService.getCancellations(startDate, endDate, pageNumber, limitNumber)
+    return res.status(200).json({ message: 'Get cancellations success', result })
+  } catch (error) { return next(error) }
+}
+
 // Lấy lịch của tất cả các phòng theo ngày (truyền date từ body dưới dạng ISO string)
 export const getSchedules = async (
   req: Request<
@@ -129,7 +154,7 @@ export const updateSchedule = async (
 export const cancelSchedule = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params
-    const modifiedCount = await roomScheduleService.cancelSchedule(id, req.decoded_authorization?.user_id)
+    const modifiedCount = await roomScheduleService.cancelSchedule(id, req.decoded_authorization?.user_id, req.body?.cancellationReason)
     if (modifiedCount === 0) {
       return res.status(HTTP_STATUS_CODE.NOT_FOUND).json({ error: ROOM_SCHEDULE_MESSAGES.SCHEDULE_NOT_FOUND })
     }

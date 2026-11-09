@@ -159,7 +159,8 @@ export const listMembers = async (req: Request, res: Response, next: NextFunctio
     const data = await membershipService.listMembers({
       page: req.query.page ? Number(req.query.page) : undefined,
       limit: req.query.limit ? Number(req.query.limit) : undefined,
-      search: typeof req.query.search === 'string' ? req.query.search : undefined
+      search: typeof req.query.search === 'string' ? req.query.search : undefined,
+      tier: typeof req.query.tier === 'string' ? req.query.tier : undefined
     })
 
     return res.status(HTTP_STATUS_CODE.OK).json({

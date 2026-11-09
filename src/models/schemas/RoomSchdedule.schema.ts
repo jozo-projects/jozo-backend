@@ -68,6 +68,10 @@ export class RoomSchedule {
   updatedAt?: Date
   createdBy?: string
   updatedBy?: string
+  cancelledAt?: Date
+  cancelledBy?: string
+  cancellationSource?: 'staff' | 'customer' | 'system'
+  cancellationReason?: string
   note?: string
   source?: BookingSource
   giftEnabled?: boolean

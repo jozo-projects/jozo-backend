@@ -2,6 +2,8 @@ import { Router } from 'express'
 import { UserRole } from '~/constants/enum'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { protect } from '~/middlewares/auth.middleware'
+import { createRoomHttpAuthorization } from '~/middlewares/roomHttpAuthorization'
+import databaseService from '~/services/database.service'
 import {
   addSong,
   addSongsToQueue,
@@ -50,6 +52,9 @@ import { wrapRequestHandler } from '~/utils/handlers'
 import musicCategoryRouter from './musicCategory.routes'
 
 const roomMusicRouter = Router()
+
+// Applied only when Express matches an actual :roomId route, not global routes.
+roomMusicRouter.param('roomId', createRoomHttpAuthorization(databaseService.roomDeviceAuthorizationStore))
 
 roomMusicRouter.post('/internal/media-callback', wrapRequestHandler(updateMediaCallback))
 
@@ -238,7 +243,7 @@ roomMusicRouter.post('/:roomId/play-chosen-song', wrapRequestHandler(playChosenS
  */
 roomMusicRouter.post(
   '/:sourceRoomId/move-queue',
-  protect([UserRole.Admin]),
+  protect([UserRole.Admin, UserRole.Staff]),
   wrapRequestHandler(moveQueueBetweenRooms)
 )
 

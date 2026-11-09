@@ -606,16 +606,21 @@ class OnlineBookingService {
 
       // Cập nhật status thành cancelled
       const updatedAt = new Date()
-      await databaseService.roomSchedule.updateOne(
-        { _id: new ObjectId(bookingId) },
+      const result = await databaseService.roomSchedule.updateOne(
+        { _id: new ObjectId(bookingId), status: RoomScheduleStatus.Booked, startTime: { $gt: updatedAt } },
         {
           $set: {
             status: RoomScheduleStatus.Cancelled,
             updatedAt,
-            updatedBy: 'customer'
-          }
+            updatedBy: 'customer',
+            cancelledAt: updatedAt,
+            cancelledBy: 'customer',
+            cancellationSource: 'customer'
+          },
+          $unset: { cancellationReason: '' }
         }
       )
+      if (!result.modifiedCount) throw new ErrorWithStatus({ message: 'Booking changed; please try again', status: HTTP_STATUS_CODE.BAD_REQUEST })
 
       // Emit socket notification cho admin về việc hủy booking
       const cancelNotification = {
@@ -626,7 +631,7 @@ class OnlineBookingService {
         customerPhone: schedule.customerPhone,
         startTime: schedule.startTime.toISOString(),
         endTime: schedule.endTime?.toISOString(),
-        cancelledAt: new Date().toISOString(),
+        cancelledAt: updatedAt.toISOString(),
         source: 'online_booking'
       }
 
@@ -636,7 +641,10 @@ class OnlineBookingService {
         ...schedule,
         status: RoomScheduleStatus.Cancelled,
         updatedAt,
-        updatedBy: 'customer'
+        updatedBy: 'customer',
+        cancelledAt: updatedAt,
+        cancelledBy: 'customer',
+        cancellationSource: 'customer'
       })
 
       return {

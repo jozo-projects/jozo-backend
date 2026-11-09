@@ -6,6 +6,7 @@ import {
   convertBookingToSchedules,
   createSchedule,
   getSchedules,
+  getCancellations,
   getScheduleById,
   getSchedulesByRoom,
   updateSchedule,
@@ -24,6 +25,7 @@ import { wrapRequestHandler } from '~/utils/handlers'
 
 const roomScheduleRouter = Router()
 const photoUpload = multer({ storage: multer.memoryStorage(), limits: { files: 1, fileSize: 10 * 1024 * 1024 } })
+roomScheduleRouter.get('/cancellations', protect([UserRole.Admin]), wrapRequestHandler(getCancellations))
 roomScheduleRouter.get('/detail/:id', protect([UserRole.Admin, UserRole.Staff]), wrapRequestHandler(getScheduleById))
 
 // API endpoint lấy lịch phòng

@@ -1,5 +1,6 @@
 import { Server, Socket } from 'socket.io'
 import { notificationEventEmitter } from '~/services/notification.service'
+import { managementUserId } from '~/sockets/managementAuth'
 
 export const NotificationSocket = (io: Server) => {
   // Listen for notification created events
@@ -14,7 +15,7 @@ export const NotificationSocket = (io: Server) => {
     console.log('Client connected to notification socket:', socket.id)
 
     // Get userId from query params
-    const userId = socket.handshake.query.userId as string
+    const userId = managementUserId(socket)
 
     // If client has userId, join user room
     if (userId) {

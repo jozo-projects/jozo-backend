@@ -2,6 +2,7 @@ import { Server, Socket } from 'socket.io'
 import { employeeScheduleEventEmitter } from '~/services/employeeSchedule.service'
 import { getShiftInfo } from '~/constants/shiftDefaults'
 import { IEmployeeSchedule } from '~/models/schemas/EmployeeSchedule.schema'
+import { managementRole, managementUserId } from '~/sockets/managementAuth'
 
 export const EmployeeScheduleSocket = (io: Server) => {
   // Listen for schedule created events
@@ -80,8 +81,8 @@ export const EmployeeScheduleSocket = (io: Server) => {
     console.log('Client connected to employee schedule socket:', socket.id)
 
     // Get userId and role from query params
-    const userId = socket.handshake.query.userId as string
-    const role = socket.handshake.query.role as string
+    const userId = managementUserId(socket)
+    const role = managementRole(socket)
 
     // If client is admin or staff, join management room
     if (role === 'admin' || role === 'staff') {
