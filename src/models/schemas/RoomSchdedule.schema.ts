@@ -73,6 +73,7 @@ export class RoomSchedule {
   cancellationSource?: 'staff' | 'customer' | 'system'
   cancellationReason?: string
   note?: string
+  activityType?: 'nintendo-switch' | 'music-box'
   source?: BookingSource
   giftEnabled?: boolean
   photoDisplayState?: PhotoDisplayState

@@ -22,7 +22,7 @@ const requireManagementAccessToken: RequestHandler = async (req, res, next) => {
   }
 }
 
-const requireAdminAccessToken: RequestHandler = async (req, res, next) => {
+export const requireAdminAccessToken: RequestHandler = async (req, res, next) => {
   const match = /^Bearer ([^\s]+)$/.exec(req.get('Authorization') || '')
   if (!match) return res.status(401).json({ error: 'UNAUTHORIZED' })
   try {

@@ -1,4 +1,7 @@
 import { ObjectId, WithId } from 'mongodb'
+import { assertGameCapacity } from './gameCapacity'
+import { withGameCapacityLock } from './gameCapacityLock'
+import { resolveBookingActivity } from '~/utils/bookingActivity'
 // import { IRoomScheduleRequestBody, IRoomScheduleRequestQuery } from '~/models/requests/RoomSchedule.request'
 import dayjs from 'dayjs'
 import { RoomScheduleStatus, RoomStatus, RoomType } from '~/constants/enum'
@@ -247,6 +250,10 @@ class RoomScheduleService {
    * @returns id của lịch phòng vừa tạo
    */
   async createSchedule(schedule: IRoomScheduleRequestBody) {
+    return withGameCapacityLock(databaseService.roomDeviceAuthorizationStore, () => this.createScheduleLocked(schedule))
+  }
+
+  private async createScheduleLocked(schedule: IRoomScheduleRequestBody) {
     // Validate và parse startTime, endTime dựa trên nghiệp vụ
     const { startTime, endTime } = this.validateScheduleTimes(schedule)
 
@@ -314,6 +321,8 @@ class RoomScheduleService {
       const config = await membershipService.getConfig()
       scheduleData.birthdayDraft = await birthdayBenefitService.prepareDraft(schedule.customerPhone, schedule.birthdayDraft, config.birthday, schedule.status === RoomScheduleStatus.Booked ? startTime : new Date())
     }
+    scheduleData.activityType = resolveBookingActivity(String(scheduleData.roomType ?? ''), schedule.activityType, schedule.note)
+    await assertGameCapacity(scheduleData, databaseService.roomDeviceAuthorizationStore, databaseService.roomSchedule)
     const result = await databaseService.roomSchedule.insertOne(scheduleData)
     scheduleData._id = result.insertedId
 
@@ -379,6 +388,10 @@ class RoomScheduleService {
    * @returns Số lượng bản ghi được cập nhật
    */
   async updateSchedule(id: string, schedule: IRoomScheduleRequestBody) {
+    return withGameCapacityLock(databaseService.roomDeviceAuthorizationStore, () => this.updateScheduleLocked(id, schedule))
+  }
+
+  private async updateScheduleLocked(id: string, schedule: IRoomScheduleRequestBody) {
     const updateData: Partial<RoomSchedule> = {}
     const updateOperations: Record<string, any> = { $set: updateData }
     const updatedAt = new Date()
@@ -515,6 +528,11 @@ class RoomScheduleService {
     }
     // Do not let a stale draft save race a member change or a completed checkout.
     const draftGuard = schedule.birthdayDraft !== undefined ? { customerPhone: currentSchedule.customerPhone !== undefined ? currentSchedule.customerPhone : { $exists: false }, status: currentSchedule.status } : {}
+    if (schedule.activityType !== undefined) updateData.activityType = resolveBookingActivity(String(updateData.roomType ?? currentSchedule.roomType ?? ''), schedule.activityType, schedule.note)
+    // Recheck changed time, activity or status, excluding this schedule itself.
+    if (schedule.startTime !== undefined || schedule.endTime !== undefined || schedule.status !== undefined || schedule.activityType !== undefined || schedule.roomType !== undefined || schedule.note !== undefined) {
+      await assertGameCapacity({ ...currentSchedule, ...updateData }, databaseService.roomDeviceAuthorizationStore, databaseService.roomSchedule, currentSchedule._id)
+    }
     const result = await databaseService.roomSchedule.updateOne({ _id: new ObjectId(id), ...draftGuard, ...(cancelling ? { status: currentSchedule.status } : {}) }, updateOperations)
     if (schedule.birthdayDraft !== undefined && result.matchedCount === 0) throw new ErrorWithStatus({ message: 'Lịch đã thay đổi. Vui lòng tải lại.', status: 409 })
     if (cancelling && result.matchedCount === 0) throw new ErrorWithStatus({ message: 'Schedule changed; please try again', status: 409 })
@@ -706,6 +724,10 @@ class RoomScheduleService {
    * @returns mảng các ObjectID của room schedules đã tạo
    */
   async createSchedulesFromBooking(bookingId: string) {
+    return withGameCapacityLock(databaseService.roomDeviceAuthorizationStore, () => this.createSchedulesFromBookingLocked(bookingId))
+  }
+
+  private async createSchedulesFromBookingLocked(bookingId: string) {
     try {
       // Tìm booking với ID đã cho, sử dụng ObjectId
       const booking = await databaseService.bookings.findOne({ _id: new ObjectId(bookingId) })
@@ -780,6 +802,7 @@ class RoomScheduleService {
         newSchedule.roomType = roomType
 
         // Lưu trực tiếp vào database không qua hàm createSchedule
+        await assertGameCapacity(newSchedule, databaseService.roomDeviceAuthorizationStore, databaseService.roomSchedule)
         const result = await databaseService.roomSchedule.insertOne(newSchedule)
         newSchedule._id = result.insertedId
         createdScheduleIds.push(result.insertedId)
@@ -845,6 +868,10 @@ class RoomScheduleService {
    * @returns mảng các ObjectId của room schedules đã tạo
    */
   async autoCreateSchedulesFromNewBooking(booking: ClientBooking) {
+    return withGameCapacityLock(databaseService.roomDeviceAuthorizationStore, () => this.autoCreateSchedulesFromNewBookingLocked(booking))
+  }
+
+  private async autoCreateSchedulesFromNewBookingLocked(booking: ClientBooking) {
     try {
       // Kiểm tra booking phải có status là "pending"
       if (booking.status !== 'pending') {
@@ -934,6 +961,7 @@ class RoomScheduleService {
         newSchedule.roomType = roomType
 
         // Lưu trực tiếp vào database không qua hàm createSchedule
+        await assertGameCapacity(newSchedule, databaseService.roomDeviceAuthorizationStore, databaseService.roomSchedule)
         const result = await databaseService.roomSchedule.insertOne(newSchedule)
         newSchedule._id = result.insertedId
         createdScheduleIds.push(result.insertedId)

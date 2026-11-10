@@ -16,6 +16,9 @@ import {
   normalizeBookingCode
 } from '~/utils/common'
 import { parseClientRoomTypeString, roomTypeFieldToEnum } from '~/utils/roomType'
+import { resolveBookingActivity } from '~/utils/bookingActivity'
+import { assertGameCapacity } from './gameCapacity'
+import { withGameCapacityLock } from './gameCapacityLock'
 import databaseService from './database.service'
 import { emitBookingNotification, emitScheduleChanged } from './room.service'
 import fnbOrderService from './fnbOrder.service'
@@ -32,6 +35,7 @@ interface OnlineBookingRequest {
   startTime: string // ISO string hoặc datetime format (YYYY-MM-DD HH:mm:ss) - sẽ được parse theo timezone Việt Nam
   endTime: string // ISO string hoặc datetime format (YYYY-MM-DD HH:mm:ss) - sẽ được parse theo timezone Việt Nam
   note?: string
+  activityType?: string
   photoConsent?: boolean
   photoFiles?: Express.Multer.File[]
 }
@@ -298,6 +302,10 @@ class OnlineBookingService {
    * Tạo booking online với Virtual Room system
    */
   async createOnlineBooking(request: OnlineBookingRequest): Promise<any> {
+    return withGameCapacityLock(databaseService.roomDeviceAuthorizationStore, () => this.createOnlineBookingLocked(request))
+  }
+
+  private async createOnlineBookingLocked(request: OnlineBookingRequest): Promise<any> {
     try {
       let normalizedRoomType: RoomType
       try {
@@ -310,6 +318,14 @@ class OnlineBookingService {
       }
 
       const requestWithType: OnlineBookingRequest = { ...request, roomType: normalizedRoomType }
+
+      let activityType
+      try {
+        activityType = resolveBookingActivity(String(normalizedRoomType), request.activityType, request.note)
+      } catch {
+        throw new ErrorWithStatus({ message: 'Dịch vụ không hợp lệ', status: HTTP_STATUS_CODE.BAD_REQUEST })
+      }
+
 
       // Validate request
       this.validateBookingRequest(requestWithType)
@@ -371,13 +387,15 @@ class OnlineBookingService {
       newSchedule.customerEmail = requestWithType.customerEmail
       // Chốt roomType theo size khách đặt — không đổi khi staff chuyển phòng vật lý sau này
       newSchedule.roomType = normalizedRoomType
+      newSchedule.activityType = activityType
       newSchedule.originalRoomType = normalizedRoomType
       newSchedule.actualRoomType = roomResult.assignedRoomType
       newSchedule.upgraded = roomResult.upgraded
       newSchedule.queueSongs = []
       newSchedule.dateOfUse = dateOfUse
 
-      // Lưu vào database
+      // Recheck against all active staff and customer schedules immediately before saving.
+      await assertGameCapacity(newSchedule, databaseService.roomDeviceAuthorizationStore, databaseService.roomSchedule)
       const result = await databaseService.roomSchedule.insertOne(newSchedule)
 
       if (requestWithType.photoConsent && requestWithType.photoFiles?.length) {

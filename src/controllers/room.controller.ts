@@ -24,7 +24,7 @@ export const addRoomController = async (
   next: NextFunction
 ) => {
   try {
-    const { roomId, roomName, roomType, maxCapacity, status, description } = req.body
+    const { roomId, roomName, roomType, maxCapacity, status, description, services } = req.body
 
     const result = await roomServices.addRoom({
       roomId: Number(roomId),
@@ -32,7 +32,8 @@ export const addRoomController = async (
       roomType,
       maxCapacity: Number(maxCapacity),
       status,
-      description
+      description,
+      services
     })
 
     return res.status(HTTP_STATUS_CODE.OK).json({

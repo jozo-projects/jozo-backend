@@ -2,6 +2,7 @@ import { IAddRoomRequestBody } from '~/models/requests/Room.request'
 import databaseService from './database.service'
 import { IRoom, Room } from '~/models/schemas/Room.schema'
 import { ObjectId } from 'mongodb'
+import { validateRoomServices } from '~/utils/roomServices'
 import { ROOM_MESSAGES } from '~/constants/messages'
 import { HTTP_STATUS_CODE } from '~/constants/httpStatus'
 import { RoomStatus } from '~/constants/enum'
@@ -35,6 +36,7 @@ export function serializeScheduleForSocket(schedule: RoomSchedule) {
     createdBy: schedule.createdBy,
     updatedBy: schedule.updatedBy,
     note: schedule.note,
+    activityType: schedule.activityType,
     source: schedule.source,
     giftEnabled: schedule.giftEnabled,
     roomType: schedule.roomType,
@@ -83,6 +85,7 @@ export const emitScheduleChanged = (action: ScheduleChangeAction, schedule: Room
 
 class RoomServices {
   async addRoom(payload: IAddRoomRequestBody) {
+    validateRoomServices(payload.services)
     // Kiểm tra roomId có trùng lặp không
     const existingRoom = await databaseService.rooms.findOne({ roomId: payload.roomId })
     if (existingRoom) {
@@ -155,6 +158,7 @@ class RoomServices {
   }
 
   async updateRoom(id: string, payload: Partial<IRoom>) {
+    validateRoomServices(payload.services)
     // Remove _id from payload to prevent immutable field modification
     const { _id, ...updateData } = payload
 

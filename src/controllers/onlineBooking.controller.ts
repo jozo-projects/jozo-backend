@@ -10,7 +10,7 @@ import { onlineBookingService } from '~/services/onlineBooking.service'
  */
 export const createOnlineBooking = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { customerName, customerPhone, customerEmail, roomType, startTime, endTime, note } = req.body
+    const { customerName, customerPhone, customerEmail, roomType, startTime, endTime, note, activityType } = req.body
     const photoConsent = req.body.photoConsent === 'true' || req.body.photoConsent === true
     const photoFiles = Array.isArray(req.files) ? req.files : []
 
@@ -32,6 +32,7 @@ export const createOnlineBooking = async (req: Request, res: Response, next: Nex
       startTime,
       endTime,
       note,
+      activityType,
       photoConsent,
       photoFiles: photoConsent ? photoFiles : []
     }

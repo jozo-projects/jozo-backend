@@ -1,8 +1,10 @@
 import { ObjectId } from 'mongodb'
 import { RoomStatus, RoomType } from '~/constants/enum'
+import { RoomService } from '~/utils/roomServices'
 
 // --- Room Interfaces ---
 export interface IRoom {
+  services?: RoomService[]
   _id: ObjectId
   roomId: number // Room ID là số duy nhất
   roomName: string
@@ -14,6 +16,7 @@ export interface IRoom {
 }
 
 export class Room {
+  services?: RoomService[]
   _id?: ObjectId
   roomId: number // Room ID là số duy nhất
   roomName: string
@@ -24,6 +27,7 @@ export class Room {
   updatedAt?: Date
 
   constructor(room: IRoom) {
+    this.services = room.services
     this._id = room._id
     this.roomId = room.roomId
     this.roomName = room.roomName

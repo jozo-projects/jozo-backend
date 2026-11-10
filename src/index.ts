@@ -28,6 +28,7 @@ import fnbShiftCountRouter from '~/routes/fnbShiftCount.routes'
 import fnbOrderRouter from '~/routes/fnbOrder.routes'
 import retailSaleRouter from '~/routes/retailSale.routes'
 import holidayRouter from '~/routes/holiday.routes'
+import revenueSettingsRouter from '~/routes/revenueSettings.routes'
 import notificationRouter from '~/routes/notification.routes'
 import onlineBookingRouter from '~/routes/onlineBooking.routes'
 import priceRouter from '~/routes/price.routes'
@@ -170,6 +171,7 @@ app.use('/games', gameRouter)
 app.use('/bookings', onlineBookingRouter) // Online booking routes - phải đặt trước
 // app.use('/bookings', bookingRouter)
 app.use('/holidays', holidayRouter)
+app.use('/revenue-settings', revenueSettingsRouter)
 app.use('/recruitments', recruitmentRouter)
 app.use('/client/fnb', clientFnbRouter)
 app.use('/client/coffee-sessions', clientCoffeeSessionRouter)
@@ -203,13 +205,16 @@ app.use(defaultErrorHandler)
 
 // Scheduler jobs
 // startBookingScheduler()
-void databaseService.connect().then(() => {
-  serverService.start()
-  finishSchedulerInADay()
-  startSongPruneScheduler()
-  startSupportRequestScheduler()
-  app.listen(port, () => console.log(`Server is running at http://localhost:${port}`))
-}).catch((error) => {
-  console.error('Startup failed:', error)
-  process.exit(1)
-})
+void databaseService
+  .connect()
+  .then(() => {
+    serverService.start()
+    finishSchedulerInADay()
+    startSongPruneScheduler()
+    startSupportRequestScheduler()
+    app.listen(port, () => console.log(`Server is running at http://localhost:${port}`))
+  })
+  .catch((error) => {
+    console.error('Startup failed:', error)
+    process.exit(1)
+  })

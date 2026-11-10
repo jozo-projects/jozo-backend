@@ -20,6 +20,7 @@ export interface IRoomScheduleRequestBody {
   updatedBy?: string
   cancellationReason?: string
   note?: string
+  activityType?: 'nintendo-switch' | 'music-box'
   source?: BookingSource
   paymentMethod?: string
   giftEnabled?: boolean

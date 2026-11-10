@@ -210,8 +210,12 @@ export class DatabaseService {
     }
   }
 
+  get revenueSettings() {
+    return this.#db.collection<{ _id: string; monthStartDay: number; businessStart: string; businessEnd: string }>('revenue_settings')
+  }
+
   get roomDeviceAuthorizationStore(): Pick<Db, 'collection'> {
-    const allowed = new Set(['rooms', 'room_device_authorization_foundation', 'room_device_authorization_foundation_requests', 'room_device_authorization_config'])
+    const allowed = new Set(['rooms', 'room_device_authorization_foundation', 'room_device_authorization_foundation_requests', 'room_device_authorization_config', 'online_game_booking_config', 'game_capacity_locks', 'room_schedules'])
     const collection = ((name: string) => {
       if (!allowed.has(name)) throw new Error('PROTECTED_COLLECTION')
       return this.#db.collection(name)
