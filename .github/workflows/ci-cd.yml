@@ -1,8 +1,5 @@
 name: CI/CD for jozo-be
 
-env:
-  ENV_FILE: .env
-
 on:
   push:
     branches:
@@ -36,9 +33,6 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Inject environment variables
-        run: echo "${{ secrets.ENV_FILE }}" > .env
-
   build_and_deploy:
     runs-on: ubuntu-latest
     needs: test
@@ -55,8 +49,22 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Inject environment variables
-        run: echo "${{ secrets.ENV_FILE }}" > .env
+      - name: Prepare runtime configuration
+        env:
+          ENV_FILE_CONTENT: ${{ secrets.ENV_FILE }}
+        run: |
+          node <<'NODE'
+          const fs = require('fs')
+          const dotenv = require('dotenv')
+          const vars = dotenv.parse(process.env.ENV_FILE_CONTENT || '')
+          const entries = Object.entries(vars)
+          if (!entries.length || entries.some(([key, value]) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || /[\r\n\0]/.test(value))) {
+            throw new Error('ENV_FILE is empty or contains unsupported keys or multiline values')
+          }
+          const encoded = Buffer.from(entries.map(([key, value]) => `${key}=${value}`).join('\n') + '\n').toString('base64')
+          console.log(`::add-mask::${encoded}`)
+          fs.appendFileSync(process.env.GITHUB_ENV, `JOZO_ENV_BASE64=${encoded}\n`)
+          NODE
 
       - name: Get short SHA
         id: get_sha
@@ -80,12 +88,22 @@ jobs:
 
       - name: SSH into VPS and pull latest Docker image
         uses: appleboy/ssh-action@v0.1.3
+        env:
+          JOZO_ENV_BASE64: ${{ env.JOZO_ENV_BASE64 }}
         with:
           host: ${{ secrets.VPS_IP }}
           username: ${{ secrets.VPS_USERNAME }}
           password: ${{ secrets.VPS_PASSWORD }}
           port: 22
+          envs: JOZO_ENV_BASE64
           script: |
+            set -e
+            umask 077
+            env_file=$(mktemp)
+            trap 'rm -f "$env_file"' EXIT
+            printf '%s' "$JOZO_ENV_BASE64" | base64 -d > "$env_file"
+            unset JOZO_ENV_BASE64
+            test -s "$env_file" || { echo "Missing runtime configuration"; exit 1; }
             docker login -u ${{ secrets.DOCKER_USERNAME }} -p ${{ secrets.DOCKER_PASSWORD }}
             docker pull ${{ secrets.DOCKER_USERNAME }}/jozo-be:${{ steps.get_sha.outputs.GIT_SHA }}
 
@@ -99,7 +117,10 @@ jobs:
 
             # Chạy container mới với tên tạm thời
             echo "Chạy container mới..."
-            docker run -d --name jozo-be-new -p 4000:4000 -p 8080:8080 ${{ secrets.DOCKER_USERNAME }}/jozo-be:${{ steps.get_sha.outputs.GIT_SHA }}
+            if ! docker run -d --name jozo-be-new --env-file "$env_file" -p 4000:4000 -p 8080:8080 ${{ secrets.DOCKER_USERNAME }}/jozo-be:${{ steps.get_sha.outputs.GIT_SHA }}; then
+              docker start jozo-be || true
+              exit 1
+            fi
 
             # Kiểm tra container mới có chạy thành công không
             if docker ps | grep -q jozo-be-new; then
