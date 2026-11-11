@@ -33,9 +33,26 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-  build_and_deploy:
+  build:
     runs-on: ubuntu-latest
     needs: test
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Build Docker image
+        run: docker build -t ${{ secrets.DOCKER_USERNAME }}/jozo-be:${{ github.sha }} .
+
+      - name: Log in to DockerHub
+        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+
+      - name: Push Docker image
+        run: docker push ${{ secrets.DOCKER_USERNAME }}/jozo-be:${{ github.sha }}
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
     steps:
       - name: Checkout code
@@ -66,18 +83,6 @@ jobs:
           fs.appendFileSync(process.env.GITHUB_ENV, `JOZO_ENV_BASE64=${encoded}\n`)
           NODE
 
-      - name: Get short SHA
-        id: get_sha
-        run: echo "::set-output name=GIT_SHA::$(git rev-parse --short HEAD)"
-
-      - name: Build Docker image
-        run: docker build -t ${{ secrets.DOCKER_USERNAME }}/jozo-be:${{ steps.get_sha.outputs.GIT_SHA }} .
-
-      - name: Log in to DockerHub
-        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
-
-      - name: Push Docker image
-        run: docker push ${{ secrets.DOCKER_USERNAME }}/jozo-be:${{ steps.get_sha.outputs.GIT_SHA }}
 
       - name: Run deployment action in Jira
         uses: chrnorm/deployment-action@releases/v1
@@ -105,7 +110,7 @@ jobs:
             unset JOZO_ENV_BASE64
             test -s "$env_file" || { echo "Missing runtime configuration"; exit 1; }
             docker login -u ${{ secrets.DOCKER_USERNAME }} -p ${{ secrets.DOCKER_PASSWORD }}
-            docker pull ${{ secrets.DOCKER_USERNAME }}/jozo-be:${{ steps.get_sha.outputs.GIT_SHA }}
+            docker pull ${{ secrets.DOCKER_USERNAME }}/jozo-be:${{ github.sha }}
 
             # Kiểm tra xem container cũ có đang chạy không
             if docker ps | grep -q jozo-be; then
@@ -117,7 +122,7 @@ jobs:
 
             # Chạy container mới với tên tạm thời
             echo "Chạy container mới..."
-            if ! docker run -d --name jozo-be-new --env-file "$env_file" -p 4000:4000 -p 8080:8080 ${{ secrets.DOCKER_USERNAME }}/jozo-be:${{ steps.get_sha.outputs.GIT_SHA }}; then
+            if ! docker run -d --name jozo-be-new --env-file "$env_file" -p 4000:4000 -p 8080:8080 ${{ secrets.DOCKER_USERNAME }}/jozo-be:${{ github.sha }}; then
               docker start jozo-be || true
               exit 1
             fi
