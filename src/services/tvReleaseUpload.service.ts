@@ -33,12 +33,12 @@ export async function uploadTvRelease(bytes: Buffer): Promise<TvRelease> {
     let signature: Awaited<ReturnType<typeof run>>
     try { signature = await run(apksigner, ['verify', '--verbose', '--print-certs', file], { timeout: 60000, maxBuffer: 1024 * 1024, env: process.env }) }
     catch { throw failure(503, 'Không thể xác minh chữ ký APK. Kiểm tra APK đã ký và công cụ xác minh trên máy chủ.') }
-    const matches = [...signature.stdout.matchAll(/^Signer #\d+ certificate SHA-256 digest: ([a-fA-F0-9]+)\s*$/gm)]
+    const matches = [...signature.stdout.toString().matchAll(/^Signer #\d+ certificate SHA-256 digest: ([a-fA-F0-9]+)\s*$/gm)]
     if (matches.length !== 1 || matches[0][1].toLowerCase() !== cert.toLowerCase()) throw failure(422, 'Chữ ký APK không khớp chứng chỉ được phê duyệt. Hãy dùng APK đã ký đúng.')
     let info: Awaited<ReturnType<typeof run>>
     try { info = await run(aapt, ['dump', 'badging', file], { timeout: 30000, maxBuffer: 1024 * 1024, env: process.env }) }
     catch { throw failure(503, 'Không thể đọc thông tin APK. Kiểm tra tệp APK và công cụ Android trên máy chủ.') }
-    const match = info.stdout.match(/^package: name='([^']+)' versionCode='(\d+)' versionName='([^']+)'/m)
+    const match = info.stdout.toString().match(/^package: name='([^']+)' versionCode='(\d+)' versionName='([^']+)'/m)
     const versionCode = Number(match?.[2]); const versionName = match?.[3]
     if (!match || match[1] !== 'com.jozo.tv' || !Number.isSafeInteger(versionCode) || versionCode < 1 || versionCode > 2100000000 || !versionName?.trim() || versionName.length > 100) throw failure(422, 'APK phải có package com.jozo.tv và thông tin phiên bản hợp lệ.')
     const sha256 = createHash('sha256').update(bytes).digest('hex')
