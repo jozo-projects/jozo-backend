@@ -10,6 +10,7 @@ import { ErrorWithStatus } from '~/models/Error'
 import databaseService from '~/services/database.service'
 import serverService from '~/services/server.service'
 
+import tvReleaseRouter from '~/routes/tvRelease.routes'
 import billRouter from '~/routes/bill.routes'
 import clientCoffeeSessionOrderRouter from '~/routes/clientCoffeeSessionOrder.routes'
 import clientCoffeeSessionRouter from '~/routes/clientCoffeeSession.routes'
@@ -153,6 +154,7 @@ app.use(
 )
 
 // Các route
+app.use('/tv-release', tvReleaseRouter)
 app.use('/users', usersRouter)
 app.use('/room-types', roomTypeRouter)
 app.use('/rooms', roomRouter)

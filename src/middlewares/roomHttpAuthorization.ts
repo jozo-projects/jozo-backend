@@ -39,7 +39,7 @@ export function createRoomHttpAuthorization(db: Pick<Db, 'collection'>): Request
       if (!room?._id) return deny()
       const id = room._id.toString()
       // Video displays need read-only playback/media URLs, not control actions or bills.
-      const videoReadRoutes = ['/:roomId/now-playing', '/:roomId/:videoId', '/:roomId/:videoId/stream', '/:roomId/song-info/:videoId']
+      const videoReadRoutes = ['/:roomId', '/:roomId/now-playing', '/:roomId/:videoId', '/:roomId/:videoId/stream', '/:roomId/song-info/:videoId']
       const videoAllowed = req.method === 'GET' && videoReadRoutes.includes(req.route?.path)
       if (await foundation.verify(id, 'control', proof) || (videoAllowed && await foundation.verify(id, 'video', proof))) return next()
       return deny()

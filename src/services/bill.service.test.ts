@@ -178,6 +178,50 @@ describe('canonical checkout snapshot', () => {
     expect(result.bill.activePromotion).toBeUndefined()
   })
 
+  it('does not apply the tier percentage when a streak gift was served', async () => {
+    jest.mocked(databaseService.roomSchedule.findOne).mockResolvedValue({
+      ...schedule,
+      customerPhone: '0901234567',
+      streakGifts: [{ streakCount: 3, items: [{ itemId: drinkId, name: 'Free Coca', quantity: 1 }] }]
+    } as never)
+    jest.mocked(membershipService.resolveMembershipByPhone).mockResolvedValue({
+      found: true, phone: '0901234567', user: { userId: 'member-id', name: 'Member', tier: 'gold' },
+      tierDiscount: { discountPercentage: 10 }
+    } as never)
+    const result = await billService.saveBillWithMembership(payload())
+    expect(result.bill.totalAmount).toBe(130000)
+    expect(result.bill.membershipDiscountAmount).toBeUndefined()
+    expect(result.bill.membership?.discountPercentage).toBeUndefined()
+    expect(result.bill.membership?.reason).toContain('streak')
+  })
+
+  it('keeps tier percentage with birthday selection when no streak gift was served', async () => {
+    jest.mocked(membershipService.resolveMembershipByPhone).mockResolvedValue({
+      found: true, phone: '0901234567', user: { userId: 'member-id', name: 'Member', tier: 'gold' },
+      tierDiscount: { discountPercentage: 10 }
+    } as never)
+    jest.mocked(birthdayBenefitService.apply).mockImplementation(async (bill) => bill)
+    const result = await billService.saveBillWithMembership(payload({
+      customerPhone: '0901234567', birthdaySelection: { items: [{ itemId: drinkId.toHexString(), quantity: 1 }] }
+    }))
+    expect(result.bill.membershipDiscountAmount).toBe(13000)
+    expect(birthdayBenefitService.apply).toHaveBeenCalledWith(expect.objectContaining({ totalAmount: 117000 }), expect.anything(), undefined, 'cashier')
+  })
+
+  it('keeps a fixed tier discount when a streak gift was served', async () => {
+    jest.mocked(databaseService.roomSchedule.findOne).mockResolvedValue({
+      ...schedule, customerPhone: '0901234567',
+      streakGifts: [{ streakCount: 3, items: [{ itemId: drinkId, name: 'Free Coca', quantity: 1 }] }]
+    } as never)
+    jest.mocked(membershipService.resolveMembershipByPhone).mockResolvedValue({
+      found: true, phone: '0901234567', user: { userId: 'member-id', name: 'Member', tier: 'gold' },
+      tierDiscount: { discountAmount: 15000 }
+    } as never)
+    const result = await billService.saveBillWithMembership(payload())
+    expect(result.bill.membershipDiscountAmount).toBe(15000)
+    expect(result.bill.totalAmount).toBe(115000)
+  })
+
   it('preserves real promotion, gift, membership and points based on canonical net amount', async () => {
     jest.mocked(databaseService.roomSchedule.findOne).mockResolvedValue({
       ...schedule,
@@ -196,15 +240,15 @@ describe('canonical checkout snapshot', () => {
       tierDiscount: { discountPercentage: 10 }
     } as never)
     const result = await billService.saveBillWithMembership(payload())
-    expect(result.bill.totalAmount).toBe(97000)
-    expect(result.bill.membershipDiscountAmount).toBe(13000)
+    expect(result.bill.totalAmount).toBe(110000)
+    expect(result.bill.membershipDiscountAmount).toBeUndefined()
     expect(result.bill.giftDiscountAmount).toBe(6500)
     expect(result.bill.activePromotion?.name).toBe('Promo 10%')
     expect(result.bill.items.some((item) => item.isStreakGift && item.price === 0)).toBe(true)
     expect(result.bill.userId).toBe('member-id')
-    expect(membershipService.computePointsForAmount).toHaveBeenCalledWith(97000)
+    expect(membershipService.computePointsForAmount).toHaveBeenCalledWith(110000)
     expect(membershipService.earnPointsByPhone).toHaveBeenCalledWith(
-      expect.objectContaining({ totalAmount: 97000, visitAt: end })
+      expect.objectContaining({ totalAmount: 110000, visitAt: end })
     )
     expect(result.bill.completedBy).toBe('cashier')
     expect(result.bill.invoiceCode).toBe('#checkout-test')

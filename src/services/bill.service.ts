@@ -1244,9 +1244,13 @@ export class BillService {
       const resolved = await membershipService.resolveMembershipByPhone(resolvedPhone)
       if (resolved.found && resolved.user) {
         const tierDiscount = resolved.tierDiscount
-        if (tierDiscount?.discountPercentage && tierDiscount.discountPercentage > 0) {
+        const streakBlocksTierPercentage = Boolean(
+          tierDiscount?.discountPercentage && tierDiscount.discountPercentage > 0 &&
+          Array.isArray(schedule.streakGifts) && schedule.streakGifts.length > 0
+        )
+        if (!streakBlocksTierPercentage && tierDiscount?.discountPercentage && tierDiscount.discountPercentage > 0) {
           membershipDiscountAmount = (subtotal * tierDiscount.discountPercentage) / 100
-        } else if (tierDiscount?.discountAmount && tierDiscount.discountAmount > 0) {
+        } else if (!tierDiscount?.discountPercentage && tierDiscount?.discountAmount && tierDiscount.discountAmount > 0) {
           membershipDiscountAmount = tierDiscount.discountAmount
         }
 
@@ -1256,10 +1260,14 @@ export class BillService {
           userId: resolved.user.userId,
           name: resolved.user.name,
           tier: resolved.user.tier,
-          discountPercentage: tierDiscount?.discountPercentage,
-          discountAmount: tierDiscount?.discountAmount,
-          note: tierDiscount?.note,
-          reason: !tierDiscount ? 'Hạng chưa có quyền lợi discount trong config' : undefined
+          discountPercentage: streakBlocksTierPercentage ? undefined : tierDiscount?.discountPercentage,
+          discountAmount: streakBlocksTierPercentage ? undefined : tierDiscount?.discountAmount,
+          note: streakBlocksTierPercentage
+            ? 'Không áp dụng giảm giá theo hạng khi đã phát quà streak'
+            : tierDiscount?.note,
+          reason: streakBlocksTierPercentage
+            ? 'Không áp dụng giảm giá theo hạng khi đã phát quà streak'
+            : !tierDiscount ? 'Hạng chưa có quyền lợi discount trong config' : undefined
         }
       } else {
         membershipInfo = {
